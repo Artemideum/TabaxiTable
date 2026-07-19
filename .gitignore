@@ -1,0 +1,8 @@
+node_modules/
+data/rooms.json
+.DS_Store
+npm-debug.log*
+*.zip
+upload/
+.openai/
+.env

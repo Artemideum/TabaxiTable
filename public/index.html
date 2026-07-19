@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#15120f">
+  <title>TabaxiTable — D&D 5e</title>
+  <link rel="icon" type="image/png" href="/tabaxi-table.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=Unbounded:wght@600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="grain"></div>
+  <main id="app">
+    <section id="lobby" class="lobby">
+      <div class="brand-block">
+        <img class="brand-logo" src="/tabaxi-table.png" alt="TabaxiTable">
+        <span class="eyebrow">Виртуальный стол для D&D 5e</span>
+        <h1>Tabaxi<em>Table</em></h1>
+        <p>Комната для вашей партии, живые броски и листы персонажей без тяжёлых правил и лишних кнопок.</p>
+      </div>
+      <div class="entry-card">
+        <div class="tabs">
+          <button class="tab active" data-lobby-tab="join">Войти</button>
+          <button class="tab" data-lobby-tab="create">Создать</button>
+        </div>
+        <form id="join-form" class="entry-form">
+          <label>Твоё имя<input name="name" maxlength="40" placeholder="Например, Тёма" required></label>
+          <label>Код комнаты<input name="code" maxlength="6" placeholder="ABC123" autocomplete="off" required></label>
+          <button class="primary" type="submit">Войти в таверну</button>
+        </form>
+        <form id="create-form" class="entry-form hidden">
+          <label>Имя ведущего<input name="name" maxlength="40" placeholder="Мастер подземелий" required></label>
+          <label>Название кампании<input name="title" maxlength="60" placeholder="Проклятие Страда"></label>
+          <button class="primary" type="submit">Создать комнату</button>
+        </form>
+        <p id="entry-error" class="error"></p>
+      </div>
+    </section>
+
+    <section id="room" class="room hidden">
+      <header class="topbar">
+        <button id="leave" class="wordmark"><img src="/tabaxi-table.png" alt="">TabaxiTable</button>
+        <div class="campaign"><strong id="campaign-title"></strong><span>Код: <button id="copy-code"></button></span></div>
+        <div id="save-state" class="save-state">Сохранено</div>
+      </header>
+      <aside class="sidebar">
+        <div class="side-title">Партия <span id="party-count"></span></div>
+        <div id="players" class="players"></div>
+        <button id="own-sheet" class="secondary">Мой персонаж</button>
+      </aside>
+      <nav class="room-nav">
+        <button class="active" data-view="sheet">Лист</button>
+        <button data-view="dice">Кости</button>
+        <button data-view="map" disabled title="Следующий этап">Карта <small>скоро</small></button>
+      </nav>
+      <div class="content">
+        <section id="sheet-view" class="view"></section>
+        <section id="dice-view" class="view hidden">
+          <div class="dice-panel">
+            <div>
+              <span class="eyebrow">Общий стол бросков</span>
+              <h2>Кости</h2>
+              <div class="quick-dice">
+                <button data-die="1к4">к4</button><button data-die="1к6">к6</button><button data-die="1к8">к8</button>
+                <button data-die="1к10">к10</button><button data-die="1к12">к12</button><button data-die="1к20">к20</button>
+              </div>
+              <form id="custom-roll" class="custom-roll"><input name="formula" value="1к20" placeholder="1к20+5"><button class="primary">Бросить</button></form>
+            </div>
+            <div id="roll-log" class="roll-log"></div>
+          </div>
+        </section>
+      </div>
+    </section>
+  </main>
+  <div id="toast" class="toast"></div>
+  <button id="roll-peek" class="roll-peek hidden" type="button" title="Открыть общий журнал бросков"><span></span><strong></strong></button>
+  <dialog id="game-modal" class="game-modal">
+    <div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" type="button">×</button></div>
+    <div id="modal-content"></div>
+  </dialog>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

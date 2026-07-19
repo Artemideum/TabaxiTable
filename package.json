@@ -1,0 +1,22 @@
+{
+  "name": "tabaxi-table",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Онлайн-стол TabaxiTable и интерактивные листы персонажей D&D 5e",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "socket.io": "^4.8.3"
+  },
+  "devDependencies": {
+    "socket.io-client": "^4.8.3"
+  }
+}
