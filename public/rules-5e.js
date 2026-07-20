@@ -111,10 +111,10 @@
   ].map(([key,name,baseAc,armorType,weight,stealthDisadvantage]) => ({ key,name,type:"armor",baseAc,armorType,weight,stealthDisadvantage }));
 
   const gear = [
-    ["backpack","Рюкзак",5], ["bedroll","Спальник",7], ["rope","Пеньковая верёвка, 50 футов",10], ["torch","Факел",1],
-    ["rations","Рационы на день",2], ["waterskin","Бурдюк",5], ["healers-kit","Набор лекаря",3], ["thieves-tools","Воровские инструменты",1],
-    ["arrows","Стрелы, 20",1], ["bolts","Арбалетные болты, 20",1], ["potion-healing","Зелье лечения",0.5]
-  ].map(([key,name,weight]) => ({ key,name,type:"gear",weight }));
+    ["backpack","Рюкзак",5,1], ["bedroll","Спальник",7,1], ["rope","Пеньковая верёвка, 50 футов",10,1], ["torch","Факел",1,1],
+    ["rations","Рационы на день",2,1], ["waterskin","Бурдюк",5,1], ["healers-kit","Набор лекаря",3,1], ["thieves-tools","Воровские инструменты",1,1],
+    ["arrows","Стрелы",0.05,20,"ammo"], ["bolts","Арбалетные болты",0.075,20,"ammo"], ["potion-healing","Зелье лечения",0.5,1,"consumable","2к4+2"]
+  ].map(([key,name,weight,quantity=1,combatKind="auto",useFormula=""]) => ({ key,name,type:"gear",weight,quantity,combatKind,useFormula }));
 
   const conditionInfo = {
     "Ослеплён":"Не видит; автоматически проваливает проверки зрения. Атаки существа с помехой, атаки по нему с преимуществом.",

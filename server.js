@@ -51,9 +51,78 @@ function cleanText(value, max = 80) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+const COMBAT_SLOT_KEYS = ["head", "neck", "cloak", "body", "mainHand", "offHand", "belt", "feet", "ammo"];
+const COMBAT_SET_IDS = ["a", "b", "c"];
+
+function emptyCombatSet(setId, index = 0) {
+  return {
+    id: setId,
+    name: `Комплект ${String.fromCharCode(65 + index)}`,
+    slots: Object.fromEntries(COMBAT_SLOT_KEYS.map(key => [key, ""])),
+    quickSlots: Array(5).fill("")
+  };
+}
+
+function defaultCombatLoadout() {
+  return {
+    initialized: false,
+    activeSet: "a",
+    autoAmmo: true,
+    sets: COMBAT_SET_IDS.map(emptyCombatSet),
+    attunementSlots: []
+  };
+}
+
+function normalizeCombatLoadout(source, inventory) {
+  const base = defaultCombatLoadout();
+  const incoming = source && typeof source === "object" ? source : {};
+  const itemIds = new Set(inventory.map(item => cleanText(item?.id, 80)).filter(Boolean));
+  const keepItemId = value => {
+    const itemId = cleanText(value, 80);
+    return itemIds.has(itemId) ? itemId : "";
+  };
+  const sourceSets = Array.isArray(incoming.sets) ? incoming.sets : Object.values(incoming.sets || {});
+  const sets = COMBAT_SET_IDS.map((setId, index) => {
+    const saved = sourceSets.find(set => set?.id === setId) || sourceSets[index] || {};
+    const empty = emptyCombatSet(setId, index);
+    return {
+      id: setId,
+      name: cleanText(saved.name, 40) || empty.name,
+      slots: Object.fromEntries(COMBAT_SLOT_KEYS.map(key => [key, keepItemId(saved.slots?.[key])])),
+      quickSlots: Array.from({ length:5 }, (_, slotIndex) => keepItemId(saved.quickSlots?.[slotIndex]))
+    };
+  });
+
+  const hasAssignedItems = sets.some(set => Object.values(set.slots).some(Boolean) || set.quickSlots.some(Boolean));
+  if (!hasAssignedItems) {
+    const active = sets[0];
+    const equipped = inventory.filter(item => item?.equipped && itemIds.has(cleanText(item.id, 80)));
+    const body = equipped.find(item => item.type === "armor" && item.armorType !== "shield");
+    const shield = equipped.find(item => item.type === "armor" && item.armorType === "shield");
+    const weapon = equipped.find(item => item.type === "weapon") || inventory.find(item => item?.type === "weapon");
+    const ammo = inventory.find(item => /стрел|болт|боеприпас/i.test(`${item?.name || ""} ${item?.catalogKey || ""}`));
+    const quick = inventory.find(item => /зель|potion|свиток/i.test(`${item?.name || ""} ${item?.catalogKey || ""}`));
+    if (body) active.slots.body = body.id;
+    if (shield) active.slots.offHand = shield.id;
+    if (weapon) active.slots.mainHand = weapon.id;
+    if (ammo) active.slots.ammo = ammo.id;
+    if (quick) active.quickSlots[0] = quick.id;
+  }
+
+  const savedAttunement = Array.isArray(incoming.attunementSlots) ? incoming.attunementSlots.map(keepItemId).filter(Boolean) : [];
+  const legacyAttunement = inventory.filter(item => item?.attuned).map(item => keepItemId(item.id)).filter(Boolean);
+  return {
+    initialized: Boolean(incoming.initialized) || inventory.length > 0,
+    activeSet: COMBAT_SET_IDS.includes(incoming.activeSet) ? incoming.activeSet : base.activeSet,
+    autoAmmo: incoming.autoAmmo !== false,
+    sets,
+    attunementSlots: [...new Set([...savedAttunement, ...legacyAttunement])].slice(0, 20)
+  };
+}
+
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 6,
+    schemaVersion: 7,
     characterName: playerName,
     classKey: "",
     subclassKey: "",
@@ -112,6 +181,7 @@ function defaultSheet(playerName) {
     attacksList: [],
     resources: [],
     inventoryList: [],
+    combatLoadout: defaultCombatLoadout(),
     spellcastingAbility: "",
     spellSlots: Array.from({ length: 9 }, (_, index) => ({ level: index + 1, total: 0, used: 0 })),
     pactSlots: { level: 0, total: 0, used: 0 },
@@ -239,6 +309,28 @@ function normalizeSheet(sheet, playerName) {
     effectParts: normalizeParts(spell?.effectParts),
     upcastParts: normalizeParts(spell?.upcastParts)
   }));
+  const normalizedInventory = (Array.isArray(incoming.inventoryList) ? incoming.inventoryList : []).slice(0, 500).map(item => ({
+    ...item,
+    id: cleanText(item?.id, 80) || id(),
+    name: cleanText(item?.name, 120),
+    type: cleanText(item?.type, 30),
+    catalogKey: cleanText(item?.catalogKey || item?.key, 80),
+    quantity: Math.max(0, Math.min(999999, Number(item?.quantity) || 0)),
+    weight: Math.max(0, Math.min(999999, Number(item?.weight) || 0)),
+    description: cleanText(item?.description, 6000),
+    equipped: Boolean(item?.equipped),
+    attuned: Boolean(item?.attuned),
+    magical: Boolean(item?.magical)
+  }));
+  if (Number(incoming.schemaVersion || 0) < 7) normalizedInventory.forEach(item => {
+    if (["arrows","bolts"].includes(item.catalogKey) && Number(item.quantity) === 1) {
+      item.quantity = 20;
+      item.weight = item.catalogKey === "arrows" ? 0.05 : 0.075;
+      item.name = item.catalogKey === "arrows" ? "Стрелы" : "Арбалетные болты";
+      item.combatKind = "ammo";
+    }
+    if (item.catalogKey === "potion-healing") { item.combatKind = "consumable"; item.useFormula ||= "2к4+2"; }
+  });
   const normalized = {
     ...base,
     ...incoming,
@@ -247,7 +339,8 @@ function normalizeSheet(sheet, playerName) {
     conditions: Array.isArray(incoming.conditions) ? incoming.conditions : [],
     attacksList: normalizedAttacks,
     resources: Array.isArray(incoming.resources) ? incoming.resources : [],
-    inventoryList: Array.isArray(incoming.inventoryList) ? incoming.inventoryList : [],
+    inventoryList: normalizedInventory,
+    combatLoadout: normalizeCombatLoadout(incoming.combatLoadout, normalizedInventory),
     spellsList: normalizedSpells,
     goalsList: Array.isArray(incoming.goalsList) ? incoming.goalsList : [],
     notesList: Array.isArray(incoming.notesList) ? incoming.notesList : [],
@@ -259,7 +352,7 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 6;
+  normalized.schemaVersion = 7;
   normalized.passivePerceptionBonus = Math.max(-100, Math.min(100, Number(incoming.passivePerceptionBonus) || 0));
   normalized.xp = Math.max(0, Math.min(999999999, Number(incoming.xp) || 0));
   normalized.skillProficiencies = Array.isArray(incoming.skillProficiencies) ? [...new Set(incoming.skillProficiencies.map(value => cleanText(value, 30)).filter(Boolean))] : [];
