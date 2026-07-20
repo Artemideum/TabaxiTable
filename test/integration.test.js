@@ -70,11 +70,15 @@ test("комната, лист, броски, история и резервна
     const itemCatalogScript = await fetch(`http://127.0.0.1:${PORT}/items-5e.js`).then(response => response.text());
     assert.match(itemCatalogScript, /TT_ITEMS_2014/);
     assert.ok(itemCatalogScript.length > 200000);
+    const itemSystemScript = await fetch(`http://127.0.0.1:${PORT}/item-system.js`).then(response => response.text());
+    assert.match(itemSystemScript, /TT_ITEM_SYSTEM/);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 7);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 8);
+    assert.equal(created.room.scene.grid.columns, 24);
+    assert.equal(created.room.scene.tokens.length, 0);
     assert.equal(created.room.players["test-dm"].sheet.autoProficiency, true);
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
@@ -101,6 +105,8 @@ test("комната, лист, броски, история и резервна
     sheet.inventoryList.push({ id:"cloak", name:"Плащ летучей мыши", quantity:1, weight:3, equipped:true, attuned:true, magical:true });
     sheet.inventoryList.push({ id:"old-bow", catalogKey:"longbow", name:"Старый длинный лук", type:"weapon", quantity:1, weight:2, equipped:true, properties:"боеприпас, двуручное" });
     sheet.inventoryList.push({ id:"old-arrows", catalogKey:"arrows", name:"Стрелы, 20", type:"gear", quantity:1, weight:1, equipped:false });
+    sheet.inventoryList.push({ id:"new-arrows", catalogKey:"arrow", name:"Стрелы, 20", type:"gear", catalogCategory:"ammo", combatKind:"ammo", quantity:5, weight:0.05, equipped:false });
+    sheet.combatLoadout.sets[0].slots.ammo = "new-arrows";
     sheet.spellsList.push({ id:"acid", catalogKey:"acid-splash", name:"Брызги кислоты", level:0, prepared:true, damage:"2d6", rollKind:"damage", effectParts:[{ id:"acid-die", type:"dice", count:2, sides:6 }], upcastParts:[] });
     sheet.goalsList.push({ id:"goal", text:"Добраться до крепости", done:false });
     sheet.notesList.push({ id:"note", title:"Контакт", text:"Варус" });
@@ -115,7 +121,7 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 7);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 8);
     assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
     assert.equal(updatedRoom.players["test-player"].sheet.passivePerceptionBonus, 3);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",1]]);
@@ -124,7 +130,9 @@ test("комната, лист, броски, история и резервна
     assert.deepEqual(updatedRoom.players["test-player"].sheet.combatLoadout.attunementSlots, ["cloak"]);
     assert.equal(updatedRoom.players["test-player"].sheet.combatLoadout.sets[0].slots.mainHand, "old-bow");
     assert.equal(updatedRoom.players["test-player"].sheet.combatLoadout.sets[0].slots.ammo, "old-arrows");
-    assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[2].quantity, 20);
+    assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[2].catalogKey, "arrow");
+    assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[2].quantity, 25);
+    assert.equal(updatedRoom.players["test-player"].sheet.inventoryList.length, 3);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.expertise, ["stealth"]);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.attacksList[0].attackParts.map(part => part.type), ["ability","proficiency","flat"]);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.attacksList[0].damageParts.map(part => part.type), ["dice","ability","sneak"]);
@@ -183,6 +191,48 @@ test("комната, лист, броски, история и резервна
 
     const invalidRoll = await emit(player, "dice:roll", { formula:"101d6", label:"Слишком много" });
     assert.equal(invalidRoll.ok, false);
+
+    const partySceneUpdate = waitFor(player, "room:state", room => room.scene.tokens.some(token => token.playerId === "test-player"));
+    const partyAdded = await emit(dm, "scene:party-add", {});
+    assert.equal(partyAdded.ok, true);
+    assert.equal(partyAdded.added, 2);
+    const partyRoom = await partySceneUpdate;
+    const playerToken = partyRoom.scene.tokens.find(token => token.playerId === "test-player");
+    assert.ok(playerToken);
+    assert.equal(playerToken.name, "Шёпот");
+    assert.equal(playerToken.initiativeBonus, 4);
+
+    const sceneSettingsUpdate = waitFor(player, "room:state", room => room.scene.name === "Подземелье" && room.scene.grid.snap === false);
+    assert.equal((await emit(dm, "scene:settings", { name:"Подземелье", grid:{ columns:30, rows:20, cellSize:48, visible:true, snap:false } })).ok, true);
+    await sceneSettingsUpdate;
+
+    const movedUpdate = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === playerToken.id && token.x === 2.4 && token.y === 3.7));
+    assert.equal((await emit(player, "scene:token-move", { tokenId:playerToken.id, x:2.4, y:3.7 })).ok, true);
+    const movedRoom = await movedUpdate;
+    assert.equal(movedRoom.scene.tokens.find(token => token.id === playerToken.id).x, 2.4);
+
+    const initiativeUpdate = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === playerToken.id && token.initiative !== null));
+    const initiative = await emit(player, "initiative:roll", { tokenId:playerToken.id });
+    assert.equal(initiative.ok, true);
+    assert.ok(initiative.total >= 5 && initiative.total <= 24);
+    const initiativeRoom = await initiativeUpdate;
+    assert.equal(initiativeRoom.scene.initiative.active, true);
+    assert.equal(initiativeRoom.scene.initiative.currentTokenId, playerToken.id);
+
+    const hiddenForDm = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.name === "Скрытый гоблин"));
+    const hiddenForPlayer = waitFor(player, "room:state", room => room.scene.name === "Подземелье" && !room.scene.tokens.some(token => token.name === "Скрытый гоблин"));
+    const hiddenAdded = await emit(dm, "scene:token-add", { name:"Скрытый гоблин", hidden:true, initiativeBonus:2 });
+    assert.equal(hiddenAdded.ok, true);
+    const hiddenToken = hiddenAdded.scene.tokens.find(token => token.name === "Скрытый гоблин");
+    assert.ok(hiddenToken);
+    assert.ok((await hiddenForDm).scene.tokens.some(token => token.name === "Скрытый гоблин"));
+    assert.equal((await hiddenForPlayer).scene.tokens.some(token => token.name === "Скрытый гоблин"), false);
+
+    const hiddenRollForDm = waitFor(dm, "room:state", room => room.rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"));
+    const hiddenRollForPlayer = waitFor(player, "room:state", room => room.scene.name === "Подземелье");
+    assert.equal((await emit(dm, "initiative:roll", { tokenId:hiddenToken.id })).ok, true);
+    assert.ok((await hiddenRollForDm).rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"));
+    assert.equal((await hiddenRollForPlayer).rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"), false);
 
     const backup = await emit(dm, "room:backup", {});
     assert.equal(backup.ok, true);

@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
+const itemSystem = require("./public/item-system.js");
 
 const cliPortIndex = process.argv.indexOf("--port");
 const cliPort = cliPortIndex >= 0 ? Number(process.argv[cliPortIndex + 1]) : 0;
@@ -51,6 +52,15 @@ function cleanText(value, max = 80) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function sheetHasFeat(sheet, featKey) {
+  return (Array.isArray(sheet?.feats) ? sheet.feats : []).some(feat => cleanText(feat?.key || feat, 40) === featKey);
+}
+
+function sheetInitiativeBonus(sheet) {
+  const dexterity = Number(sheet?.stats?.dex || 10);
+  return Math.floor((dexterity - 10) / 2) + Number(sheet?.initiativeBonus || 0) + (sheetHasFeat(sheet, "alert") ? 5 : 0);
+}
+
 const COMBAT_SLOT_KEYS = ["head", "neck", "cloak", "body", "mainHand", "offHand", "belt", "feet", "ammo"];
 const COMBAT_SET_IDS = ["a", "b", "c"];
 
@@ -73,12 +83,13 @@ function defaultCombatLoadout() {
   };
 }
 
-function normalizeCombatLoadout(source, inventory) {
+function normalizeCombatLoadout(source, inventory, itemIdAliases = new Map()) {
   const base = defaultCombatLoadout();
   const incoming = source && typeof source === "object" ? source : {};
   const itemIds = new Set(inventory.map(item => cleanText(item?.id, 80)).filter(Boolean));
   const keepItemId = value => {
-    const itemId = cleanText(value, 80);
+    const originalId = cleanText(value, 80);
+    const itemId = itemIdAliases.get(originalId) || originalId;
     return itemIds.has(itemId) ? itemId : "";
   };
   const sourceSets = Array.isArray(incoming.sets) ? incoming.sets : Object.values(incoming.sets || {});
@@ -94,7 +105,7 @@ function normalizeCombatLoadout(source, inventory) {
   });
 
   const hasAssignedItems = sets.some(set => Object.values(set.slots).some(Boolean) || set.quickSlots.some(Boolean));
-  if (!hasAssignedItems) {
+  if (!hasAssignedItems || incoming.initialized !== true) {
     const active = sets[0];
     const equipped = inventory.filter(item => item?.equipped && itemIds.has(cleanText(item.id, 80)));
     const body = equipped.find(item => item.type === "armor" && item.armorType !== "shield");
@@ -102,11 +113,11 @@ function normalizeCombatLoadout(source, inventory) {
     const weapon = equipped.find(item => item.type === "weapon") || inventory.find(item => item?.type === "weapon");
     const ammo = inventory.find(item => /стрел|болт|боеприпас/i.test(`${item?.name || ""} ${item?.catalogKey || ""}`));
     const quick = inventory.find(item => /зель|potion|свиток/i.test(`${item?.name || ""} ${item?.catalogKey || ""}`));
-    if (body) active.slots.body = body.id;
-    if (shield) active.slots.offHand = shield.id;
-    if (weapon) active.slots.mainHand = weapon.id;
-    if (ammo) active.slots.ammo = ammo.id;
-    if (quick) active.quickSlots[0] = quick.id;
+    if (body && !active.slots.body) active.slots.body = body.id;
+    if (shield && !active.slots.offHand) active.slots.offHand = shield.id;
+    if (weapon && !active.slots.mainHand) active.slots.mainHand = weapon.id;
+    if (ammo && !active.slots.ammo) active.slots.ammo = ammo.id;
+    if (quick && !active.quickSlots[0]) active.quickSlots[0] = quick.id;
   }
 
   const savedAttunement = Array.isArray(incoming.attunementSlots) ? incoming.attunementSlots.map(keepItemId).filter(Boolean) : [];
@@ -120,9 +131,97 @@ function normalizeCombatLoadout(source, inventory) {
   };
 }
 
+function defaultScene() {
+  return {
+    schemaVersion: 1,
+    name: "Главная сцена",
+    backgroundUrl: "",
+    backgroundColor: "#17120e",
+    grid: { columns: 24, rows: 16, cellSize: 52, visible: true, snap: true },
+    tokens: [],
+    initiative: { active: false, round: 1, currentTokenId: "" }
+  };
+}
+
+function normalizeScene(source, players = {}) {
+  const base = defaultScene();
+  const incoming = source && typeof source === "object" ? source : {};
+  const gridSource = incoming.grid && typeof incoming.grid === "object" ? incoming.grid : {};
+  const grid = {
+    columns: Math.max(8, Math.min(60, Number(gridSource.columns) || base.grid.columns)),
+    rows: Math.max(6, Math.min(40, Number(gridSource.rows) || base.grid.rows)),
+    cellSize: Math.max(32, Math.min(96, Number(gridSource.cellSize) || base.grid.cellSize)),
+    visible: gridSource.visible !== false,
+    snap: gridSource.snap !== false
+  };
+  const normalizeCoordinate = (value, max) => {
+    const number = Number(value) || 0;
+    const positioned = grid.snap ? Math.round(number) : Math.round(number * 10) / 10;
+    return Math.max(0, Math.min(max, positioned));
+  };
+  const seenIds = new Set();
+  const tokens = (Array.isArray(incoming.tokens) ? incoming.tokens : []).slice(0, 200).map((raw, index) => {
+    const tokenId = cleanText(raw?.id, 80) || id();
+    if (seenIds.has(tokenId)) return null;
+    seenIds.add(tokenId);
+    const playerId = cleanText(raw?.playerId, 80);
+    const player = players[playerId];
+    const sheet = player?.sheet || {};
+    const fallbackName = player ? cleanText(sheet.characterName || player.name, 60) : `Токен ${index + 1}`;
+    const initiative = raw?.initiative === null || raw?.initiative === undefined || raw?.initiative === "" ? null : Math.max(-100, Math.min(200, Number(raw.initiative) || 0));
+    return {
+      id: tokenId,
+      playerId: player ? playerId : "",
+      name: cleanText(player ? (sheet.characterName || player.name) : raw?.name, 60) || fallbackName,
+      x: normalizeCoordinate(raw?.x, grid.columns - 1),
+      y: normalizeCoordinate(raw?.y, grid.rows - 1),
+      size: Math.max(0.5, Math.min(4, Number(player ? sheet.tokenScale : raw?.size) || 1)),
+      color: /^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : raw?.color) ? (player ? sheet.tokenColor : raw.color) : "#9f7842",
+      imageUrl: cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : raw?.imageUrl, 1000),
+      vision: Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : raw?.vision) || 0)),
+      hidden: Boolean(raw?.hidden),
+      locked: Boolean(raw?.locked),
+      initiativeBonus: Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : raw?.initiativeBonus) || 0)),
+      initiativeAdvantage: Boolean(player ? sheet.initiativeAdvantage : raw?.initiativeAdvantage),
+      initiative
+    };
+  }).filter(Boolean);
+  const tokenIds = new Set(tokens.map(token => token.id));
+  const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
+  return {
+    schemaVersion: 1,
+    name: cleanText(incoming.name, 60) || base.name,
+    backgroundUrl: cleanText(incoming.backgroundUrl, 1000),
+    backgroundColor: /^#[0-9a-f]{6}$/i.test(incoming.backgroundColor) ? incoming.backgroundColor : base.backgroundColor,
+    grid,
+    tokens,
+    initiative: {
+      active: Boolean(initiativeSource.active) && tokens.some(token => token.initiative !== null),
+      round: Math.max(1, Math.min(999, Number(initiativeSource.round) || 1)),
+      currentTokenId: tokenIds.has(cleanText(initiativeSource.currentTokenId, 80)) ? cleanText(initiativeSource.currentTokenId, 80) : ""
+    }
+  };
+}
+
+function nextScenePosition(scene) {
+  const occupied = new Set(scene.tokens.map(token => `${token.x}:${token.y}`));
+  for (let y = 0; y < scene.grid.rows; y += 1) {
+    for (let x = 0; x < scene.grid.columns; x += 1) if (!occupied.has(`${x}:${y}`)) return { x, y };
+  }
+  return { x: 0, y: 0 };
+}
+
+function sceneTokenForPlayer(scene, playerId) {
+  return scene.tokens.find(token => token.playerId === playerId);
+}
+
+function initiativeOrder(scene) {
+  return scene.tokens.filter(token => token.initiative !== null).sort((a, b) => Number(b.initiative) - Number(a.initiative) || a.name.localeCompare(b.name, "ru"));
+}
+
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 7,
+    schemaVersion: 8,
     characterName: playerName,
     classKey: "",
     subclassKey: "",
@@ -280,9 +379,82 @@ function normalizeSheet(sheet, playerName) {
     count: Math.max(1, Math.min(100, Number(part?.count) || 1)),
     sides: Math.max(2, Math.min(1000, Number(part?.sides) || 6))
   })).filter(part => ["ability","proficiency","dice","flat","sneak","martial","rage","spell","smite","superiority"].includes(part.type)) : [];
+  const inventoryIdRemap = new Map();
+  const normalizedInventory = [];
+  const stackIndexes = new Map();
+  (Array.isArray(incoming.inventoryList) ? incoming.inventoryList : []).slice(0, 1000).forEach(rawItem => {
+    const legacyCatalogKey = cleanText(rawItem?.catalogKey || rawItem?.key, 80);
+    const canonical = itemSystem.canonicalizeInventoryItem(rawItem || {});
+    const item = {
+      ...rawItem,
+      id: cleanText(rawItem?.id, 80) || id(),
+      name: cleanText(canonical.name, 120),
+      originalName: cleanText(rawItem?.originalName, 160),
+      type: cleanText(rawItem?.type, 30),
+      catalogKey: cleanText(canonical.catalogKey, 80),
+      baseCatalogKey: cleanText(canonical.baseCatalogKey, 80),
+      catalogCategory: cleanText(rawItem?.catalogCategory, 30),
+      magicCategory: cleanText(rawItem?.magicCategory, 30),
+      combatKind: cleanText(rawItem?.combatKind, 30),
+      slotHint: COMBAT_SLOT_KEYS.includes(rawItem?.slotHint) ? rawItem.slotHint : "",
+      quantity: Math.max(0, Math.min(999999, Number.isFinite(Number(rawItem?.quantity)) ? Number(rawItem.quantity) : 1)),
+      weight: Math.max(0, Math.min(999999, Number(rawItem?.weight) || 0)),
+      description: cleanText(rawItem?.description, 6000),
+      properties: cleanText(rawItem?.properties, 600),
+      damage: cleanText(rawItem?.damage, 80),
+      damageType: cleanText(rawItem?.damageType, 40),
+      ability: cleanText(rawItem?.ability, 20),
+      useFormula: cleanText(rawItem?.useFormula, 100),
+      rarity: cleanText(rawItem?.rarity, 40),
+      source: cleanText(rawItem?.source, 80),
+      costUnit: cleanText(rawItem?.costUnit, 8),
+      costValue: Math.max(0, Math.min(999999999, Number(rawItem?.costValue) || 0)),
+      rangeNormal: Math.max(0, Math.min(100000, Number(rawItem?.rangeNormal) || 0)),
+      rangeLong: Math.max(0, Math.min(100000, Number(rawItem?.rangeLong) || 0)),
+      baseAc: Math.max(0, Math.min(100, Number(rawItem?.baseAc) || 0)),
+      armorType: cleanText(rawItem?.armorType, 20),
+      strengthMinimum: Math.max(0, Math.min(30, Number(rawItem?.strengthMinimum) || itemSystem.strengthRequirements[canonical.baseCatalogKey || canonical.catalogKey] || 0)),
+      magicBonus: Math.max(-10, Math.min(10, Number(canonical.magicBonus) || 0)),
+      equipped: Boolean(rawItem?.equipped),
+      attuned: Boolean(rawItem?.attuned),
+      magical: Boolean(rawItem?.magical),
+      requiresAttunement: Boolean(rawItem?.requiresAttunement),
+      stealthDisadvantage: Boolean(rawItem?.stealthDisadvantage)
+    };
+    if (["arrows","bolts"].includes(legacyCatalogKey) && Number(item.quantity) === 1) {
+      item.quantity = 20;
+      item.weight = item.catalogKey === "arrow" ? 0.05 : 0.075;
+      item.name = item.catalogKey === "arrow" ? "Стрелы, 20" : "Арбалетные болты, 20";
+      item.combatKind = "ammo";
+      item.catalogCategory = "ammo";
+    }
+    if (item.catalogKey === "magic-potion-of-healing-common") {
+      item.combatKind ||= "consumable";
+      item.catalogCategory ||= "potion";
+      item.useFormula ||= "2к4+2";
+      item.magical = true;
+    }
+    const stackKey = item.catalogKey && itemSystem.isStackable(item) ? `${item.catalogKey}|${item.baseCatalogKey || ""}` : "";
+    if (stackKey && stackIndexes.has(stackKey)) {
+      const existing = normalizedInventory[stackIndexes.get(stackKey)];
+      inventoryIdRemap.set(item.id, existing.id);
+      existing.quantity = Math.min(999999, Number(existing.quantity || 0) + Number(item.quantity || 0));
+      existing.equipped ||= item.equipped;
+      existing.attuned ||= item.attuned;
+      existing.magical ||= item.magical;
+      existing.requiresAttunement ||= item.requiresAttunement;
+      if (!existing.description && item.description) existing.description = item.description;
+      if (!existing.useFormula && item.useFormula) existing.useFormula = item.useFormula;
+      return;
+    }
+    if (stackKey) stackIndexes.set(stackKey, normalizedInventory.length);
+    inventoryIdRemap.set(item.id, item.id);
+    normalizedInventory.push(item);
+  });
   const normalizedAttacks = (Array.isArray(incoming.attacksList) ? incoming.attacksList : []).slice(0, 100).map(attack => ({
     ...attack,
     id: cleanText(attack?.id, 80),
+    sourceItemId: inventoryIdRemap.get(cleanText(attack?.sourceItemId, 80)) || cleanText(attack?.sourceItemId, 80),
     name: cleanText(attack?.name, 100),
     bonus: cleanText(attack?.bonus, 120),
     damage: cleanText(attack?.damage, 160),
@@ -309,28 +481,6 @@ function normalizeSheet(sheet, playerName) {
     effectParts: normalizeParts(spell?.effectParts),
     upcastParts: normalizeParts(spell?.upcastParts)
   }));
-  const normalizedInventory = (Array.isArray(incoming.inventoryList) ? incoming.inventoryList : []).slice(0, 1000).map(item => ({
-    ...item,
-    id: cleanText(item?.id, 80) || id(),
-    name: cleanText(item?.name, 120),
-    type: cleanText(item?.type, 30),
-    catalogKey: cleanText(item?.catalogKey || item?.key, 80),
-    quantity: Math.max(0, Math.min(999999, Number(item?.quantity) || 0)),
-    weight: Math.max(0, Math.min(999999, Number(item?.weight) || 0)),
-    description: cleanText(item?.description, 6000),
-    equipped: Boolean(item?.equipped),
-    attuned: Boolean(item?.attuned),
-    magical: Boolean(item?.magical)
-  }));
-  if (Number(incoming.schemaVersion || 0) < 7) normalizedInventory.forEach(item => {
-    if (["arrows","bolts"].includes(item.catalogKey) && Number(item.quantity) === 1) {
-      item.quantity = 20;
-      item.weight = item.catalogKey === "arrows" ? 0.05 : 0.075;
-      item.name = item.catalogKey === "arrows" ? "Стрелы" : "Арбалетные болты";
-      item.combatKind = "ammo";
-    }
-    if (item.catalogKey === "potion-healing") { item.combatKind = "consumable"; item.useFormula ||= "2к4+2"; }
-  });
   const normalized = {
     ...base,
     ...incoming,
@@ -340,7 +490,7 @@ function normalizeSheet(sheet, playerName) {
     attacksList: normalizedAttacks,
     resources: Array.isArray(incoming.resources) ? incoming.resources : [],
     inventoryList: normalizedInventory,
-    combatLoadout: normalizeCombatLoadout(incoming.combatLoadout, normalizedInventory),
+    combatLoadout: normalizeCombatLoadout(incoming.combatLoadout, normalizedInventory, inventoryIdRemap),
     spellsList: normalizedSpells,
     goalsList: Array.isArray(incoming.goalsList) ? incoming.goalsList : [],
     notesList: Array.isArray(incoming.notesList) ? incoming.notesList : [],
@@ -352,7 +502,7 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 7;
+  normalized.schemaVersion = 8;
   normalized.passivePerceptionBonus = Math.max(-100, Math.min(100, Number(incoming.passivePerceptionBonus) || 0));
   normalized.xp = Math.max(0, Math.min(999999999, Number(incoming.xp) || 0));
   normalized.skillProficiencies = Array.isArray(incoming.skillProficiencies) ? [...new Set(incoming.skillProficiencies.map(value => cleanText(value, 30)).filter(Boolean))] : [];
@@ -375,25 +525,38 @@ function normalizeSheet(sheet, playerName) {
   return normalized;
 }
 
-function publicRoom(room) {
+function publicRoom(room, viewerId = "") {
   const players = {};
   Object.entries(room.players).forEach(([playerId, player]) => {
     player.sheet = normalizeSheet(player.sheet, player.name);
     const { sheetHistory: _privateHistory, ...publicPlayer } = player;
     players[playerId] = publicPlayer;
   });
+  const scene = normalizeScene(room.scene, room.players);
+  if (viewerId !== room.dmId) {
+    scene.tokens = scene.tokens.filter(token => !token.hidden);
+    if (!scene.tokens.some(token => token.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
+    scene.initiative.active = scene.tokens.some(token => token.initiative !== null);
+  }
   return {
     code: room.code,
     title: room.title,
     dmId: room.dmId,
     players,
-    rollLog: room.rollLog.slice(-30)
+    rollLog: room.rollLog.filter(entry => !entry.privateToDm || viewerId === room.dmId).slice(-30),
+    scene
   };
 }
 
-function emitRoom(code) {
+async function emitRoom(code) {
   const room = rooms[code];
-  if (room) io.to(code).emit("room:state", publicRoom(room));
+  if (!room) return;
+  try {
+    const sockets = await io.in(code).fetchSockets();
+    sockets.forEach(roomSocket => roomSocket.emit("room:state", publicRoom(room, roomSocket.data?.clientId)));
+  } catch (error) {
+    console.error("Не удалось синхронизировать комнату:", error.message);
+  }
 }
 
 const app = express();
@@ -419,12 +582,13 @@ io.on("connection", (socket) => {
         [clientId]: { id: clientId, name, role: "dm", online: true, sheet: defaultSheet(name), sheetHistory: [] }
       },
       rollLog: [],
+      scene: defaultScene(),
       createdAt: Date.now()
     };
     socket.join(code);
     socket.data = { code, clientId };
     saveRooms();
-    reply({ ok: true, code, clientId, room: publicRoom(rooms[code]) });
+    reply({ ok: true, code, clientId, room: publicRoom(rooms[code], clientId) });
     emitRoom(code);
   });
 
@@ -446,7 +610,7 @@ io.on("connection", (socket) => {
     socket.join(code);
     socket.data = { code, clientId };
     saveRooms();
-    reply({ ok: true, code, clientId, room: publicRoom(room) });
+    reply({ ok: true, code, clientId, room: publicRoom(room, clientId) });
     emitRoom(code);
   });
 
@@ -518,11 +682,182 @@ io.on("connection", (socket) => {
     room.title = cleanText(backup.title, 60) || room.title;
     room.players = restoredPlayers;
     room.dmId = clientId;
+    room.scene = normalizeScene(backup.scene, restoredPlayers);
     room.rollLog = Array.isArray(backup.rollLog) ? backup.rollLog.slice(-30).map(entry => ({
       id:id(), player:cleanText(entry?.player, 40) || "Игрок", label:cleanText(entry?.label, 80), activity:cleanText(entry?.activity, 120),
       formula:cleanText(entry?.formula, 100), dice:Array.isArray(entry?.dice) ? entry.dice.slice(0,100).map(Number) : [], modifier:Number(entry?.modifier || 0),
       total:entry?.total === null ? null : Number(entry?.total || 0), mode:["advantage","disadvantage"].includes(entry?.mode) ? entry.mode : "normal", natural:Number(entry?.natural || 0) || null, at:Number(entry?.at || Date.now())
     })) : [];
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:settings", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет сцену" });
+    const current = normalizeScene(room.scene, room.players);
+    room.scene = normalizeScene({
+      ...current,
+      name: payload.name ?? current.name,
+      backgroundUrl: payload.backgroundUrl ?? current.backgroundUrl,
+      backgroundColor: payload.backgroundColor ?? current.backgroundColor,
+      grid: { ...current.grid, ...(payload.grid || {}) }
+    }, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true, scene:room.scene });
+  });
+
+  socket.on("scene:token-add", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий добавляет токены" });
+    const scene = normalizeScene(room.scene, room.players);
+    const playerId = cleanText(payload.playerId, 80);
+    const player = room.players[playerId];
+    if (player && sceneTokenForPlayer(scene, playerId)) return reply({ ok:false, error:"Токен этого персонажа уже на сцене" });
+    const position = nextScenePosition(scene);
+    const sheet = player?.sheet || {};
+    scene.tokens.push({
+      id:id(), playerId:player ? playerId : "",
+      name:cleanText(player ? (sheet.characterName || player.name) : payload.name, 60) || "Безымянный противник",
+      x:position.x, y:position.y,
+      size:Math.max(0.5, Math.min(4, Number(player ? sheet.tokenScale : payload.size) || 1)),
+      color:/^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : payload.color) ? (player ? sheet.tokenColor : payload.color) : "#9f7842",
+      imageUrl:cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : payload.imageUrl, 1000),
+      vision:Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : payload.vision) || 0)),
+      hidden:Boolean(payload.hidden), locked:false,
+      initiativeBonus:Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : payload.initiativeBonus) || 0)),
+      initiativeAdvantage:Boolean(player ? sheet.initiativeAdvantage : payload.initiativeAdvantage),
+      initiative:null
+    });
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true, scene:room.scene });
+  });
+
+  socket.on("scene:party-add", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий добавляет токены" });
+    const scene = normalizeScene(room.scene, room.players);
+    let added = 0;
+    Object.entries(room.players).forEach(([playerId, player]) => {
+      if (sceneTokenForPlayer(scene, playerId)) return;
+      const position = nextScenePosition(scene), sheet = player.sheet || {};
+      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null });
+      added += 1;
+    });
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true, added });
+  });
+
+  socket.on("scene:token-move", ({ tokenId, x, y } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = normalizeScene(room.scene, room.players);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const allowed = room.dmId === clientId || token.playerId === clientId;
+    if (!allowed || token.locked && room.dmId !== clientId) return reply({ ok:false, error:"Этот токен нельзя двигать" });
+    const positionValue = value => scene.grid.snap ? Math.round(Number(value) || 0) : Math.round((Number(value) || 0) * 10) / 10;
+    token.x = Math.max(0, Math.min(scene.grid.columns - 1, positionValue(x)));
+    token.y = Math.max(0, Math.min(scene.grid.rows - 1, positionValue(y)));
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:token-update", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = normalizeScene(room.scene, room.players);
+    const token = scene.tokens.find(entry => entry.id === cleanText(payload.tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Нет доступа к токену" });
+    if (!token.playerId) {
+      token.name = cleanText(payload.name ?? token.name,60) || token.name;
+      token.imageUrl = cleanText(payload.imageUrl ?? token.imageUrl,1000);
+      token.color = /^#[0-9a-f]{6}$/i.test(payload.color) ? payload.color : token.color;
+      token.size = Math.max(0.5,Math.min(4,Number(payload.size)||token.size));
+      token.vision = Math.max(0,Math.min(10000,Number(payload.vision)||0));
+      token.initiativeBonus = Math.max(-100,Math.min(100,Number(payload.initiativeBonus)||0));
+    }
+    if (isDm) { token.hidden = Boolean(payload.hidden); token.locked = Boolean(payload.locked); }
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:token-remove", ({ tokenId } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий удаляет токены" });
+    const scene = normalizeScene(room.scene, room.players);
+    const idToRemove = cleanText(tokenId,80);
+    scene.tokens = scene.tokens.filter(token => token.id !== idToRemove);
+    if (scene.initiative.currentTokenId === idToRemove) scene.initiative.currentTokenId = "";
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("initiative:roll", ({ tokenId } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = normalizeScene(room.scene, room.players);
+    let token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) token = sceneTokenForPlayer(scene, clientId);
+    if (!token) return reply({ ok:false, error:"Сначала добавь токен на карту" });
+    if (room.dmId !== clientId && token.playerId !== clientId) return reply({ ok:false, error:"Можно бросать только за своего персонажа" });
+    const dice = token.initiativeAdvantage ? [crypto.randomInt(1,21),crypto.randomInt(1,21)] : [crypto.randomInt(1,21)];
+    const natural = Math.max(...dice);
+    token.initiative = natural + Number(token.initiativeBonus || 0);
+    scene.initiative.active = true;
+    const order = initiativeOrder(scene);
+    if (!scene.initiative.currentTokenId || !order.some(entry => entry.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = order[0]?.id || "";
+    room.scene = normalizeScene(scene, room.players);
+    room.rollLog.push({ id:id(), player:room.players[clientId]?.name || token.name, label:`Инициатива · ${token.name}`, formula:`1к20${Number(token.initiativeBonus)>=0?"+":""}${Number(token.initiativeBonus)||0}`, dice, modifier:Number(token.initiativeBonus)||0, total:token.initiative, mode:token.initiativeAdvantage?"advantage":"normal", natural, privateToDm:Boolean(token.hidden), at:Date.now() });
+    room.rollLog = room.rollLog.slice(-30);
+    saveRooms(); emitRoom(code); reply({ ok:true, natural, total:token.initiative });
+  });
+
+  socket.on("initiative:set", ({ tokenId, value } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет инициативу вручную" });
+    const scene = normalizeScene(room.scene, room.players);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    token.initiative = value === null || value === "" ? null : Math.max(-100,Math.min(200,Number(value)||0));
+    scene.initiative.active = scene.tokens.some(entry => entry.initiative !== null);
+    const order = initiativeOrder(scene);
+    if (!order.some(entry => entry.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = order[0]?.id || "";
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("initiative:next", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий переключает ход" });
+    const scene = normalizeScene(room.scene, room.players), order = initiativeOrder(scene);
+    if (!order.length) return reply({ ok:false, error:"Инициатива ещё не брошена" });
+    const currentIndex = order.findIndex(token => token.id === scene.initiative.currentTokenId);
+    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % order.length;
+    if (currentIndex >= 0 && nextIndex === 0) scene.initiative.round = Math.min(999,scene.initiative.round + 1);
+    scene.initiative.active = true;
+    scene.initiative.currentTokenId = order[nextIndex].id;
+    room.scene = normalizeScene(scene, room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("initiative:clear", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий очищает инициативу" });
+    const scene = normalizeScene(room.scene, room.players);
+    scene.tokens.forEach(token => { token.initiative = null; });
+    scene.initiative = { active:false, round:1, currentTokenId:"" };
+    room.scene = normalizeScene(scene, room.players);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 

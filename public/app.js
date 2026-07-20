@@ -25,12 +25,15 @@ const state = {
   loadoutFilter: "all",
   loadoutSearch: "",
   selectedLoadoutItemId: "",
+  mapSelectedTokenId: "",
+  currentView: "sheet",
   editMode: localStorage.getItem("tt-edit-mode") === "1",
   resuming: false
 };
 const rules = window.TT_RULES;
+const itemSystem = window.TT_ITEM_SYSTEM;
 let spellCatalog = null;
-const itemCatalog2014 = Array.isArray(window.TT_ITEMS_2014) ? window.TT_ITEMS_2014 : [];
+const itemCatalog2014 = (Array.isArray(window.TT_ITEMS_2014) ? window.TT_ITEMS_2014 : []).map(item => itemSystem.enrichCatalogItem(item));
 localStorage.setItem("tt-client-id", state.clientId);
 
 const abilities = {
@@ -94,6 +97,20 @@ function isConsumableItem(item) { return item?.combatKind === "consumable" || /�
 function isShieldItem(item) { return item?.type === "armor" && (item?.armorType === "shield" || /щит/i.test(item?.name || "")); }
 function isTwoHandedItem(item) { return item?.type === "weapon" && /двуруч/i.test(`${item?.properties || ""} ${item?.description || ""}`); }
 function isRangedWeapon(item) { return item?.type === "weapon" && (/боеприпас/i.test(`${item?.properties || ""} ${item?.description || ""}`) || /лук|арбалет|пращ/i.test(item?.name || "")); }
+function requiredAmmoKey(item) {
+  const key = itemSystem.normalizeCatalogKey(item?.baseCatalogKey || item?.catalogKey);
+  const text = `${key} ${item?.name || ""}`.toLowerCase();
+  if (/crossbow|арбалет/.test(text)) return "crossbow-bolt";
+  if (/blowgun|духов/.test(text)) return "blowgun-needle";
+  if (/sling|пращ/.test(text)) return "sling-bullet";
+  if (/bow|лук/.test(text)) return "arrow";
+  return "";
+}
+function ammoMatchesWeapon(weapon, ammo) {
+  const required = requiredAmmoKey(weapon);
+  if (!required || !ammo) return true;
+  return itemSystem.normalizeCatalogKey(ammo.baseCatalogKey || ammo.catalogKey) === required;
+}
 function itemCombatKind(item) {
   if (item?.combatKind && item.combatKind !== "auto") return item.combatKind;
   if (isAmmoItem(item)) return "ammo";
@@ -262,7 +279,7 @@ function syncCharacterMechanics(sheet) {
     });
   });
   sheet.xp = Math.max(0, Number(sheet.xp) || 0);
-  sheet.schemaVersion = 7;
+  sheet.schemaVersion = 8;
   if (sheet.autoArmorClass) sheet.ac = calculateAc(sheet);
   return sheet;
 }
@@ -270,16 +287,18 @@ function calculateAc(sheet) {
   if (!sheet.autoArmorClass) return Number(sheet.ac || 10);
   const activeIds = sheet.combatLoadout ? activeCombatItemIds(sheet) : new Set();
   const equipped = (sheet.inventoryList || []).filter(item => item.type === "armor" && (activeIds.size ? activeIds.has(item.id) : item.equipped));
-  const body = equipped.filter(item => item.armorType !== "shield").sort((a,b) => Number(b.baseAc||0)-Number(a.baseAc||0))[0];
-  const shields = equipped.filter(item => item.armorType === "shield").length;
+  const body = equipped.filter(item => item.armorType !== "shield").sort((a,b) => (Number(b.baseAc||0)+Number(b.magicBonus||0))-(Number(a.baseAc||0)+Number(a.magicBonus||0)))[0];
+  const shield = equipped.filter(item => item.armorType === "shield").sort((a,b) => (Number(b.baseAc||2)+Number(b.magicBonus||0))-(Number(a.baseAc||2)+Number(a.magicBonus||0)))[0];
   const dex = modifier(sheet.stats.dex);
   let ac = 10 + dex;
   if (!body && hasClass(sheet, "barbarian")) ac = 10 + dex + modifier(sheet.stats.con);
-  if (!body && hasClass(sheet, "monk") && !shields) ac = 10 + dex + modifier(sheet.stats.wis);
-  if (body?.armorType === "light") ac = Number(body.baseAc) + dex;
-  else if (body?.armorType === "medium") ac = Number(body.baseAc) + Math.min(2, dex);
-  else if (body?.armorType === "heavy") ac = Number(body.baseAc);
-  return ac + Math.min(1, shields) * 2;
+  if (!body && hasClass(sheet, "monk") && !shield) ac = 10 + dex + modifier(sheet.stats.wis);
+  const bodyBonus = Number(body?.magicBonus || 0);
+  if (body?.armorType === "light") ac = Number(body.baseAc) + dex + bodyBonus;
+  else if (body?.armorType === "medium") ac = Number(body.baseAc) + Math.min(2, dex) + bodyBonus;
+  else if (body?.armorType === "heavy") ac = Number(body.baseAc) + bodyBonus;
+  const shieldBonus = shield ? Number(shield.baseAc || 2) + Number(shield.magicBonus || 0) : 0;
+  return ac + shieldBonus;
 }
 function preparedSpellLimit(sheet) {
   if (!sheet.spellcastingAbility) return null;
@@ -405,11 +424,12 @@ socket.on("room:state", room => {
   if (!room.players[state.selectedId]) state.selectedId = state.clientId;
   renderChrome();
   renderRolls();
+  if (state.currentView === "map") renderMap();
   const editing = $("#sheet-view").contains(document.activeElement);
   if (!editing) renderSheet();
 });
 
-function renderAll() { renderChrome(); renderSheet(); renderRolls(); }
+function renderAll() { renderChrome(); renderSheet(); renderRolls(); renderMap(); }
 function renderChrome() {
   const room = state.room;
   $("#campaign-title").textContent = room.title;
@@ -533,9 +553,9 @@ function combatAttackForItem(sheet, item) {
 }
 function combatItemSummary(item) {
   if (!item) return "";
-  if (item.type === "weapon") return [String(item.damage || "").replace(/d/gi,"к"), item.damageType].filter(Boolean).join(" · ") || "оружие";
-  if (isShieldItem(item)) return "+2 КД";
-  if (item.type === "armor") return `КД ${Number(item.baseAc || 0)} · ${item.armorType === "light" ? "лёгкий" : item.armorType === "medium" ? "средний" : item.armorType === "heavy" ? "тяжёлый" : "доспех"}`;
+  if (item.type === "weapon") return [String(item.damage || "").replace(/d/gi,"к"), item.damageType, Number(item.magicBonus || 0) ? `магия +${Number(item.magicBonus)}` : ""].filter(Boolean).join(" · ") || "оружие";
+  if (isShieldItem(item)) return `+${Number(item.baseAc || 2) + Number(item.magicBonus || 0)} КД${item.variantLabel ? ` · ${item.variantLabel}` : ""}`;
+  if (item.type === "armor") return `КД ${Number(item.baseAc || 0) + Number(item.magicBonus || 0)} · ${item.armorType === "light" ? "лёгкий" : item.armorType === "medium" ? "средний" : item.armorType === "heavy" ? "тяжёлый" : "доспех"}${item.variantLabel ? ` · ${item.variantLabel}` : ""}`;
   return `${Number(item.quantity || 0)} шт.${item.magical ? " · магия" : ""}`;
 }
 function slotAcceptsItem(slotKey, item) {
@@ -553,13 +573,12 @@ function combatLoadoutWarnings(sheet) {
   const main = combatItem(sheet,set.slots.mainHand), off = combatItem(sheet,set.slots.offHand), body = combatItem(sheet,set.slots.body), ammo = combatItem(sheet,set.slots.ammo);
   if (main && isTwoHandedItem(main) && off) warnings.push({ icon:"↔", title:"Обе руки заняты", text:`${main.name} — двуручное оружие, но во второй руке лежит «${off.name}».` });
   if (main && isRangedWeapon(main) && (!ammo || Number(ammo.quantity || 0) <= 0)) warnings.push({ icon:"➹", title:"Нет боеприпасов", text:`Для «${main.name}» нужен заполненный слот боеприпасов.` });
-  if (main && ammo && /арбалет/i.test(main.name || "") && /стрел/i.test(ammo.name || "")) warnings.push({ icon:"!", title:"Не тот боеприпас", text:"Арбалету обычно нужны болты, а не стрелы." });
-  if (main && ammo && /лук/i.test(main.name || "") && /болт/i.test(ammo.name || "")) warnings.push({ icon:"!", title:"Не тот боеприпас", text:"Луку обычно нужны стрелы, а не болты." });
+  if (main && ammo && !ammoMatchesWeapon(main,ammo)) warnings.push({ icon:"!", title:"Не тот боеприпас", text:`«${main.name}» не использует «${ammo.name}». Выбери подходящие снаряды.` });
   const armorProf = String(sheet.armorProficiencies || "").toLowerCase();
   if (body) {
     const required = body.armorType === "heavy" ? "тяж" : body.armorType === "medium" ? "средн" : body.armorType === "light" ? "лёгк" : "";
     if (required && !armorProf.includes(required) && !armorProf.includes("все доспехи")) warnings.push({ icon:"⬡", title:"Нет владения доспехом", text:`Проверь владение: «${body.name}» относится к ${body.armorType === "heavy" ? "тяжёлым" : body.armorType === "medium" ? "средним" : "лёгким"} доспехам.` });
-    const strengthRequired = { "chain-mail":13, splint:15, plate:15 }[body.catalogKey];
+    const strengthRequired = Number(body.strengthMinimum || itemSystem.strengthRequirements[itemSystem.normalizeCatalogKey(body.baseCatalogKey || body.catalogKey)] || 0);
     if (strengthRequired && Number(sheet.stats.str || 0) < strengthRequired) warnings.push({ icon:"◆", title:`Желательна Сила ${strengthRequired}`, text:"Недостаток Силы в тяжёлом доспехе обычно уменьшает скорость." });
   }
   if (isShieldItem(off) && !/щит|все доспехи/.test(armorProf)) warnings.push({ icon:"◈", title:"Нет владения щитом", text:"Щит можно оставить, но по обычным правилам без владения будут штрафы." });
@@ -567,8 +586,7 @@ function combatLoadoutWarnings(sheet) {
   const weaponNameTokens = String(main?.name || "").toLowerCase().split(/[^а-яёa-z]+/i).filter(token => token.length >= 4).map(token => token.slice(0,Math.min(5,token.length)));
   const specificallyProficient = weaponNameTokens.some(token => weaponProf.includes(token));
   if (main?.type === "weapon" && weaponProf && !weaponProf.includes("простое и воинское") && !specificallyProficient) {
-    const simpleKeys = new Set(["club","dagger","greatclub","handaxe","javelin","mace","quarterstaff","spear","light-crossbow","shortbow"]);
-    const category = simpleKeys.has(main.catalogKey) ? "прост" : "воинск";
+    const category = itemSystem.simpleWeaponKeys.has(itemSystem.normalizeCatalogKey(main.baseCatalogKey || main.catalogKey)) ? "прост" : "воинск";
     if (!weaponProf.includes(category)) warnings.push({ icon:"⚔", title:"Владение оружием не найдено", text:`«${main.name}» можно использовать, но бонус мастерства обычно не добавляется без владения.` });
   }
   const attunedCount = (sheet.inventoryList || []).filter(item => item.attuned).length;
@@ -595,7 +613,7 @@ function combatLoadoutMarkup(sheet, mine) {
   const warnings = combatLoadoutWarnings(sheet);
   const inventoryCards = (sheet.inventoryList || []).map(item => {
     const kind = itemCombatKind(item), selected = state.selectedLoadoutItemId === item.id;
-    return `<button class="loadout-inventory-card ${assignedIds.has(item.id) ? "assigned" : ""} ${selected ? "selected" : ""}" type="button" data-loadout-item="${esc(item.id)}" data-loadout-kind="${esc(kind)}" data-loadout-search="${esc(`${item.name || ""} ${item.description || ""}`.toLowerCase())}" draggable="${editable}"><span>${itemCombatIcon(item)}</span><span><strong>${esc(item.name || "Предмет")}</strong><small>${esc(combatItemSummary(item))}</small></span><b>${Number(item.quantity || 0)}</b></button>`;
+    return `<button class="loadout-inventory-card ${assignedIds.has(item.id) ? "assigned" : ""} ${selected ? "selected" : ""}" type="button" data-loadout-item="${esc(item.id)}" data-loadout-kind="${esc(kind)}" data-loadout-search="${esc(`${item.name || ""} ${item.originalName || ""} ${item.catalogKey || ""} ${item.baseCatalogKey || ""} ${item.rarity || ""} ${item.description || ""}`.toLowerCase())}" draggable="${editable}"><span>${itemCombatIcon(item)}</span><span><strong>${esc(item.name || "Предмет")}</strong><small>${esc(combatItemSummary(item))}</small></span><b>${Number(item.quantity || 0)}</b></button>`;
   }).join("");
   const attunementIds = loadout.attunementSlots.filter(itemId => combatItem(sheet,itemId));
   const attunementSlots = Array.from({length:3},(_,index) => {
@@ -740,7 +758,7 @@ function renderSheet() {
         <div class="panel" data-section="features"><h3 class="panel-title">Чувства и защита</h3><div class="bio-grid">${field("Тёмное зрение", "darkvision", s.darkvision || 0, "number")}${field("Слепое зрение", "blindsight", s.blindsight || 0, "number")}${field("Чувство вибрации", "tremorsense", s.tremorsense || 0, "number")}${field("Истинное зрение", "truesight", s.truesight || 0, "number")}</div>${area("Сопротивления", "resistances", s.resistances || "")}${area("Иммунитеты", "immunities", s.immunities || "")}${area("Уязвимости", "vulnerabilities", s.vulnerabilities || "")}</div>
         <div class="panel" data-section="spells"><h3 class="panel-title">Гримуар</h3><div class="spell-summary"><div><small>Сложность</small><strong>${spellSave}</strong></div><div><small>Атака</small><strong>${signed(spellAttack)}</strong></div><div class="${preparedLimit !== null && preparedCount > preparedLimit ? "over-limit" : ""}"><small>Подготовлено</small><strong>${preparedCount}${preparedLimit === null ? "" : `/${preparedLimit}`}</strong></div><label>Характеристика<select data-field="spellcastingAbility"><option value="">—</option>${Object.entries(abilities).map(([key,name]) => `<option value="${key}" ${spellAbility === key ? "selected" : ""}>${name}</option>`).join("")}</select></label></div><div class="spell-slots">${slots || (!pactSlots ? `<span class="read-only">Настрой доступные ячейки.</span>` : "")}${pactSlots}</div><div class="section-actions">${mine ? `<button id="slots-manager" class="secondary" type="button">Ячейки</button><button id="spell-library" class="secondary" type="button">Справочник</button><button id="spell-add" class="secondary" type="button">Хоумбрю</button>` : ""}</div><div class="spell-filters"><input id="owned-spell-search" aria-label="Поиск в гримуаре" placeholder="Поиск в гримуаре"><select id="owned-spell-level" aria-label="Уровень заклинаний"><option value="all">Все уровни</option><option value="0">Заговоры</option>${Array.from({length:9},(_,i)=>`<option value="${i+1}">${i+1} уровень</option>`).join("")}</select><select id="owned-spell-prepared" aria-label="Статус подготовки"><option value="all">Все</option><option value="yes">Подготовленные</option><option value="no">Неподготовленные</option></select></div><div class="entity-list" id="owned-spells">${spellRows || `<div class="read-only">Гримуар пока пуст.</div>`}</div>${area("Заметки заклинателя", "spells", s.spells)}</div>
         <div class="panel" data-section="personality"><h3 class="panel-title">Личность и внешность</h3>${s.portraitUrl ? `<img class="portrait-preview" src="${esc(s.portraitUrl)}" alt="Портрет">` : ""}${field("Ссылка на портрет", "portraitUrl", s.portraitUrl || "")}<div class="bio-grid">${field("Возраст", "age", s.age || "")}${field("Рост", "height", s.height || "")}${field("Вес", "weight", s.weight || "")}${field("Глаза", "eyes", s.eyes || "")}${field("Кожа", "skin", s.skin || "")}${field("Волосы", "hair", s.hair || "")}</div>${area("Внешность", "appearance", s.appearance || "")}${area("Предыстория персонажа", "backstory", s.backstory || "")}${area("Союзники и организации", "allies", s.allies || "")}${area("Черты характера", "personality", s.personality)}${area("Идеалы", "ideals", s.ideals)}${area("Привязанности", "bonds", s.bonds)}${area("Слабости", "flaws", s.flaws)}</div>
-        <div class="panel" data-section="personality"><h3 class="panel-title">Будущий токен карты</h3><div class="bio-grid">${field("Картинка токена", "tokenImageUrl", s.tokenImageUrl || s.portraitUrl || "")}${field("Цвет рамки", "tokenColor", s.tokenColor || "#9f7842", "color")}${field("Зрение, футы", "tokenVision", s.tokenVision ?? 60, "number")}${field("Размер на сетке", "tokenScale", s.tokenScale ?? 1, "number")}</div><div class="read-only">Эти настройки уже сохраняются в персонаже и будут использованы модулем карты.</div></div>
+        <div class="panel" data-section="personality"><h3 class="panel-title">Токен карты</h3><div class="bio-grid">${field("Картинка токена", "tokenImageUrl", s.tokenImageUrl || s.portraitUrl || "")}${field("Цвет рамки", "tokenColor", s.tokenColor || "#9f7842", "color")}${field("Зрение, футы", "tokenVision", s.tokenVision ?? 60, "number")}${field("Размер на сетке", "tokenScale", s.tokenScale ?? 1, "number")}</div><div class="read-only">Имя, изображение, цвет, размер и зрение синхронно используются токеном персонажа на общей карте.</div></div>
         <div class="panel" data-section="goals"><div class="section-actions"><h3 class="panel-title">Цели и задачи</h3>${mine ? `<button id="goal-add" class="secondary" type="button">+ Цель</button>` : ""}</div><div class="entity-list">${goalRows || `<div class="read-only">Целей пока нет.</div>`}</div></div>
         <div class="panel" data-section="notes"><div class="section-actions"><h3 class="panel-title">Заметки</h3>${mine ? `<button id="note-add" class="secondary" type="button">+ Заметка</button>` : ""}</div>${noteRows}${area("Общие заметки", "notes", s.notes)}</div>
       </div>
@@ -1042,10 +1060,21 @@ function bindGameControls() {
   bindCombatLoadoutControls();
 }
 
+function activeAmmoForAttack(sheet, attack) {
+  const set = activeCombatSet(sheet);
+  const weapon = combatItem(sheet,set.slots.mainHand) || combatItem(sheet,set.slots.offHand);
+  if (!weapon || !isRangedWeapon(weapon) || (attack.sourceItemId && attack.sourceItemId !== weapon.id)) return null;
+  const ammo = combatItem(sheet,set.slots.ammo);
+  return ammoMatchesWeapon(weapon,ammo) ? ammo : null;
+}
+function activeAmmoMagicBonus(sheet, attack) {
+  return Math.max(0,Number(activeAmmoForAttack(sheet,attack)?.magicBonus || 0));
+}
 function performAttackRoll(attack) {
   const sheet = currentSheet();
   const fixedMode = attack?.rollMode && attack.rollMode !== "inherit" ? attack.rollMode : undefined;
-  roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,sheet),sheet))}`, `Атака: ${attack.name}`, { ...(fixedMode ? { mode:fixedMode } : {}), onResult: response => {
+  const ammoBonus = activeAmmoMagicBonus(sheet,attack);
+  roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + ammoBonus)}`, `Атака: ${attack.name}${ammoBonus ? ` · боеприпас +${ammoBonus}` : ""}`, { ...(fixedMode ? { mode:fixedMode } : {}), onResult: response => {
     if (response.natural === 20) { state.lastCriticalAttackId = attack.id; toast("Натуральная 20! Жми ✦ для критического урона"); }
     else if (response.natural === 1) toast("Натуральная 1 — автоматический промах");
     consumeLoadoutAmmo(attack);
@@ -1059,6 +1088,7 @@ function consumeLoadoutAmmo(attack) {
   if (!weapon || !isRangedWeapon(weapon) || (attack.sourceItemId && attack.sourceItemId !== weapon.id)) return;
   const ammo = combatItem(sheet,set.slots.ammo);
   if (!ammo || Number(ammo.quantity || 0) <= 0) return toast("Атака сохранена, но в слоте нет боеприпасов");
+  if (!ammoMatchesWeapon(weapon,ammo)) return toast(`Для «${weapon.name}» выбран неподходящий боеприпас`);
   const next = structuredClone(sheet), nextAmmo = combatItem(next,activeCombatSet(next).slots.ammo);
   nextAmmo.quantity = Math.max(0,Number(nextAmmo.quantity || 0)-1);
   saveNow(next,`Боеприпасы: ${nextAmmo.quantity}`,"Израсходован боеприпас");
@@ -1229,11 +1259,12 @@ function bindCombatLoadoutControls() {
 function skillName(key) { return skills.find(([skillKey]) => skillKey === key)?.[1] || key; }
 
 function starterCatalogItem(key) {
-  return [...rules.weapons, ...rules.armor, ...rules.gear].find(item => item.key === key);
+  const canonicalKey = itemSystem.normalizeCatalogKey(key);
+  return fullItemCatalog().find(item => item.key === canonicalKey);
 }
 
 function addStarterItem(sheet, source) {
-  if (!source || sheet.inventoryList.some(item => item.catalogKey === source.key || item.key === source.key)) return;
+  if (!source || sheet.inventoryList.some(item => itemSystem.normalizeCatalogKey(item.catalogKey || item.key) === source.key)) return;
   const itemId = uuid();
   const equipped = source.type === "armor";
   sheet.inventoryList.push({ ...structuredClone(source), key:undefined, catalogKey:source.key, id:itemId, quantity:Number(source.quantity || 1), equipped, attuned:false, magical:false, description:source.properties || "" });
@@ -1884,52 +1915,112 @@ function catalogPrice(item) {
   return `${Number(item.costValue).toLocaleString("ru-RU")} ${units[item.costUnit] || item.costUnit}`;
 }
 function catalogItemSummary(item) {
-  if (item.type === "weapon") return `${String(item.damage || "—").replace(/d/gi,"к")} ${item.damageType || ""}${item.properties ? ` · ${item.properties}` : ""}`;
-  if (item.type === "armor") return `${item.armorType === "shield" ? "+2 КД" : `КД ${Number(item.baseAc || 0)}`} · ${item.weight || 0} фнт.`;
+  if (item.type === "weapon") return `${String(item.damage || "—").replace(/d/gi,"к")} ${item.damageType || ""}${Number(item.magicBonus || 0) ? ` · +${Number(item.magicBonus)} к атаке и урону` : ""}${item.properties ? ` · ${item.properties}` : ""}`;
+  if (item.type === "armor") return `${item.armorType === "shield" ? `+${Number(item.baseAc || 2) + Number(item.magicBonus || 0)} КД` : `КД ${Number(item.baseAc || 0) + Number(item.magicBonus || 0)}`} · ${item.weight || 0} фнт.${item.variantLabel ? ` · основа: ${item.variantLabel}` : ""}`;
   return [itemCategoryNames[item.catalogCategory] || "Предмет", item.rarity, item.quantity > 1 ? `${item.quantity} шт.` : "", item.weight ? `${item.weight} фнт.` : ""].filter(Boolean).join(" · ");
 }
-function addCatalogItem(source) {
-  const next = structuredClone(currentSheet());
-  const stackable = source.type === "gear" && ["ammo","consumable","gear","focus","tool","potion","scroll"].includes(source.catalogCategory);
-  const existing = stackable ? next.inventoryList.find(item => item.catalogKey === source.key) : null;
-  if (existing) {
-    existing.quantity = Math.max(0,Number(existing.quantity || 0)) + Math.max(1,Number(source.quantity || 1));
-    saveNow(next, `${source.name}: теперь ${existing.quantity}`, "Пополнено снаряжение");
-    return;
+function catalogBaseOptions(source) {
+  const catalog = fullItemCatalog();
+  if (source.magicCategory === "weapon") return catalog.filter(item => item.catalogCategory === "weapon" && item.type === "weapon");
+  if (source.magicCategory === "armor") return catalog.filter(item => item.catalogCategory === "armor" && item.type === "armor");
+  if (source.magicCategory === "ammunition") return catalog.filter(item => item.catalogCategory === "ammo");
+  return [];
+}
+function buildCatalogInventoryItem(source, baseSource = null) {
+  const sourceItem = itemSystem.enrichCatalogItem(source);
+  if (!baseSource) return { ...structuredClone(sourceItem), key:undefined, catalogKey:sourceItem.key };
+  return structuredClone(itemSystem.buildMagicVariant(sourceItem,baseSource));
+}
+function createAttackForInventoryItem(sheet, item) {
+  if (!item || item.type !== "weapon" || !item.damage || (sheet.attacksList || []).some(attack => attack.sourceItemId === item.id)) return;
+  const ability = item.ability === "finesse" ? (modifier(sheet.stats.dex) >= modifier(sheet.stats.str) ? "dex" : "str") : (item.ability || "str");
+  const attackParts = [{ id:uuid(), type:"ability", value:ability },{ id:uuid(), type:"proficiency", value:"prof" }];
+  const damageParts = [...parseFormulaParts(item.damage,"damage"),{ id:uuid(), type:"ability", value:ability }];
+  const magicBonus = Number(item.magicBonus || 0);
+  if (magicBonus) {
+    attackParts.push({ id:uuid(), type:"flat", value:String(magicBonus) });
+    damageParts.push({ id:uuid(), type:"flat", value:String(magicBonus) });
   }
-  const itemId = uuid();
+  if (item.extraDamage?.formula && !item.extraDamage.criticalOnly) damageParts.push(...parseFormulaParts(item.extraDamage.formula,"damage"));
+  sheet.attacksList.push({
+    id:uuid(), sourceItemId:item.id, name:item.name, attackParts, damageParts,
+    bonus:formulaFromParts(attackParts,sheet), damage:formulaFromParts(damageParts,sheet), damageType:item.damageType,
+    notes:item.extraDamage?.formula ? `Дополнительный урон: ${String(item.extraDamage.formula).replace(/d/gi,"к")} ${item.extraDamage.damageType || ""}${item.extraDamage.criticalOnly ? " при критическом попадании" : ""}.` : "",
+    actionCost:"action", rollMode:"inherit"
+  });
+}
+function addCatalogItem(source, baseSource = null) {
+  const next = structuredClone(currentSheet());
+  const prepared = buildCatalogInventoryItem(source,baseSource);
+  const stackable = itemSystem.isStackable(prepared);
+  const existing = stackable ? next.inventoryList.find(item => itemSystem.normalizeCatalogKey(item.catalogKey) === prepared.catalogKey && itemSystem.normalizeCatalogKey(item.baseCatalogKey) === itemSystem.normalizeCatalogKey(prepared.baseCatalogKey)) : null;
+  if (existing) {
+    existing.quantity = Math.max(0,Number(existing.quantity || 0)) + Math.max(1,Number(prepared.quantity || 1));
+    saveNow(next, `${prepared.name}: теперь ${existing.quantity}`, "Пополнено снаряжение");
+    return existing;
+  }
   const value = {
-    ...structuredClone(source), key:undefined, catalogKey:source.key, id:itemId,
-    quantity:Number(source.quantity || 1), equipped:false, attuned:false,
-    magical:Boolean(source.magical), description:source.description || source.properties || ""
+    ...prepared,
+    id:uuid(), quantity:Number(prepared.quantity || 1), equipped:false, attuned:false,
+    magical:Boolean(prepared.magical), description:prepared.description || prepared.properties || ""
   };
   next.inventoryList.push(value);
-  if (source.type === "weapon" && source.damage) {
-    const ability = source.ability === "finesse" ? (modifier(next.stats.dex) >= modifier(next.stats.str) ? "dex" : "str") : source.ability;
-    const attackParts = [{ id:uuid(), type:"ability", value:ability || "str" },{ id:uuid(), type:"proficiency", value:"prof" }];
-    const damageParts = [...parseFormulaParts(source.damage,"damage"),{ id:uuid(), type:"ability", value:ability || "str" }];
-    next.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, attackParts, damageParts, bonus:formulaFromParts(attackParts,next), damage:formulaFromParts(damageParts,next), damageType:source.damageType });
-  }
-  saveNow(next, `${source.name} добавлен`, "Снаряжение");
+  createAttackForInventoryItem(next,value);
+  saveNow(next, `${value.name} добавлен`, "Снаряжение");
+  return value;
+}
+function openMagicVariantModal(source) {
+  const bases = catalogBaseOptions(source).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name),"ru"));
+  const preferred = itemSystem.preferredBaseKey(source);
+  const typeLabel = source.magicCategory === "weapon" ? "оружие" : source.magicCategory === "armor" ? "доспех или щит" : "вид боеприпаса";
+  openModal("Собрать магический предмет", `<section class="magic-variant-builder"><div class="item-detail-hero"><span>${itemCombatIcon(source)}</span><div><span class="eyebrow">Магическая основа</span><h3>${esc(source.name)}</h3><small>${esc(source.originalName || "")}</small><p>${esc(source.rarity || "Магический предмет")}${source.magicBonus ? ` · бонус +${Number(source.magicBonus)}` : ""}</p></div></div><label>Выбери ${typeLabel}<select id="magic-base-item">${bases.map(item=>`<option value="${esc(item.key)}" ${item.key===preferred?"selected":""}>${esc(item.name)}${item.type === "weapon" ? ` · ${esc(String(item.damage||"").replace(/d/gi,"к"))}` : item.type === "armor" ? ` · КД ${Number(item.baseAc||0)}` : ` · ${Number(item.quantity||1)} шт.`}</option>`).join("")}</select></label><div id="magic-variant-preview" class="read-only"></div><div class="modal-actions"><button id="magic-variant-add" class="primary">Добавить в рюкзак</button><button id="magic-variant-cancel" class="secondary">Отмена</button></div></section>`);
+  const updatePreview = () => {
+    const base = bases.find(item=>item.key===$("#magic-base-item").value);
+    const value = buildCatalogInventoryItem(source,base);
+    $("#magic-variant-preview").innerHTML = `<strong>${esc(value.name)}</strong><br>${esc(catalogItemSummary(value))}<br><small>${esc(value.description || "")}</small>`;
+  };
+  $("#magic-base-item").addEventListener("change",updatePreview);
+  $("#magic-variant-add").addEventListener("click",()=>{
+    const base = bases.find(item=>item.key===$("#magic-base-item").value);
+    if (!base) return toast("Не выбрана основа предмета");
+    const value = addCatalogItem(source,base);
+    closeModal(); renderSheet(); toast(`${value?.name || source.name} добавлен`);
+  });
+  $("#magic-variant-cancel").addEventListener("click",closeModal);
+  updatePreview();
+}
+function requestAddCatalogItem(source, afterAdd = null) {
+  if (itemSystem.isMagicVariant(source)) return openMagicVariantModal(source);
+  const value = addCatalogItem(source);
+  afterAdd?.();
+  renderSheet();
+  toast(`${value?.name || source.name} добавлен в рюкзак`);
 }
 function openItemCatalog() {
-  const catalog = fullItemCatalog().slice().sort((a,b) => String(a.name).localeCompare(String(b.name),"ru"));
+  const catalog = fullItemCatalog().slice();
   let visibleLimit = 80;
   $("#game-modal").classList.add("library-open", "catalog-modal");
   openModal("Каталог предметов 5e 2014", `<section class="item-catalog-shell">
-    <header class="catalog-hero"><div><span class="eyebrow">Открытые правила 2014</span><h3>Весь арсенал в одном месте</h3><p>Оружие, броня, походные вещи, инструменты, транспорт, зелья, свитки и магические предметы. Добавленное сразу появляется в боевом конструкторе.</p></div><strong>${catalog.length}<small>позиций</small></strong></header>
-    <div class="item-catalog-tools"><label>Поиск<input id="item-search" type="search" placeholder="Название, свойство или редкость…" autofocus></label><label>Категория<select id="item-type"><option value="all">Все категории</option>${Object.entries(itemCategoryNames).map(([key,name]) => `<option value="${key}">${name}</option>`).join("")}</select></label><label>Редкость<select id="item-rarity"><option value="all">Любая редкость</option>${["Обычный","Необычный","Редкий","Очень редкий","Легендарный","Артефакт"].map(name => `<option>${name}</option>`).join("")}</select></label></div>
-    <div class="catalog-result-head"><span id="item-result-count"></span><small>Поиск проверяет весь каталог, а не только показанные карточки.</small></div>
+    <header class="catalog-hero"><div><span class="eyebrow">Открытые правила 2014</span><h3>Весь арсенал в одном месте</h3><p>Обычные и магические предметы работают через одну модель. Для магического оружия, доспехов и боеприпасов можно выбрать физическую основу.</p></div><strong>${catalog.length}<small>позиций</small></strong></header>
+    <div class="item-catalog-tools"><label>Поиск<input id="item-search" type="search" placeholder="Название, свойство, ключ или редкость…" autofocus></label><label>Категория<select id="item-type"><option value="all">Все категории</option>${Object.entries(itemCategoryNames).map(([key,name]) => `<option value="${key}">${name}</option>`).join("")}</select></label><label>Редкость<select id="item-rarity"><option value="all">Любая редкость</option>${["Обычный","Необычный","Редкий","Очень редкий","Легендарный","Артефакт"].map(name => `<option>${name}</option>`).join("")}</select></label><label>Сортировка<select id="item-sort"><option value="name">По названию</option><option value="category">По категории</option><option value="rarity">По редкости</option><option value="price">По цене</option><option value="weight">По весу</option></select></label></div>
+    <div class="catalog-result-head"><span id="item-result-count"></span><small>Поиск проверяет весь каталог и исходные английские названия.</small></div>
     <div id="item-catalog-results" class="item-catalog-results"></div><footer id="item-catalog-more" class="catalog-more"></footer>
   </section>`);
   const matchingItems = () => {
     const query = $("#item-search").value.trim().toLowerCase();
-    const type = $("#item-type").value, rarity = $("#item-rarity").value;
+    const type = $("#item-type").value, rarity = $("#item-rarity").value, sort = $("#item-sort").value;
+    const rarityOrder = { "Обычный":1,"Необычный":2,"Редкий":3,"Очень редкий":4,"Легендарный":5,"Артефакт":6 };
     return catalog.filter(item => {
       const matchesType = type === "all" || item.catalogCategory === type;
       const matchesRarity = rarity === "all" || item.rarity === rarity;
-      const haystack = `${item.name} ${item.originalName || ""} ${item.properties || ""} ${item.description || ""} ${item.rarity || ""}`.toLowerCase();
+      const haystack = `${item.name} ${item.originalName || ""} ${item.key || ""} ${item.properties || ""} ${item.description || ""} ${item.rarity || ""} ${item.source || ""}`.toLowerCase();
       return matchesType && matchesRarity && (!query || haystack.includes(query));
+    }).sort((a,b) => {
+      if (sort === "category") return String(itemCategoryNames[a.catalogCategory]||"").localeCompare(String(itemCategoryNames[b.catalogCategory]||""),"ru") || String(a.name).localeCompare(String(b.name),"ru");
+      if (sort === "rarity") return Number(rarityOrder[a.rarity]||0)-Number(rarityOrder[b.rarity]||0) || String(a.name).localeCompare(String(b.name),"ru");
+      if (sort === "price") return Number(a.costValue||0)-Number(b.costValue||0) || String(a.name).localeCompare(String(b.name),"ru");
+      if (sort === "weight") return Number(a.weight||0)-Number(b.weight||0) || String(a.name).localeCompare(String(b.name),"ru");
+      return String(a.name).localeCompare(String(b.name),"ru");
     });
   };
   const refresh = (reset = false) => {
@@ -1937,19 +2028,21 @@ function openItemCatalog() {
     const found = matchingItems(), shown = found.slice(0,visibleLimit);
     $("#item-result-count").textContent = `Найдено ${found.length} · показано ${shown.length}`;
     $("#item-catalog-results").innerHTML = shown.length ? shown.map(item => {
-      const owned = currentSheet().inventoryList.filter(entry => entry.catalogKey === item.key).reduce((sum,entry) => sum + Number(entry.quantity || 0),0);
-      return `<article class="catalog-item ${item.magical ? "magical" : ""}"><span class="catalog-item-icon">${itemCombatIcon(item)}</span><div><div class="catalog-item-title"><strong>${esc(item.name)}</strong>${item.originalName && item.originalName !== item.name ? `<small>${esc(item.originalName)}</small>` : ""}</div><div class="catalog-badges"><span>${esc(itemCategoryNames[item.catalogCategory] || "Предмет")}</span>${item.rarity ? `<span>${esc(item.rarity)}</span>` : ""}${item.requiresAttunement ? "<span>настройка</span>" : ""}<span>${esc(catalogPrice(item))}</span></div><p>${esc(catalogItemSummary(item))}</p></div><button class="primary" data-catalog-item="${esc(item.key)}">${owned ? `Ещё +${Number(item.quantity || 1)}<small>есть ${owned}</small>` : "Добавить"}</button></article>`;
+      const owned = currentSheet().inventoryList.filter(entry => itemSystem.normalizeCatalogKey(entry.catalogKey) === item.key).reduce((sum,entry) => sum + Number(entry.quantity || 0),0);
+      const baseNote = itemSystem.isMagicVariant(item) ? `<span>выбор основы</span>` : "";
+      return `<article class="catalog-item ${item.magical ? "magical" : ""}"><span class="catalog-item-icon">${itemCombatIcon(item)}</span><div><div class="catalog-item-title"><strong>${esc(item.name)}</strong>${item.originalName && item.originalName !== item.name ? `<small>${esc(item.originalName)}</small>` : ""}</div><div class="catalog-badges"><span>${esc(itemCategoryNames[item.catalogCategory] || "Предмет")}</span>${item.rarity ? `<span>${esc(item.rarity)}</span>` : ""}${item.requiresAttunement ? "<span>настройка</span>" : ""}${baseNote}<span>${esc(catalogPrice(item))}</span></div><p>${esc(catalogItemSummary(item))}</p><small class="catalog-source">${esc(item.source || "SRD 5.1")}${item.key ? ` · ${esc(item.key)}` : ""}</small></div><button class="primary" data-catalog-item="${esc(item.key)}">${itemSystem.isMagicVariant(item) ? `Собрать${owned ? `<small>есть ${owned}</small>` : ""}` : owned ? `Ещё +${Number(item.quantity || 1)}<small>есть ${owned}</small>` : "Добавить"}</button></article>`;
     }).join("") : `<div class="catalog-nothing"><span>⌕</span><strong>Ничего не найдено</strong><p>Сбрось редкость, выбери «Все категории» или попробуй часть названия.</p></div>`;
     $("#item-catalog-more").innerHTML = found.length > shown.length ? `<button id="item-show-more" class="secondary" type="button">Показать ещё ${Math.min(80,found.length-shown.length)}<small>осталось ${found.length-shown.length}</small></button>` : found.length ? `<span>Показаны все ${found.length} позиций</span>` : "";
     $$('[data-catalog-item]', $("#item-catalog-results")).forEach(button => button.addEventListener("click", () => {
       const source = catalog.find(item => item.key === button.dataset.catalogItem); if (!source) return;
-      addCatalogItem(source); refresh(); toast(`${source.name} добавлен в рюкзак`);
+      requestAddCatalogItem(source,refresh);
     }));
     $("#item-show-more")?.addEventListener("click", () => { visibleLimit += 80; refresh(); });
   };
   $("#item-search").addEventListener("input", () => refresh(true));
   $("#item-type").addEventListener("change", () => refresh(true));
   $("#item-rarity").addEventListener("change", () => refresh(true));
+  $("#item-sort").addEventListener("change", () => refresh(true));
   refresh();
 }
 
@@ -2203,7 +2296,11 @@ function rollAttackDamage(attack, critical = false) {
   let formula = attackDamageFormula(attack,sheet);
   if (!formula) return;
   formula = resolveDiceFormula(formula,sheet);
+  const ammoBonus = activeAmmoMagicBonus(sheet,attack);
+  if (ammoBonus) formula += `+${ammoBonus}`;
   if (critical) formula = criticalFormula(formula);
+  const sourceItem = (sheet.inventoryList || []).find(item => item.id === attack.sourceItemId);
+  if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,sheet)}`;
   roll(formula, `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, { mode:"normal" });
 }
 
@@ -2217,6 +2314,8 @@ function openSmiteDamageModal(attack, critical) {
     const parts = (attack.damageParts || []).filter(part => part.type !== "smite");
     let formula = resolveDiceFormula(formulaFromParts(parts,currentSheet()),currentSheet());
     if (critical) formula = criticalFormula(formula);
+    const sourceItem = (currentSheet().inventoryList || []).find(item => item.id === attack.sourceItemId);
+    if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,currentSheet())}`;
     closeModal(); roll(formula, `${critical ? "Критический урон" : "Урон"} без кары: ${attack.name}`, { mode:"normal" });
   };
   openModal("Божественная кара", `<div class="smite-card"><div class="smite-symbol">✦</div><div><span class="eyebrow">После попадания</span><h3>${esc(attack.name)}</h3><p>Выбери ячейку. Кости кары автоматически удвоятся при критическом попадании.</p></div></div>${choices.length ? `<label>Потратить ячейку<select id="smite-slot">${choices.map(choice => `<option value="${choice.value}" data-level="${choice.level}">${choice.label}</option>`).join("")}</select></label><label class="toggle-row"><span><strong>Исчадие или нежить</strong><small>Добавляет ещё 1к8 урона излучением</small></span><input id="smite-special" type="checkbox"><i></i></label><div id="smite-preview" class="formula-preview"></div><div class="modal-actions"><button id="smite-roll" class="primary" type="button">Потратить ячейку и бросить</button><button id="smite-skip" class="secondary" type="button">Урон без кары</button></div>` : `<div class="read-only">Свободных ячеек нет. Можно бросить обычный урон без кары.</div><button id="smite-skip" class="primary" type="button">Бросить без кары</button>`}`);
@@ -2236,6 +2335,8 @@ function openSmiteDamageModal(attack, critical) {
     const dice = Math.min(5,choice.level + 1) + ($("#smite-special").checked ? 1 : 0);
     let formula = resolveDiceFormula(attackDamageFormula(attack,next,{smiteDice:dice}),next);
     if (critical) formula = criticalFormula(formula);
+    const sourceItem = (next.inventoryList || []).find(item => item.id === attack.sourceItemId);
+    if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,next)}`;
     closeModal(); saveNow(next,"Ячейка потрачена","Божественная кара"); renderSheet();
     roll(formula, `${critical ? "Критическая кара" : "Божественная кара"}: ${attack.name}`, { mode:"normal" });
   });
@@ -2310,7 +2411,7 @@ function openItemModal(id = null) {
   const item = currentSheet().inventoryList.find(entry => entry.id === id) || { id: uuid(), name: "", quantity: 1, weight: 0, equipped: false, attuned: false, magical: false, combatKind:"auto", useFormula:"", description: "" };
   openModal(id ? "Предмет" : "Новый предмет", `
     <label>Название<input id="item-name" value="${esc(item.name)}"></label>
-    ${item.type ? `<div class="read-only">${item.type === "weapon" ? `Оружие · ${esc(item.damage || "")} ${esc(item.damageType || "")}` : item.type === "armor" ? `Броня · базовый КД ${Number(item.baseAc || 0)} · ${esc(item.armorType || "")}` : item.magical ? `Магический предмет${item.rarity ? ` · ${esc(item.rarity)}` : ""}${item.requiresAttunement ? " · требует настройки" : ""}` : "Обычное снаряжение"}${item.originalName && item.originalName !== item.name ? `<br><small>${esc(item.originalName)}</small>` : ""}</div>` : ""}
+    ${item.type ? `<div class="read-only">${item.type === "weapon" ? `Оружие · ${esc(item.damage || "")} ${esc(item.damageType || "")}${item.magicBonus ? ` · +${Number(item.magicBonus)}` : ""}` : item.type === "armor" ? `Броня · КД ${Number(item.baseAc || 0) + Number(item.magicBonus || 0)} · ${esc(item.armorType || "")}` : item.magical ? `Магический предмет${item.rarity ? ` · ${esc(item.rarity)}` : ""}${item.requiresAttunement ? " · требует настройки" : ""}` : "Обычное снаряжение"}${item.variantLabel ? `<br><small>Основа: ${esc(item.variantLabel)}</small>` : ""}${item.originalName && item.originalName !== item.name ? `<br><small>${esc(item.originalName)}</small>` : ""}</div>` : ""}
     <div class="two-col"><label>Количество<input id="item-quantity" type="number" min="0" value="${Number(item.quantity)}"></label><label>Вес одного, фнт.<input id="item-weight" type="number" min="0" step="0.1" value="${Number(item.weight)}"></label></div>
     <div class="two-col"><label>Роль в бою<select id="item-combat-kind"><option value="auto" ${!item.combatKind || item.combatKind === "auto" ? "selected" : ""}>Определить автоматически</option><option value="weapon" ${item.combatKind === "weapon" ? "selected" : ""}>Оружие</option><option value="armor" ${item.combatKind === "armor" ? "selected" : ""}>Броня или защита</option><option value="ammo" ${item.combatKind === "ammo" ? "selected" : ""}>Боеприпасы</option><option value="consumable" ${item.combatKind === "consumable" ? "selected" : ""}>Расходник</option><option value="magic" ${item.combatKind === "magic" ? "selected" : ""}>Магический предмет</option><option value="gear" ${item.combatKind === "gear" ? "selected" : ""}>Прочее</option></select></label><label>Бросок при использовании<input id="item-use-formula" value="${esc(item.useFormula || "")}" placeholder="Например, 2к4+2"></label></div>
     <div class="item-toggle-grid"><label class="toggle-row"><span><strong>В активном комплекте</strong><small>TabaxiTable подберёт подходящий слот</small></span><input id="item-equipped" type="checkbox" ${item.equipped ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магическая настройка</strong><small>${item.requiresAttunement ? "Этому предмету нужна настройка" : "Стандартный лимит — три предмета"}</small></span><input id="item-attuned" type="checkbox" ${item.attuned ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магический предмет</strong><small>Показывать золотую метку</small></span><input id="item-magical" type="checkbox" ${item.magical ? "checked" : ""}><i></i></label></div>
@@ -2666,15 +2767,116 @@ $$('[data-dice-roll-mode]').forEach(button => button.addEventListener("click", (
   });
 }));
 $("#custom-roll").addEventListener("submit", event => { event.preventDefault(); const formula = new FormData(event.currentTarget).get("formula"); roll(formula); });
+function mapScene() {
+  return state.room?.scene || { name:"Главная сцена", backgroundUrl:"", backgroundColor:"#17120e", grid:{columns:24,rows:16,cellSize:52,visible:true,snap:true}, tokens:[], initiative:{active:false,round:1,currentTokenId:""} };
+}
+function mapInitiativeOrder(scene = mapScene()) {
+  return (scene.tokens || []).filter(token => token.initiative !== null && token.initiative !== undefined).sort((a,b)=>Number(b.initiative)-Number(a.initiative) || String(a.name).localeCompare(String(b.name),"ru"));
+}
+function mapTokenCanMove(token) {
+  return state.room?.dmId === state.clientId || token?.playerId === state.clientId;
+}
+function sceneAction(event,payload = {}, successMessage = "") {
+  socket.emit(event,payload,response=>{
+    if (!response?.ok) return toast(response?.error || "Не удалось изменить карту");
+    if (successMessage) toast(successMessage);
+  });
+}
+function renderMap() {
+  const root = $("#map-view");
+  if (!root || !state.room) return;
+  const scene = mapScene(), grid = scene.grid || {}, isDm = state.room.dmId === state.clientId;
+  const tokens = (scene.tokens || []).filter(token => isDm || !token.hidden);
+  if (!tokens.some(token=>token.id===state.mapSelectedTokenId)) state.mapSelectedTokenId = "";
+  const selected = tokens.find(token=>token.id===state.mapSelectedTokenId);
+  const ownToken = tokens.find(token=>token.playerId===state.clientId);
+  const order = mapInitiativeOrder(scene);
+  const currentTurn = order.find(token=>token.id===scene.initiative?.currentTokenId);
+  const stageWidth = Number(grid.columns || 24) * Number(grid.cellSize || 52);
+  const stageHeight = Number(grid.rows || 16) * Number(grid.cellSize || 52);
+  root.innerHTML = `<div class="map-shell">
+    <header class="map-header"><div><span class="eyebrow">Общий боевой стол</span><h2>${esc(scene.name || "Главная сцена")}</h2><p>${currentTurn ? `Раунд ${Number(scene.initiative.round||1)} · ход: ${esc(currentTurn.name)}` : "Сетка, токены персонажей и единая инициатива партии."}</p></div><div class="map-header-actions">${ownToken ? `<button id="map-roll-initiative" class="primary" type="button">Бросить инициативу</button>` : ""}${isDm ? `<button id="map-add-party" class="secondary" type="button">Добавить партию</button><button id="map-add-npc" class="secondary" type="button">+ NPC</button><button id="map-settings" class="secondary" type="button">Сцена</button>` : ""}</div></header>
+    <div class="map-layout">
+      <section class="map-board-panel"><div class="map-board-scroll"><div id="map-stage" class="map-stage ${grid.visible===false?"grid-hidden":""}" style="width:${stageWidth}px;height:${stageHeight}px;--grid-size:${Number(grid.cellSize||52)}px;background-color:${esc(scene.backgroundColor||"#17120e")}">${tokens.map(token=>`<button type="button" class="map-token ${token.hidden?"token-hidden":""} ${token.locked?"token-locked":""} ${token.id===state.mapSelectedTokenId?"selected":""} ${token.id===scene.initiative?.currentTokenId?"current-turn":""}" data-map-token="${esc(token.id)}" data-map-movable="${mapTokenCanMove(token) && !token.locked || isDm ? "1":"0"}" style="--token-x:${Number(token.x||0)};--token-y:${Number(token.y||0)};--token-size:${Number(token.size||1)};--token-color:${esc(token.color||"#9f7842")}" title="${esc(token.name)}${token.vision?` · зрение ${Number(token.vision)} фт.`:""}">${token.imageUrl?`<img src="${esc(token.imageUrl)}" alt="">`:`<span>${esc((token.name||"?")[0]?.toUpperCase()||"?")}</span>`}<strong>${esc(token.name)}</strong>${token.initiative!==null&&token.initiative!==undefined?`<b>${Number(token.initiative)}</b>`:""}</button>`).join("")}${tokens.length?"":`<div class="map-empty"><span>◇</span><strong>На сцене пока никого</strong><p>${isDm?"Добавь токены партии или создай противника.":"Ведущий ещё не добавил токены."}</p></div>`}</div></div><footer class="map-board-footer"><span>${Number(grid.columns)} × ${Number(grid.rows)} клеток</span><span>Клетка: 5 футов</span><span>${grid.snap===false?"Свободное движение":"Привязка к сетке"}</span></footer></section>
+      <aside class="map-side">
+        <section class="initiative-panel"><div class="panel-heading"><div><span class="eyebrow">Порядок боя</span><h3>Инициатива</h3></div>${scene.initiative?.active?`<b>Раунд ${Number(scene.initiative.round||1)}</b>`:""}</div><div class="initiative-list">${order.length?order.map((token,index)=>`<article class="initiative-entry ${token.id===scene.initiative?.currentTokenId?"active":""}"><button type="button" data-map-focus-token="${esc(token.id)}"><small>${index+1}</small><span><strong>${esc(token.name)}</strong><em>${token.playerId?"персонаж":"NPC"}</em></span></button>${isDm?`<input data-map-initiative="${esc(token.id)}" type="number" value="${Number(token.initiative)}" aria-label="Инициатива ${esc(token.name)}">`:`<b>${Number(token.initiative)}</b>`}</article>`).join(""):`<div class="map-side-empty">Броски инициативы появятся здесь.</div>`}</div>${isDm?`<div class="initiative-actions"><button id="map-next-turn" class="primary" type="button" ${order.length?"":"disabled"}>Следующий ход</button><button id="map-clear-initiative" class="secondary" type="button" ${order.length?"":"disabled"}>Сбросить</button></div>`:""}</section>
+        <section class="token-inspector"><div class="panel-heading"><div><span class="eyebrow">Выбранный объект</span><h3>${esc(selected?.name||"Токен")}</h3></div>${selected?`<span class="token-color-dot" style="background:${esc(selected.color||"#9f7842")}"></span>`:""}</div>${selected?`<div class="token-inspector-stats"><span><small>Позиция</small><strong>${Number(selected.x)+1}:${Number(selected.y)+1}</strong></span><span><small>Размер</small><strong>${Number(selected.size||1)}</strong></span><span><small>Зрение</small><strong>${Number(selected.vision||0)} фт.</strong></span></div><div class="token-inspector-actions">${isDm || selected.playerId===state.clientId?`<button id="map-edit-token" class="secondary" type="button">Настроить</button>`:""}<button id="map-roll-selected" class="secondary" type="button" ${isDm||selected.playerId===state.clientId?"":"disabled"}>Инициатива</button>${isDm?`<button id="map-remove-token" class="danger-action" type="button">Удалить</button>`:""}</div>`:`<div class="map-side-empty">Нажми токен на поле или участника инициативы.</div>`}</section>
+      </aside>
+    </div>
+  </div>`;
+  const stage = $("#map-stage",root);
+  if (scene.backgroundUrl) stage.style.backgroundImage = `linear-gradient(#09070533,#09070533), url("${String(scene.backgroundUrl).replace(/["\\]/g,"\\$&")}")`;
+  bindMapControls();
+}
+function bindMapControls() {
+  const root = $("#map-view"), scene = mapScene(), isDm = state.room?.dmId === state.clientId;
+  $("#map-roll-initiative",root)?.addEventListener("click",()=>{
+    const token = (scene.tokens||[]).find(entry=>entry.playerId===state.clientId);
+    if (token) sceneAction("initiative:roll",{tokenId:token.id});
+  });
+  $("#map-add-party",root)?.addEventListener("click",()=>sceneAction("scene:party-add",{},"Токены партии добавлены"));
+  $("#map-add-npc",root)?.addEventListener("click",openNpcTokenModal);
+  $("#map-settings",root)?.addEventListener("click",openSceneSettingsModal);
+  $("#map-next-turn",root)?.addEventListener("click",()=>sceneAction("initiative:next"));
+  $("#map-clear-initiative",root)?.addEventListener("click",()=>{ if(confirm("Сбросить инициативу и начать с первого раунда?")) sceneAction("initiative:clear"); });
+  $$('[data-map-focus-token]',root).forEach(button=>button.addEventListener("click",()=>{ state.mapSelectedTokenId=button.dataset.mapFocusToken; renderMap(); }));
+  $$('[data-map-initiative]',root).forEach(input=>input.addEventListener("change",()=>sceneAction("initiative:set",{tokenId:input.dataset.mapInitiative,value:input.value})));
+  $$('[data-map-token]',root).forEach(tokenButton=>{
+    tokenButton.addEventListener("click",()=>{ state.mapSelectedTokenId=tokenButton.dataset.mapToken; renderMap(); });
+    if (tokenButton.dataset.mapMovable !== "1") return;
+    tokenButton.addEventListener("pointerdown",event=>{
+      if (event.button !== 0) return;
+      const stage=$("#map-stage",root), rect=stage.getBoundingClientRect(), cell=Number(scene.grid.cellSize||52);
+      let moved=false, nextX=Number(tokenButton.style.getPropertyValue("--token-x")||0), nextY=Number(tokenButton.style.getPropertyValue("--token-y")||0);
+      const move=pointer=>{
+        const rawX=(pointer.clientX-rect.left)/cell, rawY=(pointer.clientY-rect.top)/cell;
+        nextX=Math.max(0,Math.min(Number(scene.grid.columns)-1,scene.grid.snap===false?Math.round(rawX*10)/10:Math.floor(rawX)));
+        nextY=Math.max(0,Math.min(Number(scene.grid.rows)-1,scene.grid.snap===false?Math.round(rawY*10)/10:Math.floor(rawY)));
+        tokenButton.style.setProperty("--token-x",String(nextX)); tokenButton.style.setProperty("--token-y",String(nextY)); moved=true;
+      };
+      const up=pointer=>{
+        document.removeEventListener("pointermove",move); document.removeEventListener("pointerup",up);
+        if (moved) { pointer.preventDefault(); sceneAction("scene:token-move",{tokenId:tokenButton.dataset.mapToken,x:nextX,y:nextY}); }
+      };
+      document.addEventListener("pointermove",move); document.addEventListener("pointerup",up,{once:true});
+      event.preventDefault();
+    });
+  });
+  const selected=(scene.tokens||[]).find(token=>token.id===state.mapSelectedTokenId);
+  $("#map-edit-token",root)?.addEventListener("click",()=>selected&&openTokenEditor(selected));
+  $("#map-roll-selected",root)?.addEventListener("click",()=>selected&&sceneAction("initiative:roll",{tokenId:selected.id}));
+  $("#map-remove-token",root)?.addEventListener("click",()=>{ if(selected&&confirm(`Удалить токен «${selected.name}»?`)) sceneAction("scene:token-remove",{tokenId:selected.id}); });
+}
+function openSceneSettingsModal() {
+  const scene=mapScene(), grid=scene.grid;
+  openModal("Настройки сцены",`<div class="scene-settings"><label>Название сцены<input id="scene-name" value="${esc(scene.name||"")}"></label><label>Фоновая картинка<input id="scene-background" value="${esc(scene.backgroundUrl||"")}" placeholder="https://…/battlemap.jpg"></label><div class="two-col"><label>Цвет поля<input id="scene-color" type="color" value="${esc(scene.backgroundColor||"#17120e")}"></label><label>Размер клетки, px<input id="scene-cell" type="number" min="32" max="96" value="${Number(grid.cellSize||52)}"></label></div><div class="two-col"><label>Клеток по ширине<input id="scene-columns" type="number" min="8" max="60" value="${Number(grid.columns||24)}"></label><label>Клеток по высоте<input id="scene-rows" type="number" min="6" max="40" value="${Number(grid.rows||16)}"></label></div><div class="item-toggle-grid"><label class="toggle-row"><span><strong>Показывать сетку</strong><small>Квадраты по 5 футов</small></span><input id="scene-grid-visible" type="checkbox" ${grid.visible!==false?"checked":""}><i></i></label><label class="toggle-row"><span><strong>Привязка токенов</strong><small>Перемещение по целым клеткам</small></span><input id="scene-grid-snap" type="checkbox" ${grid.snap!==false?"checked":""}><i></i></label></div><div class="modal-actions"><button id="scene-save" class="primary">Сохранить сцену</button><button id="scene-cancel" class="secondary">Отмена</button></div></div>`);
+  $("#scene-save").addEventListener("click",()=>{ sceneAction("scene:settings",{name:$("#scene-name").value,backgroundUrl:$("#scene-background").value,backgroundColor:$("#scene-color").value,grid:{columns:Number($("#scene-columns").value),rows:Number($("#scene-rows").value),cellSize:Number($("#scene-cell").value),visible:$("#scene-grid-visible").checked,snap:$("#scene-grid-snap").checked}},"Сцена обновлена"); closeModal(); });
+  $("#scene-cancel").addEventListener("click",closeModal);
+}
+function openNpcTokenModal() {
+  openModal("Новый токен NPC",`<label>Имя<input id="npc-token-name" placeholder="Гоблин"></label><label>Картинка<input id="npc-token-image" placeholder="https://…"></label><div class="two-col"><label>Цвет рамки<input id="npc-token-color" type="color" value="#9f7842"></label><label>Размер<input id="npc-token-size" type="number" min="0.5" max="4" step="0.5" value="1"></label></div><div class="two-col"><label>Зрение, футы<input id="npc-token-vision" type="number" min="0" value="60"></label><label>Бонус инициативы<input id="npc-token-init" type="number" value="0"></label></div><label class="toggle-row"><span><strong>Скрытый токен</strong><small>Виден только ведущему</small></span><input id="npc-token-hidden" type="checkbox"><i></i></label><div class="modal-actions"><button id="npc-token-add" class="primary">Добавить</button><button id="npc-token-cancel" class="secondary">Отмена</button></div>`);
+  $("#npc-token-add").addEventListener("click",()=>{ sceneAction("scene:token-add",{name:$("#npc-token-name").value,imageUrl:$("#npc-token-image").value,color:$("#npc-token-color").value,size:Number($("#npc-token-size").value),vision:Number($("#npc-token-vision").value),initiativeBonus:Number($("#npc-token-init").value),hidden:$("#npc-token-hidden").checked},"Токен добавлен"); closeModal(); });
+  $("#npc-token-cancel").addEventListener("click",closeModal);
+}
+function openTokenEditor(token) {
+  const npc=!token.playerId, isDm=state.room?.dmId===state.clientId;
+  openModal("Настройки токена",`${npc?`<label>Имя<input id="token-edit-name" value="${esc(token.name)}"></label><label>Картинка<input id="token-edit-image" value="${esc(token.imageUrl||"")}"></label><div class="two-col"><label>Цвет<input id="token-edit-color" type="color" value="${esc(token.color||"#9f7842")}"></label><label>Размер<input id="token-edit-size" type="number" min="0.5" max="4" step="0.5" value="${Number(token.size||1)}"></label></div><div class="two-col"><label>Зрение<input id="token-edit-vision" type="number" value="${Number(token.vision||0)}"></label><label>Бонус инициативы<input id="token-edit-init" type="number" value="${Number(token.initiativeBonus||0)}"></label></div>`:`<div class="read-only">Имя, картинка, цвет, размер и зрение этого токена берутся из листа персонажа.</div>`}${isDm?`<div class="item-toggle-grid"><label class="toggle-row"><span><strong>Скрыт</strong><small>Не показывать игрокам</small></span><input id="token-edit-hidden" type="checkbox" ${token.hidden?"checked":""}><i></i></label><label class="toggle-row"><span><strong>Заблокирован</strong><small>Двигает только ведущий</small></span><input id="token-edit-locked" type="checkbox" ${token.locked?"checked":""}><i></i></label></div>`:""}<div class="modal-actions"><button id="token-edit-save" class="primary">Сохранить</button><button id="token-edit-cancel" class="secondary">Отмена</button></div>`);
+  $("#token-edit-save").addEventListener("click",()=>{ sceneAction("scene:token-update",{tokenId:token.id,name:$("#token-edit-name")?.value,imageUrl:$("#token-edit-image")?.value,color:$("#token-edit-color")?.value,size:Number($("#token-edit-size")?.value),vision:Number($("#token-edit-vision")?.value),initiativeBonus:Number($("#token-edit-init")?.value),hidden:$("#token-edit-hidden")?.checked,locked:$("#token-edit-locked")?.checked},"Токен обновлён"); closeModal(); });
+  $("#token-edit-cancel").addEventListener("click",closeModal);
+}
+
 function renderRolls() {
   if (!state.room) return;
   $("#roll-log").innerHTML = state.room.rollLog.length ? [...state.room.rollLog].reverse().map(item => `
     <div class="roll ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""}"><div><strong>${esc(item.player)}</strong><br><span>${esc(item.label)}${item.activity ? ` · ${esc(item.activity)}` : ` · [${(item.dice || []).join(", ")}]${item.modifier ? ` ${signed(item.modifier)}` : ""}${item.mode === "advantage" ? " · преимущество" : item.mode === "disadvantage" ? " · помеха" : ""}`}</span></div><b>${item.total === null ? "✦" : item.total}</b></div>`).join("") : `<div class="read-only">Здесь появятся броски всей партии.</div>`;
 }
 function switchView(view) {
-  $$('[data-view]').forEach(button => button.classList.toggle("active", button.dataset.view === view));
-  $("#sheet-view").classList.toggle("hidden", view !== "sheet");
-  $("#dice-view").classList.toggle("hidden", view !== "dice");
+  state.currentView = ["sheet","dice","map"].includes(view) ? view : "sheet";
+  $$('[data-view]').forEach(button => button.classList.toggle("active", button.dataset.view === state.currentView));
+  $("#sheet-view").classList.toggle("hidden", state.currentView !== "sheet");
+  $("#dice-view").classList.toggle("hidden", state.currentView !== "dice");
+  $("#map-view").classList.toggle("hidden", state.currentView !== "map");
+  if (state.currentView === "map") renderMap();
 }
 $$('[data-view]').forEach(button => button.addEventListener("click", () => switchView(button.dataset.view)));
 $("#roll-peek").addEventListener("click", () => switchView("dice"));

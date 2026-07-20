@@ -54,7 +54,7 @@
       <nav class="room-nav">
         <button class="active" data-view="sheet">Лист</button>
         <button data-view="dice">Кости</button>
-        <button data-view="map" disabled title="Следующий этап">Карта <small>скоро</small></button>
+        <button data-view="map">Карта <small>beta</small></button>
       </nav>
       <div class="content">
         <section id="sheet-view" class="view"></section>
@@ -73,6 +73,7 @@
             <div id="roll-log" class="roll-log"></div>
           </div>
         </section>
+        <section id="map-view" class="view hidden"></section>
       </div>
     </section>
   </main>
@@ -83,6 +84,7 @@
     <div id="modal-content"></div>
   </dialog>
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/item-system.js"></script>
   <script src="/rules-5e.js"></script>
   <script src="/items-5e.js"></script>
   <script src="/app.js"></script>
