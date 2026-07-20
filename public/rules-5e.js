@@ -27,17 +27,66 @@
   };
 
   const races = {
-    human: { name:"Человек", size:"Средний", speed:30, darkvision:0, traits:"Универсальность, дополнительный язык." },
-    elf: { name:"Эльф", size:"Средний", speed:30, darkvision:60, traits:"Наследие фей, транс, обострённые чувства." },
-    dwarf: { name:"Дварф", size:"Средний", speed:25, darkvision:60, traits:"Дварфская стойкость, знание камня, скорость не снижается тяжёлым доспехом." },
-    halfling: { name:"Полурослик", size:"Маленький", speed:25, darkvision:0, traits:"Везучий, храбрый, проворство полурослика." },
-    dragonborn: { name:"Драконорождённый", size:"Средний", speed:30, darkvision:0, traits:"Драконье наследие, дыхательное оружие и сопротивление стихии." },
-    gnome: { name:"Гном", size:"Маленький", speed:25, darkvision:60, traits:"Гномья хитрость." },
-    halfelf: { name:"Полуэльф", size:"Средний", speed:30, darkvision:60, traits:"Наследие фей, универсальность навыков." },
-    halforc: { name:"Полуорк", size:"Средний", speed:30, darkvision:60, traits:"Угрожающий вид, неукротимая стойкость, свирепые атаки." },
-    tiefling: { name:"Тифлинг", size:"Средний", speed:30, darkvision:60, traits:"Адское сопротивление и врождённая магия." },
-    tabaxi: { name:"Табакси", size:"Средний", speed:30, darkvision:60, traits:"Кошачья ловкость, когти, талант к восприятию и скрытности." },
-    custom: { name:"Своя раса", size:"Средний", speed:30, darkvision:0, traits:"" }
+    human: { name:"Человек", size:"Средний", speed:30, darkvision:0, bonuses:{str:1,dex:1,con:1,int:1,wis:1,cha:1}, languages:"Общий и ещё один язык", traits:"Универсальность, дополнительный язык." },
+    elf: { name:"Эльф", size:"Средний", speed:30, darkvision:60, bonuses:{dex:2}, languages:"Общий, Эльфийский", skills:["perception"], traits:"Наследие фей, транс, обострённые чувства." },
+    dwarf: { name:"Дварф", size:"Средний", speed:25, darkvision:60, bonuses:{con:2}, languages:"Общий, Дварфский", traits:"Дварфская стойкость, знание камня, скорость не снижается тяжёлым доспехом." },
+    halfling: { name:"Полурослик", size:"Маленький", speed:25, darkvision:0, bonuses:{dex:2}, languages:"Общий, Полуросличий", traits:"Везучий, храбрый, проворство полурослика." },
+    dragonborn: { name:"Драконорождённый", size:"Средний", speed:30, darkvision:0, bonuses:{str:2,cha:1}, languages:"Общий, Драконий", traits:"Драконье наследие, дыхательное оружие и сопротивление стихии." },
+    gnome: { name:"Гном", size:"Маленький", speed:25, darkvision:60, bonuses:{int:2}, languages:"Общий, Гномий", traits:"Гномья хитрость." },
+    halfelf: { name:"Полуэльф", size:"Средний", speed:30, darkvision:60, bonuses:{cha:2}, flexible:[1,1], excludeFlexible:["cha"], languages:"Общий, Эльфийский и ещё один язык", traits:"Наследие фей, универсальность навыков." },
+    halforc: { name:"Полуорк", size:"Средний", speed:30, darkvision:60, bonuses:{str:2,con:1}, languages:"Общий, Орочий", skills:["intimidation"], traits:"Угрожающий вид, неукротимая стойкость, свирепые атаки." },
+    tiefling: { name:"Тифлинг", size:"Средний", speed:30, darkvision:60, bonuses:{cha:2,int:1}, languages:"Общий, Инфернальный", traits:"Адское сопротивление и врождённая магия." },
+    tabaxi: { name:"Табакси", size:"Средний", speed:30, darkvision:60, bonuses:{dex:2,cha:1}, languages:"Общий и ещё один язык", skills:["perception","stealth"], traits:"Кошачья ловкость, когти, талант к восприятию и скрытности." },
+    custom: { name:"Своя раса", size:"Средний", speed:30, darkvision:0, bonuses:{}, flexible:[2,1], languages:"Общий и ещё один язык", traits:"Собственное происхождение." }
+  };
+
+  const subclasses = {
+    barbarian:["Путь берсерка","Путь тотемного воина"], bard:["Коллегия знаний","Коллегия доблести"],
+    cleric:["Домен жизни","Домен света","Домен войны","Домен знаний","Домен природы","Домен бури","Домен обмана"],
+    druid:["Круг земли","Круг луны"], fighter:["Чемпион","Мастер боевых искусств","Мистический рыцарь"],
+    monk:["Путь открытой ладони","Путь тени","Путь четырёх стихий"], paladin:["Клятва преданности","Клятва древних","Клятва мести"],
+    ranger:["Охотник","Повелитель зверей"], rogue:["Вор","Убийца","Мистический ловкач"],
+    sorcerer:["Наследие драконьей крови","Дикая магия"], warlock:["Архифея","Исчадие","Великий Древний"],
+    wizard:["Школа ограждения","Школа вызова","Школа воплощения","Школа иллюзии","Школа некромантии","Школа очарования","Школа прорицания","Школа преобразования"]
+  };
+  const subclassLevels = { cleric:1, sorcerer:1, warlock:1, druid:2, wizard:2 };
+
+  const backgrounds = {
+    acolyte:{ name:"Прислужник", skills:["insight","religion"], tools:"—", languages:"Два дополнительных языка", item:"Священный символ", summary:"Служение храму, знание религии и людей." },
+    charlatan:{ name:"Шарлатан", skills:["deception","sleight"], tools:"Набор для грима, набор для подделки", languages:"—", item:"Набор для грима", summary:"Ложная личность, обман и ловкость рук." },
+    criminal:{ name:"Преступник", skills:["deception","stealth"], tools:"Воровские инструменты, игровой набор", languages:"—", item:"Воровские инструменты", summary:"Связи в преступном мире и скрытность." },
+    entertainer:{ name:"Артист", skills:["acrobatics","performance"], tools:"Набор для грима, музыкальный инструмент", languages:"—", item:"Музыкальный инструмент", summary:"Сцена, публика и умение привлечь внимание." },
+    folkhero:{ name:"Народный герой", skills:["animal","survival"], tools:"Ремесленный инструмент, наземный транспорт", languages:"—", item:"Ремесленные инструменты", summary:"Защитник простых людей, привычный к дороге." },
+    guildartisan:{ name:"Гильдейский ремесленник", skills:["insight","persuasion"], tools:"Один ремесленный инструмент", languages:"Один дополнительный язык", item:"Ремесленные инструменты", summary:"Мастер своего дела с гильдейскими связями." },
+    hermit:{ name:"Отшельник", skills:["medicine","religion"], tools:"Набор травника", languages:"Один дополнительный язык", item:"Набор травника", summary:"Уединение, лечение и найденное откровение." },
+    noble:{ name:"Благородный", skills:["history","persuasion"], tools:"Один игровой набор", languages:"Один дополнительный язык", item:"Кольцо-печатка", summary:"Положение в обществе и знатные связи." },
+    outlander:{ name:"Чужеземец", skills:["athletics","survival"], tools:"Один музыкальный инструмент", languages:"Один дополнительный язык", item:"Охотничий трофей", summary:"Путешественник, привычный к дикой местности." },
+    sage:{ name:"Мудрец", skills:["arcana","history"], tools:"—", languages:"Два дополнительных языка", item:"Чернильница и перо", summary:"Исследователь, который знает, где искать ответ." },
+    sailor:{ name:"Моряк", skills:["athletics","perception"], tools:"Инструменты навигатора, водный транспорт", languages:"—", item:"Верёвка", summary:"Морская закалка, наблюдательность и корабельные связи." },
+    soldier:{ name:"Солдат", skills:["athletics","intimidation"], tools:"Один игровой набор, наземный транспорт", languages:"—", item:"Знак воинского звания", summary:"Военная служба, дисциплина и авторитет." },
+    urchin:{ name:"Беспризорник", skills:["sleight","stealth"], tools:"Воровские инструменты, набор для грима", languages:"—", item:"Маленький нож", summary:"Городские улицы, тайные проходы и выживание." }
+  };
+
+  const statPriorities = {
+    barbarian:["str","con","dex","wis","cha","int"], bard:["cha","dex","con","wis","int","str"], cleric:["wis","con","str","dex","cha","int"],
+    druid:["wis","con","dex","int","cha","str"], fighter:["str","con","dex","wis","cha","int"], monk:["dex","wis","con","str","int","cha"],
+    paladin:["str","cha","con","wis","dex","int"], ranger:["dex","wis","con","str","int","cha"], rogue:["dex","con","cha","wis","int","str"],
+    sorcerer:["cha","con","dex","wis","int","str"], warlock:["cha","con","dex","wis","int","str"], wizard:["int","con","dex","wis","cha","str"]
+  };
+
+  const startingKits = {
+    barbarian:["greatsword","handaxe","backpack"], bard:["rapier","leather","dagger","backpack"], cleric:["mace","scale","shield","backpack"],
+    druid:["scimitar","leather","shield","backpack"], fighter:["longsword","chain-mail","shield","light-crossbow","backpack"],
+    monk:["quarterstaff","dagger","backpack"], paladin:["longsword","chain-mail","shield","backpack"], ranger:["longbow","leather","shortsword","backpack"],
+    rogue:["rapier","shortbow","leather","thieves-tools","backpack"], sorcerer:["light-crossbow","dagger","backpack"],
+    warlock:["light-crossbow","leather","dagger","backpack"], wizard:["quarterstaff","dagger","backpack"]
+  };
+
+  const recommendedSpells = {
+    bard:["vicious-mockery","mage-hand","healing-word","faerie-fire"], cleric:["sacred-flame","guidance","bless","healing-word"],
+    druid:["produce-flame","guidance","entangle","healing-word"], paladin:["bless","cure-wounds"], ranger:["hunters-mark","cure-wounds"],
+    sorcerer:["fire-bolt","mage-hand","magic-missile","shield"], warlock:["eldritch-blast","minor-illusion","armor-of-agathys","charm-person"],
+    wizard:["fire-bolt","mage-hand","minor-illusion","magic-missile","shield","detect-magic"]
   };
 
   const weapons = [
@@ -108,6 +157,41 @@
     wizard:{ count:2, options:["arcana","history","insight","investigation","medicine","religion"] }
   };
 
+  const asiLevels = {
+    fighter:[4,6,8,12,14,16,19],
+    rogue:[4,8,10,12,16,19],
+    default:[4,8,12,16,19]
+  };
+
+  const multiclassRequirements = {
+    barbarian:[["str",13]], bard:[["cha",13]], cleric:[["wis",13]], druid:[["wis",13]],
+    fighter:[[["str",13],["dex",13]]], monk:[["dex",13],["wis",13]],
+    paladin:[["str",13],["cha",13]], ranger:[["dex",13],["wis",13]], rogue:[["dex",13]],
+    sorcerer:[["cha",13]], warlock:[["cha",13]], wizard:[["int",13]]
+  };
+
+  const feats = {
+    alert:{ name:"Бдительный", summary:"+5 к инициативе; напоминает о защите от внезапности." },
+    tough:{ name:"Крепкий", summary:"Максимум HP увеличивается на 2 за каждый общий уровень." },
+    mobile:{ name:"Подвижный", summary:"Скорость увеличивается на 10 футов; дополнительные боевые преимущества отмечаются в памятке." },
+    observant:{ name:"Наблюдательный", summary:"+1 к Интеллекту или Мудрости и +5 к пассивному Восприятию и Анализу.", abilityChoices:["int","wis"] },
+    resilient:{ name:"Стойкий", summary:"+1 к выбранной характеристике и владение соответствующим спасброском.", abilityChoices:["str","dex","con","int","wis","cha"] },
+    athlete:{ name:"Атлет", summary:"+1 к Силе или Ловкости и памятка о более уверенном движении.", abilityChoices:["str","dex"] },
+    actor:{ name:"Актёр", summary:"+1 к Харизме и памятка о подражании и игре роли.", abilityChoices:["cha"] },
+    durable:{ name:"Выносливый", summary:"+1 к Телосложению и улучшенное восстановление костями хитов.", abilityChoices:["con"] },
+    keenmind:{ name:"Острый ум", summary:"+1 к Интеллекту и памятка об ориентации и памяти.", abilityChoices:["int"] },
+    linguist:{ name:"Лингвист", summary:"+1 к Интеллекту; добавь выбранные языки в раздел владений.", abilityChoices:["int"] },
+    lucky:{ name:"Везунчик", summary:"Три очка удачи на долгий отдых; ресурс будет добавлен в лист." },
+    skilled:{ name:"Умелец", summary:"Выбери три дополнительных навыка или инструмента; выбор отмечается в листе." },
+    sentinel:{ name:"Страж", summary:"Боевые реакции и контроль противников; автоматизация появится на карте." },
+    sharpshooter:{ name:"Меткий стрелок", summary:"Дальние атаки и рискованный мощный выстрел; включай модификатор в нужной атаке." },
+    greatweapon:{ name:"Мастер тяжёлого оружия", summary:"Особые возможности тяжёлого оружия; включай модификатор в нужной атаке." },
+    warcaster:{ name:"Боевой заклинатель", summary:"Преимущества при поддержании концентрации и колдовстве в ближнем бою." },
+    dualwielder:{ name:"Дуэлянт с двумя оружиями", summary:"Улучшает бой парным оружием; детали хранятся в памятке." },
+    crossbow:{ name:"Эксперт по арбалетам", summary:"Снимает часть ограничений арбалетов и помогает в ближнем бою." },
+    magicinitiate:{ name:"Посвящённый в магию", summary:"Добавь выбранные заговоры и заклинание через справочник гримуара." }
+  };
+
   function proficiency(level) { return 2 + Math.floor((Math.max(1, Number(level)||1)-1)/4); }
   function slotsFor(classKey, level) {
     const cls = classes[classKey]; level = Math.max(1, Math.min(20, Number(level)||1));
@@ -120,6 +204,59 @@
       return Array.from({length:slotLevel}, (_,i) => i === slotLevel-1 ? total : 0);
     }
     return [];
+  }
+  function pactSlotsFor(level) {
+    level = Math.max(0, Math.min(20, Number(level) || 0));
+    if (!level) return { level:0, total:0 };
+    return { level:Math.min(5, Math.ceil(level / 2)), total:level === 1 ? 1 : level < 11 ? 2 : level < 17 ? 3 : 4 };
+  }
+  function levelsForAsi(classKey) { return asiLevels[classKey] || asiLevels.default; }
+  function isAsiLevel(classKey, classLevel) { return levelsForAsi(classKey).includes(Number(classLevel)); }
+  function meetsRequirement(classKey, stats = {}) {
+    const groups = multiclassRequirements[classKey] || [];
+    return groups.every(group => {
+      if (Array.isArray(group[0])) return group.some(([ability, score]) => Number(stats[ability] || 0) >= score);
+      const [ability, score] = group;
+      return Number(stats[ability] || 0) >= score;
+    });
+  }
+  function requirementText(classKey) {
+    const names = { str:"Сила", dex:"Ловкость", con:"Телосложение", int:"Интеллект", wis:"Мудрость", cha:"Харизма" };
+    return (multiclassRequirements[classKey] || []).map(group => {
+      if (Array.isArray(group[0])) return group.map(([ability, score]) => `${names[ability]} ${score}`).join(" или ");
+      return `${names[group[0]]} ${group[1]}`;
+    }).join(" и ") || "без требований";
+  }
+  function multiclassSpellcasting(entries = []) {
+    let casterLevel = 0;
+    let halfCombined = 0;
+    let thirdCombined = 0;
+    let warlockLevel = 0;
+    entries.forEach(entry => {
+      const key = entry.key || entry.classKey;
+      const level = Math.max(0, Number(entry.level) || 0);
+      const cls = classes[key];
+      if (!cls || !level) return;
+      if (cls.caster === "full") casterLevel += level;
+      else if (cls.caster === "half") halfCombined += level;
+      else if (cls.caster === "pact") warlockLevel += level;
+      else if ((key === "fighter" && entry.subclass === "Мистический рыцарь") || (key === "rogue" && entry.subclass === "Мистический ловкач")) thirdCombined += level;
+    });
+    casterLevel += Math.floor(halfCombined / 2) + Math.floor(thirdCombined / 3);
+    casterLevel = Math.min(20, casterLevel);
+    return { casterLevel, slots:fullSlots[casterLevel] || [], pact:pactSlotsFor(warlockLevel) };
+  }
+  function hitDicePoolsFor(entries = [], previous = []) {
+    const totals = new Map();
+    entries.forEach(entry => {
+      const sides = Number(entry.hitDie || classes[entry.key || entry.classKey]?.hitDie || 8);
+      totals.set(sides, (totals.get(sides) || 0) + Math.max(0, Number(entry.level) || 0));
+    });
+    return [...totals.entries()].sort((a,b) => b[0] - a[0]).map(([sides,total]) => {
+      const old = previous.find(pool => Number(pool.sides) === sides);
+      const spent = old ? Math.max(0, Number(old.total) - Number(old.current)) : 0;
+      return { sides, total, current:Math.max(0, total - spent) };
+    });
   }
   function fixedHp(hitDie, level, conMod) {
     level = Math.max(1, Number(level)||1);
@@ -143,5 +280,35 @@
 
   function sneakAttackDice(level) { return Math.max(1, Math.ceil((Math.max(1, Number(level) || 1)) / 2)); }
 
-  window.TT_RULES = { classes, races, weapons, armor, gear, conditionInfo, exhaustionInfo, classSkills, proficiency, slotsFor, fixedHp, preparedLimit, pointBuyTotal, sneakAttackDice };
+  function abilityBuild(classKey, raceKey, level = 1) {
+    const priority = statPriorities[classKey] || ["str","dex","con","int","wis","cha"];
+    const base = Object.fromEntries(priority.map((ability, index) => [ability, [15,14,13,12,10,8][index]]));
+    const race = races[raceKey] || races.custom;
+    const bonuses = { str:0, dex:0, con:0, int:0, wis:0, cha:0, ...(race.bonuses || {}) };
+    const blocked = new Set(race.excludeFlexible || []);
+    const available = priority.filter(ability => !blocked.has(ability));
+    (race.flexible || []).forEach((bonus, index) => {
+      const ability = available[index] || priority[index] || "str";
+      bonuses[ability] += Number(bonus || 0);
+    });
+    const total = Object.fromEntries(Object.keys(bonuses).map(ability => [ability, Number(base[ability] || 8) + Number(bonuses[ability] || 0)]));
+    const improvementLevels = classKey === "fighter" ? [4,6,8,12,14,16,19] : classKey === "rogue" ? [4,8,10,12,16,19] : [4,8,12,16,19];
+    const levelBonuses = { str:0, dex:0, con:0, int:0, wis:0, cha:0 };
+    const advancements = [];
+    improvementLevels.filter(unlock => Number(level) >= unlock).forEach(unlock => {
+      let points = 2;
+      const abilityIncreases = {};
+      priority.forEach(ability => {
+        const added = Math.min(points, Math.max(0, 20 - total[ability]));
+        total[ability] += added; levelBonuses[ability] += added; points -= added;
+        if (added) abilityIncreases[ability] = added;
+      });
+      advancements.push({ classKey, classLevel:unlock, type:"asi", abilityIncreases, recommended:true });
+    });
+    return { base, bonuses, levelBonuses, total, advancements };
+  }
+
+  function subclassLevel(classKey) { return subclassLevels[classKey] || 3; }
+
+  window.TT_RULES = { classes, races, subclasses, backgrounds, statPriorities, startingKits, recommendedSpells, weapons, armor, gear, conditionInfo, exhaustionInfo, classSkills, feats, asiLevels, multiclassRequirements, proficiency, slotsFor, pactSlotsFor, multiclassSpellcasting, hitDicePoolsFor, levelsForAsi, isAsiLevel, meetsRequirement, requirementText, fixedHp, preparedLimit, pointBuyTotal, sneakAttackDice, abilityBuild, subclassLevel };
 })();

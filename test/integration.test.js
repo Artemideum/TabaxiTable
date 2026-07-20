@@ -70,7 +70,7 @@ test("комната, лист, броски, история и резервна
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 2);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 3);
     assert.equal(created.room.players["test-dm"].sheet.autoProficiency, true);
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
@@ -101,11 +101,33 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 3);
+    assert.deepEqual(updatedRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",1]]);
+    assert.equal(updatedRoom.players["test-player"].sheet.levelProgression.length, 1);
     assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[0].attuned, true);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.expertise, ["stealth"]);
     assert.equal("sheetHistory" in updatedRoom.players["test-player"], false);
 
-    const changed = structuredClone(sheet);
+    const multiclass = structuredClone(updatedRoom.players["test-player"].sheet);
+    multiclass.classes = [
+      { key:"rogue", name:"Плут", subclass:"Вор", level:2, hitDie:8 },
+      { key:"wizard", name:"Волшебник", subclass:"Школа иллюзии", level:2, hitDie:6, spellAbility:"int" }
+    ];
+    multiclass.levelProgression = [
+      { level:1, classKey:"rogue", classLevel:1 },
+      { level:2, classKey:"rogue", classLevel:2 },
+      { level:3, classKey:"wizard", classLevel:1 },
+      { level:4, classKey:"wizard", classLevel:2 }
+    ];
+    multiclass.hitDicePools = [{ sides:8, total:2, current:1 }, { sides:6, total:2, current:2 }];
+    const multiclassUpdate = waitFor(dm, "room:state", room => room.players["test-player"]?.sheet?.level === 4);
+    assert.equal((await emit(player, "sheet:update", { sheet:multiclass, reason:"Проверка мультикласса" })).ok, true);
+    const multiclassRoom = await multiclassUpdate;
+    assert.equal(multiclassRoom.players["test-player"].sheet.level, 4);
+    assert.deepEqual(multiclassRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",2],["wizard",2]]);
+    assert.equal(multiclassRoom.players["test-player"].sheet.hitDiceCurrent, 3);
+
+    const changed = structuredClone(multiclassRoom.players["test-player"].sheet);
     changed.characterName = "Случайно испорчено";
     assert.equal((await emit(player, "sheet:update", { sheet:changed, reason:"Перед изменением имени" })).ok, true);
     const history = await emit(player, "sheet:history", {});

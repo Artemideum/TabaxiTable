@@ -53,17 +53,24 @@ function cleanText(value, max = 80) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     characterName: playerName,
     classKey: "",
+    subclassKey: "",
     raceKey: "",
+    backgroundKey: "",
     className: "",
     subclass: "",
+    classes: [],
+    levelProgression: [],
+    abilityAdvancements: [],
+    feats: [],
     level: 1,
     race: "",
     ancestryTraits: "",
     size: "Средний",
     background: "",
+    creationMethod: "manual",
     alignment: "",
     xp: 0,
     proficiency: 2,
@@ -86,6 +93,7 @@ function defaultSheet(playerName) {
     hitDieSize: 8,
     hitDiceMax: 1,
     hitDiceCurrent: 1,
+    hitDicePools: [],
     deathSuccess: 0,
     deathFail: 0,
     exhaustion: 0,
@@ -105,6 +113,7 @@ function defaultSheet(playerName) {
     inventoryList: [],
     spellcastingAbility: "",
     spellSlots: Array.from({ length: 9 }, (_, index) => ({ level: index + 1, total: 0, used: 0 })),
+    pactSlots: { level: 0, total: 0, used: 0 },
     spellsList: [],
     portraitUrl: "",
     tokenImageUrl: "",
@@ -147,6 +156,52 @@ function normalizeSheet(sheet, playerName) {
     const saved = Array.isArray(incoming.spellSlots) ? incoming.spellSlots.find(item => Number(item.level) === slot.level) : null;
     return { ...slot, ...(saved || {}) };
   });
+  const legacyLevel = Math.max(1, Math.min(20, Number(incoming.level) || 1));
+  const sourceClasses = Array.isArray(incoming.classes) && incoming.classes.length
+    ? incoming.classes
+    : (incoming.classKey ? [{ key: incoming.classKey, name: incoming.className, subclass: incoming.subclass, level: legacyLevel, hitDie: incoming.hitDieSize, spellAbility: incoming.spellcastingAbility }] : []);
+  let remainingLevels = 20;
+  const normalizedClasses = [];
+  sourceClasses.forEach((entry, index) => {
+    if (remainingLevels <= 0) return;
+    const classLevel = Math.max(1, Math.min(remainingLevels, Number(entry?.level) || 1));
+    remainingLevels -= classLevel;
+    normalizedClasses.push({
+      key: cleanText(entry?.key || entry?.classKey, 30),
+      name: cleanText(entry?.name, 60),
+      subclass: cleanText(entry?.subclass, 80),
+      level: classLevel,
+      hitDie: Math.max(4, Math.min(20, Number(entry?.hitDie) || (index === 0 ? Number(incoming.hitDieSize) || 8 : 8))),
+      spellAbility: cleanText(entry?.spellAbility, 8)
+    });
+  });
+  for (let index = normalizedClasses.length - 1; index >= 0; index -= 1) {
+    if (!normalizedClasses[index].key || normalizedClasses[index].level <= 0) normalizedClasses.splice(index, 1);
+  }
+  const totalLevel = normalizedClasses.length ? normalizedClasses.reduce((sum, entry) => sum + entry.level, 0) : legacyLevel;
+  const generatedProgression = normalizedClasses.flatMap(entry => Array.from({ length: entry.level }, (_, index) => ({
+    level: 0,
+    classKey: entry.key,
+    classLevel: index + 1
+  }))).map((entry, index) => ({ ...entry, level: index + 1 }));
+  const savedProgression = Array.isArray(incoming.levelProgression) && incoming.levelProgression.length === totalLevel
+    ? incoming.levelProgression.slice(0, 20).map((entry, index) => ({
+        level: index + 1,
+        classKey: cleanText(entry?.classKey, 30),
+        classLevel: Math.max(1, Number(entry?.classLevel) || 1),
+        choice: cleanText(entry?.choice, 80)
+      }))
+    : generatedProgression;
+  const legacyPool = [{
+    sides: Math.max(4, Math.min(20, Number(incoming.hitDieSize) || 8)),
+    total: Math.max(1, Number(incoming.hitDiceMax) || totalLevel),
+    current: Math.max(0, Number(incoming.hitDiceCurrent ?? incoming.hitDiceMax ?? totalLevel))
+  }];
+  const normalizedPools = (Array.isArray(incoming.hitDicePools) && incoming.hitDicePools.length ? incoming.hitDicePools : legacyPool)
+    .map(pool => {
+      const total = Math.max(0, Math.min(20, Number(pool?.total) || 0));
+      return { sides: Math.max(4, Math.min(20, Number(pool?.sides) || 8)), total, current: Math.max(0, Math.min(total, Number(pool?.current) || 0)) };
+    }).filter(pool => pool.total > 0);
   const normalized = {
     ...base,
     ...incoming,
@@ -159,9 +214,25 @@ function normalizeSheet(sheet, playerName) {
     spellsList: Array.isArray(incoming.spellsList) ? incoming.spellsList : [],
     goalsList: Array.isArray(incoming.goalsList) ? incoming.goalsList : [],
     notesList: Array.isArray(incoming.notesList) ? incoming.notesList : [],
+    classes: normalizedClasses,
+    levelProgression: savedProgression,
+    abilityAdvancements: Array.isArray(incoming.abilityAdvancements) ? incoming.abilityAdvancements.slice(0, 20) : [],
+    feats: Array.isArray(incoming.feats) ? incoming.feats.slice(0, 30) : [],
+    hitDicePools: normalizedPools,
+    pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 2;
+  normalized.schemaVersion = 3;
+  normalized.level = totalLevel;
+  if (normalizedClasses.length) {
+    const primary = normalizedClasses[0];
+    normalized.classKey = primary.key;
+    normalized.className = primary.name || normalized.className;
+    normalized.subclass = primary.subclass || normalized.subclass;
+    normalized.hitDieSize = primary.hitDie;
+    normalized.hitDiceMax = normalizedPools.reduce((sum, pool) => sum + pool.total, 0);
+    normalized.hitDiceCurrent = normalizedPools.reduce((sum, pool) => sum + pool.current, 0);
+  }
   if (!("autoProficiency" in incoming)) normalized.autoProficiency = false;
   if (!("autoSpellSlots" in incoming)) normalized.autoSpellSlots = false;
   if (!("autoArmorClass" in incoming)) normalized.autoArmorClass = false;
