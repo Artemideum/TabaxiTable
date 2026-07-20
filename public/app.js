@@ -21,6 +21,7 @@ const state = {
   rollMode: "normal",
   lastCriticalAttackId: null,
   sheetTab: "main",
+  editMode: localStorage.getItem("tt-edit-mode") === "1",
   resuming: false
 };
 const rules = window.TT_RULES;
@@ -57,6 +58,7 @@ function hasClass(sheet, classKey) { return classLevel(sheet, classKey) > 0; }
 function featKey(feat) { return typeof feat === "string" ? feat : feat?.key; }
 function hasFeat(sheet, key) { return (sheet.feats || []).some(feat => featKey(feat) === key); }
 function passiveBonus(sheet, key) { return hasFeat(sheet, "observant") && ["perception","investigation"].includes(key) ? 5 : 0; }
+function passivePerception(sheet) { return 10 + getSkillBonus(sheet,"perception") + passiveBonus(sheet,"perception") + Number(sheet.passivePerceptionBonus || 0); }
 function effectiveProficiency(sheet) { return sheet.autoProficiency ? rules.proficiency(totalLevel(sheet)) : Number(sheet.proficiency || 0); }
 function initiativeBonus(sheet) { return modifier(sheet.stats.dex) + Number(sheet.initiativeBonus || 0) + (hasFeat(sheet, "alert") ? 5 : 0); }
 const classSymbols = { barbarian:"◈", bard:"♫", cleric:"✚", druid:"❧", fighter:"⚔", monk:"☯", paladin:"✦", ranger:"➹", sorcerer:"✧", warlock:"⌁" };
@@ -150,7 +152,7 @@ function syncCharacterMechanics(sheet) {
     });
   });
   sheet.xp = Math.max(0, Number(sheet.xp) || 0);
-  sheet.schemaVersion = 5;
+  sheet.schemaVersion = 6;
   if (sheet.autoArmorClass) sheet.ac = calculateAc(sheet);
   return sheet;
 }
@@ -314,10 +316,10 @@ function renderChrome() {
 }
 
 function field(label, name, value, type = "text") {
-  return `<label>${label}<input type="${type}" data-field="${name}" value="${esc(value)}"></label>`;
+  return `<label class="sheet-field ${value === "" || value === null || value === undefined ? "empty-field" : ""}">${label}<input type="${type}" data-field="${name}" value="${esc(value)}"></label>`;
 }
 function area(label, name, value, placeholder = "") {
-  return `<label>${label}<textarea data-field="${name}" placeholder="${esc(placeholder)}">${esc(value)}</textarea></label>`;
+  return `<label class="sheet-field ${value ? "" : "empty-field"}">${label}<textarea data-field="${name}" placeholder="${esc(placeholder)}">${esc(value)}</textarea></label>`;
 }
 
 function formulaVariables(sheet) {
@@ -425,7 +427,7 @@ function renderSheet() {
   const statCards = Object.entries(abilities).map(([key, name]) => `
     <div class="stat">
       <label>${name}</label>
-      <input type="number" min="1" max="30" data-stat="${key}" aria-label="${name}" value="${Number(s.stats[key] ?? 10)}">
+      <input type="number" min="1" max="30" data-stat="${key}" aria-label="${name}" value="${Number(s.stats[key] ?? 10)}" ${mine && state.editMode ? "" : "readonly"}>
       <div class="stat-bottom"><span class="modifier" data-mod="${key}">${signed(modifier(s.stats[key]))}</span><button class="roll-mini" data-roll-stat="${key}">к20</button></div>
     </div>`).join("");
   const saves = Object.entries(abilities).map(([key, name]) => {
@@ -460,7 +462,7 @@ function renderSheet() {
   const carryingCapacity = Number(s.stats.str || 0) * 15;
   const attunedCount = inventory.filter(item => item.attuned).length;
   const inventoryRows = inventory.map(item => `
-    <div class="entity-row"><div><strong>${esc(item.name || "Предмет")}</strong><div class="item-flags">${item.equipped ? "<span>надето</span>" : ""}${item.attuned ? "<span>настроено</span>" : ""}${item.magical ? "<span>магия</span>" : ""}${item.type === "weapon" ? "<span>оружие</span>" : ""}${item.type === "armor" ? "<span>броня</span>" : ""}</div></div><small>${Number(item.quantity || 0)} шт.</small><small>${Number(item.weight || 0) * Number(item.quantity || 0)} фнт.</small><button data-item-edit="${esc(item.id)}">⋮</button></div>`).join("");
+    <div class="entity-row inventory-row"><div><strong>${esc(item.name || "Предмет")}</strong><div class="item-flags">${item.equipped ? "<span>надето</span>" : ""}${item.attuned ? "<span>настроено</span>" : ""}${item.magical ? "<span>магия</span>" : ""}${item.type === "weapon" ? "<span>оружие</span>" : ""}${item.type === "armor" ? "<span>броня</span>" : ""}</div></div><small>${Number(item.quantity || 0)} шт.</small><small>${Number(item.weight || 0) * Number(item.quantity || 0)} фнт.</small><button data-item-edit="${esc(item.id)}">⋮</button></div>`).join("");
   const spellAbility = s.spellcastingAbility || "";
   const spellMod = spellAbility ? modifier(s.stats[spellAbility]) : 0;
   const spellSave = 8 + proficiency + spellMod;
@@ -477,16 +479,18 @@ function renderSheet() {
   }).join("");
   const spellRows = [...(s.spellsList || [])].sort((a, b) => Number(a.level) - Number(b.level) || String(a.name).localeCompare(String(b.name))).map(spell => `
     <div class="entity-row spell-row ${spell.prepared ? "prepared" : ""}" data-spell-name="${esc(String(spell.name || "").toLowerCase())}" data-spell-level="${Number(spell.level || 0)}" data-spell-prepared="${spell.prepared ? "yes" : "no"}"><span class="spell-level">${Number(spell.level || 0)}</span><div><strong>${esc(spell.name || "Заклинание")}${spellRollKind(spell) === "healing" ? `<i class="spell-kind healing">лечение</i>` : spellRollKind(spell) === "damage" ? `<i class="spell-kind damage">урон</i>` : ""}</strong><small>${spell.sourceClassKey ? `${esc(rules.classes[spell.sourceClassKey]?.name || spell.sourceClassKey)} · ` : ""}${esc(spell.castingTime || "действие")} · ${esc(spell.range || "на себя")}${spell.concentration ? " · концентрация" : ""}${spell.ritual ? " · ритуал" : ""}</small></div><button data-spell-prepare="${esc(spell.id)}" title="Подготовить или убрать">${spell.prepared ? "★" : "☆"}</button><button data-spell-cast="${esc(spell.id)}">Сотворить</button><button data-spell-info="${esc(spell.id)}" title="Описание">i</button><button data-spell-edit="${esc(spell.id)}">⋮</button></div>`).join("");
-  const goalRows = (s.goalsList || []).map(goal => `<div class="entity-row"><input type="checkbox" data-goal-done="${esc(goal.id)}" ${goal.done ? "checked" : ""}><strong>${esc(goal.text)}</strong><button data-goal-edit="${esc(goal.id)}">⋮</button></div>`).join("");
+  const goalRows = (s.goalsList || []).map(goal => `<div class="entity-row goal-row"><input type="checkbox" data-goal-done="${esc(goal.id)}" ${goal.done ? "checked" : ""}><strong>${esc(goal.text)}</strong><button data-goal-edit="${esc(goal.id)}">⋮</button></div>`).join("");
   const noteRows = (s.notesList || []).map(note => `<div class="panel"><h3 class="panel-title">${esc(note.title || "Заметка")}</h3><p>${esc(note.text).replace(/\n/g, "<br>")}</p><button data-note-edit="${esc(note.id)}" class="secondary">Изменить</button></div>`).join("");
+  const sheetTools = mine ? `<div class="sheet-tools"><label class="edit-mode-switch"><input id="edit-mode-toggle" type="checkbox" ${state.editMode ? "checked" : ""}><span><i></i></span><b>${state.editMode ? "Редактирование" : "Игровой режим"}</b></label>${s.classKey && totalLevel(s) < 20 ? `<button id="level-up" class="primary level-up-button" type="button"><span>↑</span> Повысить уровень</button>` : ""}<button id="character-builder" class="secondary" type="button">${s.classKey ? "Пересобрать героя" : "Подробный мастер"}</button>${s.classKey ? `<button id="quick-character" class="secondary" type="button">Быстрая сборка</button>` : ""}<details class="sheet-more"><summary>Ещё ···</summary><div><button id="sheet-history" class="secondary" type="button">История версий</button><button id="sheet-export" class="secondary" type="button">Экспорт листа</button><button id="sheet-import" class="secondary" type="button">Импорт листа</button>${player.role === "dm" ? `<button id="campaign-backup" class="secondary" type="button">Копия кампании</button><button id="campaign-restore" class="secondary" type="button">Восстановить кампанию</button>` : ""}</div></details><input id="sheet-import-file" type="file" accept="application/json" hidden><input id="campaign-restore-file" type="file" accept="application/json" hidden></div>` : "";
 
-  $("#sheet-view").innerHTML = `<div class="sheet ${mine && !s.classKey ? "unbuilt" : ""}">
+  $("#sheet-view").innerHTML = `<div class="sheet ${mine && !s.classKey ? "unbuilt" : ""} ${mine && state.editMode ? "editing" : ""}">
     ${mine ? "" : `<div class="read-only">Ты просматриваешь лист персонажа «${esc(s.characterName || player.name)}». Редактировать его может владелец.</div>`}
     <section class="character-hero">
       <div class="hero-avatar">${s.portraitUrl ? `<img src="${esc(s.portraitUrl)}" alt="Портрет ${esc(s.characterName || player.name)}">` : esc((s.characterName || player.name || "?")[0].toUpperCase())}<span class="hero-class-mark">${classGlyph(classEntries(s)[0]?.key)}</span></div>
       <div class="hero-identity"><span class="eyebrow">${esc(s.race || "Раса не выбрана")} · ${esc(s.background || "Предыстория не выбрана")}</span><h1>${esc(s.characterName || player.name)}</h1><p>${esc(classSummary(s))} · общий ${totalLevel(s)} уровень</p></div>
-      <div class="hero-vitals"><button data-quick="ac"><small>КД</small><strong>${armorClass}</strong></button><button id="quick-hp"><small>HP${Number(s.hpTemp) ? ` · +${Number(s.hpTemp)}` : ""}</small><strong>${Number(s.hpCurrent)}/${Number(s.hpMax)}</strong></button><button id="quick-initiative"><small>Инициатива</small><strong>${signed(initiative)}</strong></button><button data-quick="speed"><small>Скорость</small><strong>${Number(s.speed)}</strong></button><button data-quick="proficiency"><small>Мастерство</small><strong>${signed(proficiency)}</strong></button><button data-quick="passive"><small>Пассивка</small><strong>${10 + getSkillBonus(s,"perception") + passiveBonus(s,"perception")}</strong></button><button id="quick-inspiration" class="${s.inspiration ? "lit" : ""}"><small>Вдохновение</small><strong>${s.inspiration ? "◆" : "◇"}</strong></button></div>
+      <div class="hero-vitals"><button data-vital="ac" title="${state.editMode ? "Изменить КД" : "Включи редактирование, чтобы изменить"}"><small>КД</small><strong>${armorClass}</strong></button><button id="quick-hp" data-vital="hp"><small>HP${Number(s.hpTemp) ? ` · +${Number(s.hpTemp)}` : ""}</small><strong>${Number(s.hpCurrent)}/${Number(s.hpMax)}</strong></button><button id="quick-initiative" data-vital="initiative"><small>Инициатива</small><strong>${signed(initiative)}</strong></button><button data-vital="speed"><small>Скорость</small><strong>${Number(s.speed)}</strong></button><button data-vital="proficiency"><small>Мастерство</small><strong>${signed(proficiency)}</strong></button><button data-vital="passive"><small>Пассивка</small><strong>${passivePerception(s)}</strong></button><button id="quick-inspiration" class="${s.inspiration ? "lit" : ""}"><small>Вдохновение</small><strong>${s.inspiration ? "◆" : "◇"}</strong></button></div>
     </section>
+    ${sheetTools}
     ${experienceMarkup(s, mine)}
     ${progressionMarkup(s)}
     ${mine && !s.classKey ? `<section class="character-onboarding"><div><span class="eyebrow">Новый персонаж</span><h2>Готовый герой примерно за минуту</h2><p>Выбери класс, расу, уровень и предысторию — TabaxiTable сам распределит характеристики, рассчитает HP и КД, выдаст навыки, оружие и стартовые заклинания.</p></div><button id="quick-character" class="primary" type="button">✦ Быстро создать</button></section>` : ""}
@@ -495,10 +499,8 @@ function renderSheet() {
       <div class="identity-class-summary"><small>Классы и уровни</small><strong>${esc(classSummary(s))}</strong><span>Меняются через кнопку «Повысить уровень».</span></div>
       ${field("Раса", "race", s.race)} ${field("Размер", "size", s.size || "Средний")}
       ${field("Предыстория", "background", s.background)}
-      ${field("Мировоззрение", "alignment", s.alignment)} ${field("Опыт", "xp", s.xp, "number")}
-      ${field("Бонус мастерства", "proficiency", proficiency, "number")}
+      ${field("Мировоззрение", "alignment", s.alignment)}
     </div></details>
-    ${mine ? `<div class="sheet-tools">${s.classKey && totalLevel(s) < 20 ? `<button id="level-up" class="primary level-up-button" type="button"><span>↑</span> Повысить уровень</button>` : ""}<button id="character-builder" class="secondary" type="button">${s.classKey ? "Пересобрать героя" : "Подробный мастер"}</button>${s.classKey ? `<button id="quick-character" class="secondary" type="button">Быстрая сборка</button>` : ""}<details class="sheet-more"><summary>Ещё ···</summary><div><button id="sheet-history" class="secondary" type="button">История версий</button><button id="sheet-export" class="secondary" type="button">Экспорт листа</button><button id="sheet-import" class="secondary" type="button">Импорт листа</button>${player.role === "dm" ? `<button id="campaign-backup" class="secondary" type="button">Копия кампании</button><button id="campaign-restore" class="secondary" type="button">Восстановить кампанию</button>` : ""}</div></details><input id="sheet-import-file" type="file" accept="application/json" hidden><input id="campaign-restore-file" type="file" accept="application/json" hidden></div>` : ""}
     <details class="roll-mode" aria-label="Режим броска"><summary>Следующий к20: <b>${state.rollMode === "advantage" ? "преимущество" : state.rollMode === "disadvantage" ? "помеха" : "обычно"}</b></summary><div><button data-roll-mode="normal">Обычно</button><button data-roll-mode="advantage">Преимущество</button><button data-roll-mode="disadvantage">Помеха</button></div></details>
     <nav class="sheet-tabs">
       <button data-sheet-tab="main">Главное</button><button data-sheet-tab="combat">Бой</button><button data-sheet-tab="spells">Магия</button><button data-sheet-tab="equipment">Снаряжение</button><button data-sheet-tab="features">Развитие</button><button data-sheet-tab="story">История</button>
@@ -507,23 +509,11 @@ function renderSheet() {
       <div class="stack">
         <div class="panel stats" data-section="main">${statCards}</div>
         <div class="panel" data-section="main"><div class="panel-heading"><h3 class="panel-title">Спасброски</h3>${mine ? `<button id="proficiencies-manager-saves" class="quiet-action" type="button">Настроить</button>` : ""}</div><div class="checks save-checks">${saves}</div></div>
-        <div class="panel" data-section="main"><h3 class="panel-title">Пассивные чувства</h3><div class="checks"><div class="check-row"><span>◉</span><span class="bonus">${10 + getSkillBonus(s,"perception") + passiveBonus(s,"perception")}</span><span>Восприятие</span></div><div class="check-row"><span>◉</span><span class="bonus">${10 + getSkillBonus(s,"insight")}</span><span>Проницательность</span></div><div class="check-row"><span>◉</span><span class="bonus">${10 + getSkillBonus(s,"investigation") + passiveBonus(s,"investigation")}</span><span>Анализ</span></div></div></div>
+        <div class="panel" data-section="main"><h3 class="panel-title">Пассивные чувства</h3><div class="checks"><div class="check-row"><span>◉</span><span class="bonus">${passivePerception(s)}</span><span>Восприятие</span></div><div class="check-row"><span>◉</span><span class="bonus">${10 + getSkillBonus(s,"insight")}</span><span>Проницательность</span></div><div class="check-row"><span>◉</span><span class="bonus">${10 + getSkillBonus(s,"investigation") + passiveBonus(s,"investigation")}</span><span>Анализ</span></div></div></div>
         <div class="panel" data-section="features"><h3 class="panel-title">Владения и языки</h3>${area("Доспехи", "armorProficiencies", s.armorProficiencies || "")}${area("Оружие", "weaponProficiencies", s.weaponProficiencies || "")}${area("Инструменты", "toolProficiencies", s.toolProficiencies || "")}${area("Языки", "languages", s.languages || "")}</div>
       </div>
       <div class="stack">
         <div data-section="combat">${classHighlightsMarkup(s)}</div>
-        <div class="combat" data-section="combat">
-          <label>Класс доспеха<input type="number" data-field="ac" value="${armorClass}" ${s.autoArmorClass ? "readonly" : ""}></label>
-          <label>Инициатива<input data-derived="initiative" value="${signed(initiative)}" readonly></label>
-          <label>Скорость<input type="number" data-field="speed" value="${Number(s.speed)}"></label>
-        </div>
-        <div class="panel two-col" data-section="combat">${field("Прыжок в высоту", "jumpHigh", s.jumpHigh || Math.max(0, 3 + modifier(s.stats.str)))}${field("Прыжок в длину", "jumpLong", s.jumpLong || Number(s.stats.str))}</div>
-        <div class="panel hp" data-section="combat">
-          <label>Максимум<input type="number" data-field="hpMax" value="${Number(s.hpMax)}"></label>
-          <label class="hp-current">Текущие HP<input type="number" data-field="hpCurrent" value="${Number(s.hpCurrent)}"></label>
-          <label>Временные<input type="number" data-field="hpTemp" value="${Number(s.hpTemp)}"></label>
-          <button id="hp-manager" class="secondary manage" type="button">Здоровье и отдых</button>
-        </div>
         <div class="panel skills-panel" data-section="main"><div class="panel-heading"><h3 class="panel-title">Навыки</h3>${mine ? `<button id="proficiencies-manager" class="quiet-action" type="button">Настроить</button>` : ""}</div><div class="checks skill-checks">${skillRows}</div></div>
         <div class="panel proficiency-overview" data-section="main"><div class="panel-heading"><h3 class="panel-title">Владения</h3><small>бонус мастерства ${signed(proficiency)}</small></div><div class="proficiency-overview-grid"><article><small>Доспехи</small><span>${esc(s.armorProficiencies || "—")}</span></article><article><small>Оружие</small><span>${esc(s.weaponProficiencies || "—")}</span></article><article><small>Инструменты</small><span>${esc(s.toolProficiencies || "—")}</span></article><article><small>Языки</small><span>${esc(s.languages || "—")}</span></article></div></div>
         <div class="panel" data-section="combat">
@@ -536,7 +526,7 @@ function renderSheet() {
         <div class="panel" data-section="equipment"><div class="section-actions"><h3 class="panel-title">Снаряжение · ${inventoryWeight}/${carryingCapacity} фнт. · настройка ${attunedCount}/3</h3>${mine ? `<button id="item-catalog" class="secondary" type="button">Справочник</button><button id="item-add" class="secondary" type="button">Хоумбрю</button>` : ""}</div><div class="capacity-bar"><span style="width:${Math.min(100, inventoryWeight/Math.max(1,carryingCapacity)*100)}%"></span></div><div class="entity-list">${inventoryRows || `<div class="read-only">Инвентарь пока пуст.</div>`}</div>${area("Дополнительное снаряжение", "equipment", s.equipment)}</div>
       </div>
       <div class="stack">
-        <div class="panel" data-section="combat"><h3 class="panel-title">Состояния и истощение</h3><div class="active-conditions">${activeConditions}</div><div class="two-col">${field("Истощение", "exhaustion", s.exhaustion || 0, "number")}${mine ? `<button id="conditions-manager" class="secondary" type="button">Изменить</button>` : ""}</div>${Number(s.exhaustion || 0) > 0 ? `<div class="exhaustion-effect">Уровень ${Math.min(6, Number(s.exhaustion))}: ${esc(rules.exhaustionInfo[Math.min(6, Number(s.exhaustion))])}</div>` : ""}${s.concentrationSpellName ? `<div class="concentration"><span>◉ Концентрация: <strong>${esc(s.concentrationSpellName)}</strong></span>${mine ? `<button id="stop-concentration">Завершить</button>` : ""}</div>` : ""}</div>
+        <div class="panel" data-section="combat"><div class="panel-heading"><h3 class="panel-title">Состояния</h3>${mine ? `<button id="conditions-manager" class="quiet-action" type="button">Изменить</button>` : ""}</div><div class="active-conditions">${activeConditions}</div>${Number(s.exhaustion || 0) > 0 ? `<div class="exhaustion-effect">Истощение ${Math.min(6, Number(s.exhaustion))}: ${esc(rules.exhaustionInfo[Math.min(6, Number(s.exhaustion))])}</div>` : ""}${s.concentrationSpellName ? `<div class="concentration"><span>◉ Концентрация: <strong>${esc(s.concentrationSpellName)}</strong></span>${mine ? `<button id="stop-concentration">Завершить</button>` : ""}</div>` : ""}</div>
         <div class="panel" data-section="equipment"><h3 class="panel-title">Монеты</h3><div class="coins">${coins}</div></div>
         <div class="panel progression-panel" data-section="features"><div class="panel-heading"><h3 class="panel-title">Развитие персонажа</h3>${mine && totalLevel(s) < 20 ? `<button id="level-up-features" class="secondary" type="button">+ Уровень</button>` : ""}</div><div class="class-summary-list">${classEntries(s).map(entry => `<article>${classGlyph(entry.key)}<div><strong>${esc(entry.name || rules.classes[entry.key]?.name)} ${Number(entry.level)}</strong><small>${esc(entry.subclass || `Подкласс на ${rules.subclassLevel(entry.key)} уровне`)}</small></div></article>`).join("") || `<div class="read-only">Сначала выбери класс.</div>`}</div>${featRows ? `<h3 class="panel-title feat-title">Черты</h3><div class="feat-list">${featRows}</div>` : ""}<h3 class="panel-title roadmap-title">Классовые особенности 1–20</h3><div class="class-roadmaps">${classRoadmaps}</div></div>
         <div class="panel" data-section="features"><h3 class="panel-title">Наследие и особенности</h3>${area("Расовые особенности", "ancestryTraits", s.ancestryTraits || "")}${area("Классовые особенности и умения", "features", s.features)}</div>
@@ -552,6 +542,7 @@ function renderSheet() {
 
   if (!mine) $$("input, textarea, select", $("#sheet-view")).forEach(el => el.disabled = true);
   updateDerived();
+  applySheetEditing(mine);
   if (mine) bindSheet();
   else { state.sheetBindController?.abort(); state.sheetBindController = null; }
   $$('[data-roll-stat]').forEach(button => button.addEventListener("click", () => {
@@ -601,6 +592,17 @@ function applySheetTab() {
     grid.classList.remove("columns-1", "columns-2", "columns-3");
     grid.classList.add(`columns-${Math.max(1, Math.min(3, visibleCount))}`);
   }
+}
+
+function applySheetEditing(mine) {
+  const root = $("#sheet-view"), editing = Boolean(mine && state.editMode);
+  $(".sheet", root)?.classList.toggle("editing", editing);
+  $$('[data-field], [data-stat], [data-coin]', root).forEach(element => {
+    const hardDisable = element.tagName === "SELECT" || ["checkbox","color","file"].includes(element.type);
+    if (hardDisable) element.disabled = !editing;
+    else element.readOnly = !editing;
+    element.setAttribute("aria-readonly", String(!editing));
+  });
 }
 
 function currentSheet() { return state.room.players[state.clientId].sheet; }
@@ -669,7 +671,7 @@ function openExperienceModal() {
   const sheet = currentSheet(), progress = rules.xpProgress(sheet.xp, totalLevel(sheet));
   openModal("Опыт персонажа", `<div class="xp-modal-summary"><span><small>Сейчас</small><strong>${progress.xp.toLocaleString("ru-RU")} XP</strong></span><span><small>${totalLevel(sheet) >= 20 ? "Максимальный уровень" : `До ${totalLevel(sheet) + 1} уровня`}</small><strong>${totalLevel(sheet) >= 20 ? "Легенда" : `${progress.remaining.toLocaleString("ru-RU")} XP`}</strong></span></div>
     <section class="xp-add-card"><span class="eyebrow">После встречи</span><h3>Сколько опыта получил персонаж?</h3><div class="xp-quick">${[50,100,250,500,1000].map(value => `<button type="button" data-xp-quick="${value}">+${value}</button>`).join("")}</div><label>Другое количество<input id="xp-earned" type="number" min="0" step="1" value="0"></label><button id="xp-add" class="primary" type="button">Добавить опыт</button></section>
-    <details class="xp-exact"><summary>Установить точное значение</summary><div><input id="xp-exact-value" type="number" min="0" step="1" value="${progress.xp}"><button id="xp-set" class="secondary" type="button">Сохранить значение</button></div></details>`);
+    ${state.editMode ? `<details class="xp-exact"><summary>Установить точное значение</summary><div><input id="xp-exact-value" type="number" min="0" step="1" value="${progress.xp}"><button id="xp-set" class="secondary" type="button">Сохранить значение</button></div></details>` : ""}`);
   $$('[data-xp-quick]').forEach(button => button.addEventListener("click", () => { $("#xp-earned").value = button.dataset.xpQuick; }));
   const saveXp = (value, reason) => {
     const next = structuredClone(currentSheet()); next.xp = Math.max(0, Math.floor(Number(value) || 0));
@@ -678,7 +680,7 @@ function openExperienceModal() {
     if (earnedLevel > totalLevel(next)) toast(`Опыта хватает на ${earnedLevel} уровень — можно повысить героя`);
   };
   $("#xp-add").addEventListener("click", () => saveXp(Number(sheet.xp || 0) + Math.max(0, Number($("#xp-earned").value) || 0), "Получен опыт"));
-  $("#xp-set").addEventListener("click", () => saveXp($("#xp-exact-value").value, "Изменён опыт"));
+  $("#xp-set")?.addEventListener("click", () => saveXp($("#xp-exact-value").value, "Изменён опыт"));
 }
 
 function openLevelInfo(total) {
@@ -703,7 +705,40 @@ function openProficienciesModal() {
   $("#mastery-cancel").addEventListener("click", closeModal);
 }
 
+function openVitalEditor(kind) {
+  if (!state.editMode) return toast("Сначала включи ползунок «Редактирование»");
+  const sheet = currentSheet();
+  const configs = {
+    ac:{ title:"Класс доспеха", body:`<div class="vital-editor"><div class="vital-editor-value"><small>Сейчас</small><strong>${calculateAc(sheet)}</strong></div><label class="condition-chip"><input id="vital-auto" type="checkbox" ${sheet.autoArmorClass ? "checked" : ""}>Считать КД автоматически по броне</label><label>КД вручную<input id="vital-value" type="number" min="0" max="99" value="${Number(sheet.ac || 10)}" ${sheet.autoArmorClass ? "disabled" : ""}></label><p>При автоматическом расчёте учитываются Ловкость, надетая броня, щит и классовая защита.</p></div>` },
+    initiative:{ title:"Инициатива", body:`<div class="vital-editor"><div class="vital-editor-value"><small>Сейчас</small><strong>${signed(initiativeBonus(sheet))}</strong></div><label>Дополнительный бонус<input id="vital-value" type="number" min="-99" max="99" value="${Number(sheet.initiativeBonus || 0)}"></label><label class="condition-chip"><input id="vital-advantage" type="checkbox" ${sheet.initiativeAdvantage ? "checked" : ""}>Преимущество на броски инициативы</label><p>Модификатор Ловкости ${signed(modifier(sheet.stats.dex))} уже прибавляется автоматически.</p></div>` },
+    speed:{ title:"Скорость и прыжки", body:`<div class="vital-editor"><div class="vital-editor-value"><small>Сейчас</small><strong>${Number(sheet.speed || 0)} фт.</strong></div><label>Скорость, футы<input id="vital-value" type="number" min="0" max="999" value="${Number(sheet.speed || 0)}"></label><div class="two-col"><label>Прыжок в высоту<input id="vital-jump-high" value="${esc(sheet.jumpHigh || Math.max(0,3 + modifier(sheet.stats.str)))}"></label><label>Прыжок в длину<input id="vital-jump-long" value="${esc(sheet.jumpLong || Number(sheet.stats.str))}"></label></div></div>` },
+    proficiency:{ title:"Мастерство и владения", body:`<div class="vital-editor"><div class="vital-editor-value"><small>Сейчас</small><strong>${signed(effectiveProficiency(sheet))}</strong></div><label class="condition-chip"><input id="vital-auto" type="checkbox" ${sheet.autoProficiency ? "checked" : ""}>Считать бонус по общему уровню</label><label>Бонус вручную<input id="vital-value" type="number" min="-20" max="20" value="${Number(sheet.proficiency || 0)}" ${sheet.autoProficiency ? "disabled" : ""}></label><button id="vital-open-masteries" class="secondary" type="button">Настроить навыки и спасброски</button></div>` },
+    passive:{ title:"Пассивное восприятие", body:`<div class="vital-editor"><div class="vital-editor-value"><small>Сейчас</small><strong>${passivePerception(sheet)}</strong></div><label>Дополнительный бонус<input id="vital-value" type="number" min="-100" max="100" value="${Number(sheet.passivePerceptionBonus || 0)}"></label><p>База без ручной поправки: ${passivePerception(sheet) - Number(sheet.passivePerceptionBonus || 0)}. Она считается из Восприятия, мастерства, компетентности и черт.</p></div>` }
+  };
+  const config = configs[kind];
+  if (!config) return;
+  openModal(config.title, `${config.body}<div class="modal-actions"><button id="vital-save" class="primary" type="button">Сохранить</button><button id="vital-cancel" class="secondary" type="button">Отмена</button></div>`);
+  $("#vital-auto")?.addEventListener("change", event => { $("#vital-value").disabled = event.currentTarget.checked; });
+  $("#vital-open-masteries")?.addEventListener("click", () => { closeModal(); openProficienciesModal(); });
+  $("#vital-save").addEventListener("click", () => {
+    const next = structuredClone(currentSheet());
+    if (kind === "ac") { next.autoArmorClass = $("#vital-auto").checked; next.ac = next.autoArmorClass ? calculateAc({ ...next, autoArmorClass:true }) : Math.max(0, Number($("#vital-value").value) || 0); }
+    if (kind === "initiative") { next.initiativeBonus = Number($("#vital-value").value) || 0; next.initiativeAdvantage = $("#vital-advantage").checked; }
+    if (kind === "speed") { next.speed = Math.max(0, Number($("#vital-value").value) || 0); next.jumpHigh = $("#vital-jump-high").value.trim(); next.jumpLong = $("#vital-jump-long").value.trim(); }
+    if (kind === "proficiency") { next.autoProficiency = $("#vital-auto").checked; next.proficiency = next.autoProficiency ? rules.proficiency(totalLevel(next)) : Number($("#vital-value").value) || 0; }
+    if (kind === "passive") next.passivePerceptionBonus = Math.max(-100, Math.min(100, Number($("#vital-value").value) || 0));
+    syncCharacterMechanics(next); closeModal(); saveNow(next,"Показатель сохранён",`Изменён показатель: ${config.title}`); renderSheet();
+  });
+  $("#vital-cancel").addEventListener("click", closeModal);
+}
+
 function bindGameControls() {
+  $("#edit-mode-toggle")?.addEventListener("change", event => {
+    state.editMode = event.currentTarget.checked;
+    localStorage.setItem("tt-edit-mode", state.editMode ? "1" : "0");
+    renderSheet();
+    toast(state.editMode ? "Редактирование включено — нажимай на верхние карточки" : "Игровой режим — случайные правки заблокированы");
+  });
   $("#character-builder")?.addEventListener("click", () => openCharacterBuilderV2(false));
   $("#quick-character")?.addEventListener("click", () => openCharacterBuilderV2(true));
   $("#level-up")?.addEventListener("click", openLevelUpWizard);
@@ -715,7 +750,11 @@ function bindGameControls() {
   $("#campaign-restore-file")?.addEventListener("change", restoreCampaign);
   $("#hp-manager")?.addEventListener("click", openHealthModal);
   $("#quick-hp")?.addEventListener("click", openHealthModal);
-  $("#quick-initiative")?.addEventListener("click", () => roll(`1к20${signed(initiativeBonus(currentSheet()))}`, "Инициатива", currentSheet().initiativeAdvantage ? { mode:"advantage" } : {}));
+  $("#quick-initiative")?.addEventListener("click", () => state.editMode ? openVitalEditor("initiative") : roll(`1к20${signed(initiativeBonus(currentSheet()))}`, "Инициатива", currentSheet().initiativeAdvantage ? { mode:"advantage" } : {}));
+  $('[data-vital="ac"]')?.addEventListener("click", () => openVitalEditor("ac"));
+  $('[data-vital="speed"]')?.addEventListener("click", () => openVitalEditor("speed"));
+  $('[data-vital="proficiency"]')?.addEventListener("click", () => openVitalEditor("proficiency"));
+  $('[data-vital="passive"]')?.addEventListener("click", () => openVitalEditor("passive"));
   $("#quick-inspiration")?.addEventListener("click", toggleInspiration);
   $("#proficiencies-manager")?.addEventListener("click", openProficienciesModal);
   $("#proficiencies-manager-saves")?.addEventListener("click", openProficienciesModal);
@@ -1492,9 +1531,19 @@ function openHealthModal() {
   const pools = s.hitDicePools?.length ? s.hitDicePools : [{ sides:Number(s.hitDieSize || 8), total:Number(s.hitDiceMax || totalLevel(s)), current:Number(s.hitDiceCurrent ?? s.hitDiceMax ?? totalLevel(s)) }];
   openModal("Здоровье и отдых", `
     <div class="hp-summary"><strong>${s.hpCurrent}/${s.hpMax}</strong>временные HP: ${s.hpTemp || 0}</div>
+    ${state.editMode ? `<section class="vital-exact-editor"><div class="panel-heading"><h3 class="panel-title">Точные значения</h3><small>режим редактирования</small></div><div class="three-col"><label>Текущие HP<input id="hp-exact-current" type="number" min="0" value="${Number(s.hpCurrent || 0)}"></label><label>Максимум<input id="hp-exact-max" type="number" min="1" value="${Number(s.hpMax || 1)}"></label><label>Временные<input id="hp-exact-temp" type="number" min="0" value="${Number(s.hpTemp || 0)}"></label></div><div class="two-col"><label>Успехи смерти<input id="hp-exact-success" type="number" min="0" max="3" value="${Number(s.deathSuccess || 0)}"></label><label>Провалы смерти<input id="hp-exact-fail" type="number" min="0" max="3" value="${Number(s.deathFail || 0)}"></label></div><button id="hp-exact-save" class="secondary" type="button">Сохранить точные HP</button></section>` : ""}
     <label>Количество<input id="hp-amount" type="number" min="0" value="1"></label>
-    <div class="modal-actions"><button class="secondary" data-hp-action="damage">Получить урон</button><button class="secondary" data-hp-action="heal">Лечение</button><button class="secondary" data-hp-action="temp">Временные HP</button><button class="secondary" data-hp-action="max">Изменить максимум</button></div>
+    <div class="modal-actions"><button class="secondary" data-hp-action="damage">Получить урон</button><button class="secondary" data-hp-action="heal">Лечение</button><button class="secondary" data-hp-action="temp">Временные HP</button>${state.editMode ? `<button class="secondary" data-hp-action="max">Изменить максимум</button>` : ""}</div>
     <div class="panel hit-dice-manager"><div class="panel-heading"><h3 class="panel-title">Кости хитов</h3><small>Выбери кость для лечения</small></div><div class="hit-dice-actions">${pools.map(pool => `<button class="secondary" data-rest-die="${Number(pool.sides)}" ${Number(pool.current) <= 0 ? "disabled" : ""}><strong>к${Number(pool.sides)}</strong><small>${Number(pool.current)}/${Number(pool.total)} осталось</small></button>`).join("")}</div><div class="rest-actions"><button class="secondary" data-rest="short-complete">Завершить короткий отдых</button><button class="primary" data-rest="long">Долгий отдых</button></div></div>`);
+  $("#hp-exact-save")?.addEventListener("click", () => {
+    const sheet = structuredClone(currentSheet());
+    sheet.hpMax = Math.max(1, Number($("#hp-exact-max").value) || 1);
+    sheet.hpCurrent = Math.max(0, Number($("#hp-exact-current").value) || 0);
+    sheet.hpTemp = Math.max(0, Number($("#hp-exact-temp").value) || 0);
+    sheet.deathSuccess = Math.max(0, Math.min(3, Number($("#hp-exact-success").value) || 0));
+    sheet.deathFail = Math.max(0, Math.min(3, Number($("#hp-exact-fail").value) || 0));
+    closeModal(); saveNow(sheet,"HP сохранены","Точные значения здоровья"); renderSheet();
+  });
   $$('[data-hp-action]', $("#modal-content")).forEach(button => button.addEventListener("click", () => {
     const sheet = structuredClone(currentSheet());
     const amount = Math.max(0, Number($("#hp-amount").value || 0));
@@ -1725,10 +1774,11 @@ function openSmiteDamageModal(attack, critical) {
 
 function openConditionsModal() {
   const sheet = currentSheet();
-  openModal("Состояния", `<div class="conditions-list">${conditionNames.map(name => `<label class="condition-chip"><input type="checkbox" value="${esc(name)}" ${sheet.conditions.includes(name) ? "checked" : ""}>${esc(name)}</label>`).join("")}</div><button id="conditions-save" class="primary">Применить</button>`);
+  openModal("Состояния", `<div class="conditions-list">${conditionNames.map(name => `<label class="condition-chip"><input type="checkbox" value="${esc(name)}" ${sheet.conditions.includes(name) ? "checked" : ""}>${esc(name)}</label>`).join("")}</div>${state.editMode ? `<section class="vital-exact-editor"><div class="panel-heading"><h3 class="panel-title">Истощение</h3><small>режим редактирования</small></div><label>Уровень 0–6<input id="conditions-exhaustion" type="number" min="0" max="6" value="${Math.min(6, Number(sheet.exhaustion || 0))}"></label></section>` : ""}<button id="conditions-save" class="primary">Применить</button>`);
   $("#conditions-save").addEventListener("click", () => {
     const next = structuredClone(currentSheet());
     next.conditions = $$('.condition-chip input:checked', $("#modal-content")).map(input => input.value);
+    if ($("#conditions-exhaustion")) next.exhaustion = Math.max(0, Math.min(6, Number($("#conditions-exhaustion").value) || 0));
     closeModal(); saveNow(next, "Состояния обновлены", "Состояния"); renderSheet();
   });
 }

@@ -53,7 +53,7 @@ function cleanText(value, max = 80) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     characterName: playerName,
     classKey: "",
     subclassKey: "",
@@ -85,6 +85,7 @@ function defaultSheet(playerName) {
     ac: 10,
     initiativeBonus: 0,
     initiativeAdvantage: false,
+    passivePerceptionBonus: 0,
     speed: 30,
     hpMax: 10,
     hpCurrent: 10,
@@ -258,7 +259,8 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 5;
+  normalized.schemaVersion = 6;
+  normalized.passivePerceptionBonus = Math.max(-100, Math.min(100, Number(incoming.passivePerceptionBonus) || 0));
   normalized.xp = Math.max(0, Math.min(999999999, Number(incoming.xp) || 0));
   normalized.skillProficiencies = Array.isArray(incoming.skillProficiencies) ? [...new Set(incoming.skillProficiencies.map(value => cleanText(value, 30)).filter(Boolean))] : [];
   normalized.expertise = Array.isArray(incoming.expertise) ? [...new Set(incoming.expertise.map(value => cleanText(value, 30)).filter(Boolean))] : [];

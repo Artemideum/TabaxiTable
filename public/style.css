@@ -295,6 +295,67 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
 .sheet-more > div { position: absolute; right: 0; top: calc(100% + 7px); z-index: 8; min-width: 230px; display: grid; gap: 6px; padding: 8px; border: 1px solid #5a4630; border-radius: 13px; background: #17130f; box-shadow: 0 18px 50px #000c; }
 .sheet-more button { width: 100%; text-align: left; }
 
+/* Play/Edit switch — the sheet stays calm until the player explicitly unlocks it. */
+.edit-mode-switch { min-height: 42px; display: flex; grid-template-columns: none; flex-direction: row; align-items: center; gap: 10px; margin-right: auto; padding: 7px 11px 7px 8px; color: var(--muted); border: 1px solid #3a3127; border-radius: 12px; background: #100e0c; cursor: pointer; user-select: none; }
+.edit-mode-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.edit-mode-switch > span { width: 42px; height: 24px; flex: 0 0 auto; display: block; padding: 3px; border: 1px solid #55483a; border-radius: 999px; background: #211d18; transition: .18s; }
+.edit-mode-switch > span i { width: 16px; height: 16px; display: block; border-radius: 50%; background: #8d8378; box-shadow: 0 2px 5px #0008; transition: .18s; }
+.edit-mode-switch input:checked + span { border-color: #b48b51; background: #9f7842; box-shadow: 0 0 18px #9f784238; }
+.edit-mode-switch input:checked + span i { transform: translateX(18px); background: #fff1d8; }
+.edit-mode-switch b { color: #b8afa3; font-size: 11px; white-space: nowrap; }
+.edit-mode-switch:has(input:checked) b { color: var(--gold-2); }
+
+.sheet:not(.editing) .identity-editor { display: none; }
+.sheet:not(.editing) .sheet-field.empty-field { display: none; }
+.sheet:not(.editing) .sheet-field { gap: 4px; }
+.sheet:not(.editing) .sheet-field > input,
+.sheet:not(.editing) .sheet-field > textarea,
+.sheet:not(.editing) .sheet-field > select { padding: 2px 0; color: #c9c0b4; border: 0; border-radius: 0; background: transparent; box-shadow: none; opacity: 1; }
+.sheet:not(.editing) .sheet-field > textarea { min-height: 64px; resize: none; }
+.sheet:not(.editing) .stat input { pointer-events: none; }
+.sheet:not(.editing) .coins input { color: var(--gold-2); border-color: transparent; background: transparent; opacity: 1; }
+
+.sheet.editing .hero-vitals [data-vital] { position: relative; border-color: #8d693e; background: linear-gradient(145deg, #21180f, #100d0a); box-shadow: inset 0 0 0 1px #d3ad6e14; }
+.sheet.editing .hero-vitals [data-vital]::after { content: "\270E"; position: absolute; right: 5px; top: 3px; color: #c9a56c; font-size: 9px; opacity: .8; }
+.sheet.editing .stat { border-color: #60482f; }
+.sheet.editing .stat input { color: var(--gold-2); }
+
+.sheet:not(.editing):not(.unbuilt) #character-builder,
+.sheet:not(.editing):not(.unbuilt) #quick-character,
+.sheet:not(.editing) #proficiencies-manager,
+.sheet:not(.editing) #proficiencies-manager-saves,
+.sheet:not(.editing) #level-up-features,
+.sheet:not(.editing) #attack-add,
+.sheet:not(.editing) [data-attack-edit],
+.sheet:not(.editing) #resource-add,
+.sheet:not(.editing) [data-resource-edit],
+.sheet:not(.editing) #item-add,
+.sheet:not(.editing) #item-catalog,
+.sheet:not(.editing) [data-item-edit],
+.sheet:not(.editing) #slots-manager,
+.sheet:not(.editing) #spell-add,
+.sheet:not(.editing) #spell-library,
+.sheet:not(.editing) [data-spell-edit],
+.sheet:not(.editing) #goal-add,
+.sheet:not(.editing) [data-goal-edit],
+.sheet:not(.editing) #note-add,
+.sheet:not(.editing) [data-note-edit] { display: none; }
+
+.sheet:not(.editing) .attack-row { grid-template-columns: minmax(120px,1fr) 62px minmax(110px,.8fr) 34px; }
+.sheet:not(.editing) .spell-row { grid-template-columns: 34px minmax(150px,1fr) 34px auto 34px; }
+.entity-row.goal-row { grid-template-columns: auto minmax(120px,1fr) auto; }
+.sheet:not(.editing) .entity-row.inventory-row { grid-template-columns: minmax(120px,1fr) auto auto; }
+.sheet:not(.editing) .entity-row.goal-row { grid-template-columns: auto minmax(120px,1fr); }
+.sheet:not(.editing) .entity-row.resource-row { grid-template-columns: minmax(100px,1fr) minmax(100px,.8fr) auto auto; }
+
+.vital-editor { display: grid; gap: 13px; }
+.vital-editor p { margin: 0; padding: 10px 12px; color: var(--muted); border-left: 2px solid #725638; background: #100e0c; font-size: 11px; line-height: 1.55; }
+.vital-editor-value { display: flex; align-items: end; justify-content: space-between; gap: 18px; padding: 14px 16px; border: 1px solid #5d482f; border-radius: 13px; background: linear-gradient(135deg, #21180f, #0e0c0a); }
+.vital-editor-value small { color: var(--muted); text-transform: uppercase; letter-spacing: .1em; font-size: 9px; }
+.vital-editor-value strong { color: var(--gold-2); font: 700 27px Unbounded; }
+.vital-exact-editor { display: grid; gap: 10px; padding: 13px; border: 1px solid #715536; border-radius: 13px; background: #9f78420d; }
+.three-col { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 10px; }
+
 /* Focused three-step character builder */
 .game-modal.builder-modal { width: min(1040px, calc(100vw - 28px)); overflow: hidden; }
 .builder-modal #modal-content { padding: 0; gap: 0; }
@@ -749,5 +810,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .save-mastery-grid { grid-template-columns: repeat(2,1fr); }
   .skill-mastery-grid { grid-template-columns: 1fr; }
   .roll-mode { margin-left: 0; }
+}
+@media (max-width: 600px) {
+  .edit-mode-switch { width: 100%; margin-right: 0; }
+  .edit-mode-switch b { flex: 1; }
+  .three-col { grid-template-columns: 1fr; }
+  .sheet:not(.editing) .attack-row { grid-template-columns: minmax(120px,1fr) 52px 34px; }
+  .attack-row .attack-name { grid-column: 1; grid-row: 1; }
+  .attack-row > [data-attack-roll]:not(.attack-name) { grid-column: 2; grid-row: 1; }
+  .attack-row [data-critical-damage] { grid-column: 3; grid-row: 1; }
+  .attack-row [data-attack-edit] { grid-column: 4; grid-row: 1; }
+  .attack-row .attack-damage { grid-column: 1/-1; grid-row: 2; }
+  .sheet:not(.editing) .spell-row { grid-template-columns: 30px minmax(120px,1fr) 32px 32px; }
+  .sheet:not(.editing) .entity-row.inventory-row { grid-template-columns: 1fr auto; }
+  .sheet:not(.editing) .entity-row.inventory-row > small:nth-of-type(2) { grid-column: 1/-1; }
+  .sheet:not(.editing) .entity-row.resource-row { grid-template-columns: minmax(100px,1fr) auto auto; }
+  .sheet:not(.editing) .entity-row.resource-row .resource-meter { grid-column: 1/-1; grid-row: 2; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }

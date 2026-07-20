@@ -71,10 +71,11 @@ test("комната, лист, броски, история и резервна
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 5);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 6);
     assert.equal(created.room.players["test-dm"].sheet.autoProficiency, true);
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
+    assert.equal(created.room.players["test-dm"].sheet.passivePerceptionBonus, 0);
     assert.equal("sheetHistory" in created.room.players["test-dm"], false);
 
     const joined = await emit(player, "room:join", { code:created.code, name:"Плут", clientId:"test-player" });
@@ -89,6 +90,7 @@ test("комната, лист, броски, история и резервна
     sheet.stats.dex = 18;
     sheet.coins.gp = 458;
     sheet.xp = 6500;
+    sheet.passivePerceptionBonus = 3;
     sheet.attacksList.push({ id:"bow", name:"Длинный лук +1", bonus:"[DEX]+[PROF]+1", damage:"1d8+[DEX]+1+5d6", damageType:"колющий", actionCost:"action", rollMode:"inherit", attackParts:[{ id:"dex", type:"ability", value:"dex" },{ id:"prof", type:"proficiency", value:"prof" },{ id:"magic", type:"flat", value:"1" }], damageParts:[{ id:"die", type:"dice", count:1, sides:8 },{ id:"damage-dex", type:"ability", value:"dex" },{ id:"sneak", type:"sneak" }] });
     sheet.resources.push({ id:"arrows", name:"Стрелы", current:19, max:20, reset:"none" });
     sheet.inventoryList.push({ id:"cloak", name:"Плащ летучей мыши", quantity:1, weight:3, equipped:true, attuned:true, magical:true });
@@ -106,8 +108,9 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 5);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 6);
     assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
+    assert.equal(updatedRoom.players["test-player"].sheet.passivePerceptionBonus, 3);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",1]]);
     assert.equal(updatedRoom.players["test-player"].sheet.levelProgression.length, 1);
     assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[0].attuned, true);
