@@ -67,6 +67,9 @@ test("комната, лист, броски, история и резервна
     assert.match(index, /roll-peek[^>]*>[\s\S]*?<small>/);
     const catalog = await fetch(`http://127.0.0.1:${PORT}/spells-5e.json`).then(response => response.json());
     assert.equal(catalog.length, 120);
+    const itemCatalogScript = await fetch(`http://127.0.0.1:${PORT}/items-5e.js`).then(response => response.text());
+    assert.match(itemCatalogScript, /TT_ITEMS_2014/);
+    assert.ok(itemCatalogScript.length > 200000);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);

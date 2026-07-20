@@ -309,7 +309,7 @@ function normalizeSheet(sheet, playerName) {
     effectParts: normalizeParts(spell?.effectParts),
     upcastParts: normalizeParts(spell?.upcastParts)
   }));
-  const normalizedInventory = (Array.isArray(incoming.inventoryList) ? incoming.inventoryList : []).slice(0, 500).map(item => ({
+  const normalizedInventory = (Array.isArray(incoming.inventoryList) ? incoming.inventoryList : []).slice(0, 1000).map(item => ({
     ...item,
     id: cleanText(item?.id, 80) || id(),
     name: cleanText(item?.name, 120),

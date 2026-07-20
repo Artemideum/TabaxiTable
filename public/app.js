@@ -30,6 +30,7 @@ const state = {
 };
 const rules = window.TT_RULES;
 let spellCatalog = null;
+const itemCatalog2014 = Array.isArray(window.TT_ITEMS_2014) ? window.TT_ITEMS_2014 : [];
 localStorage.setItem("tt-client-id", state.clientId);
 
 const abilities = {
@@ -113,6 +114,7 @@ function itemCombatIcon(item) {
 }
 function recommendedCombatSlots(item) {
   if (!item) return [];
+  if (combatSlotKeys.includes(item.slotHint)) return [item.slotHint];
   const text = `${item.name || ""} ${item.description || ""}`.toLowerCase();
   if (isAmmoItem(item)) return ["ammo"];
   if (item.type === "weapon") return isTwoHandedItem(item) ? ["mainHand"] : ["mainHand","offHand"];
@@ -538,6 +540,7 @@ function combatItemSummary(item) {
 }
 function slotAcceptsItem(slotKey, item) {
   if (!item) return true;
+  if (item.slotHint) return item.slotHint === slotKey;
   if (slotKey === "ammo") return isAmmoItem(item);
   if (slotKey === "body") return item.type === "armor" && !isShieldItem(item);
   if (slotKey === "mainHand") return item.type === "weapon" || /фокус|жезл|посох/i.test(item.name || "");
@@ -609,7 +612,7 @@ function combatLoadoutMarkup(sheet, mine) {
     <div class="loadout-toolbar"><div class="loadout-sets" role="tablist" aria-label="Боевые комплекты">${loadout.sets.map((entry,index) => `<button type="button" data-loadout-set="${entry.id}" class="${entry.id === loadout.activeSet ? "active" : ""}" aria-selected="${entry.id === loadout.activeSet}"><span>${String.fromCharCode(65+index)}</span><b>${esc(entry.name)}</b></button>`).join("")}${editable ? `<button type="button" id="loadout-rename" class="loadout-rename" title="Переименовать комплект">✎</button>` : ""}</div><label class="auto-ammo-switch"><span><b>Автоснаряды</b><small>−1 после атаки из лука или арбалета</small></span><input id="auto-ammo" type="checkbox" ${loadout.autoAmmo ? "checked" : ""} ${mine ? "" : "disabled"}><i></i></label></div>
     ${warnings.length ? `<div class="loadout-warnings">${warnings.map(warning => `<article><span>${warning.icon}</span><div><strong>${esc(warning.title)}</strong><small>${esc(warning.text)}</small></div></article>`).join("")}</div>` : `<div class="loadout-ready"><span>✓</span><strong>Комплект готов к бою</strong><small>Явных конфликтов не найдено</small></div>`}
     <div class="loadout-workspace">
-      <aside class="loadout-inventory"><div class="loadout-side-head"><div><span class="eyebrow">Из рюкзака</span><h3>Предметы</h3></div><b>${sheet.inventoryList.length}</b></div><input id="loadout-search" type="search" value="${esc(state.loadoutSearch)}" placeholder="Найти предмет…" aria-label="Поиск предмета"><div class="loadout-filters"><button data-loadout-filter="all" class="${state.loadoutFilter === "all" ? "active" : ""}>Все</button><button data-loadout-filter="weapon" class="${state.loadoutFilter === "weapon" ? "active" : ""}>Оружие</button><button data-loadout-filter="armor" class="${state.loadoutFilter === "armor" ? "active" : ""}>Броня</button><button data-loadout-filter="consumable" class="${state.loadoutFilter === "consumable" ? "active" : ""}>Расходники</button><button data-loadout-filter="ammo" class="${state.loadoutFilter === "ammo" ? "active" : ""}>Снаряды</button></div><div class="loadout-inventory-list">${inventoryCards || `<div class="loadout-empty"><span>◇</span><strong>Рюкзак пуст</strong><small>Добавь предметы во вкладке «Снаряжение».</small></div>`}</div><div id="loadout-filter-empty" class="loadout-empty hidden"><span>⌕</span><strong>Ничего не найдено</strong><small>Попробуй другой запрос или фильтр.</small></div></aside>
+      <aside class="loadout-inventory"><div class="loadout-side-head"><div><span class="eyebrow">Из рюкзака</span><h3>Предметы</h3><small id="loadout-visible-count">${sheet.inventoryList.length} из ${sheet.inventoryList.length}</small></div><b>${sheet.inventoryList.length}</b></div><input id="loadout-search" type="search" value="${esc(state.loadoutSearch)}" placeholder="Найти предмет…" aria-label="Поиск предмета"><div class="loadout-filters"><button data-loadout-filter="all" class="${state.loadoutFilter === "all" ? "active" : ""}">Все</button><button data-loadout-filter="weapon" class="${state.loadoutFilter === "weapon" ? "active" : ""}">Оружие</button><button data-loadout-filter="armor" class="${state.loadoutFilter === "armor" ? "active" : ""}">Броня</button><button data-loadout-filter="gear" class="${state.loadoutFilter === "gear" ? "active" : ""}">Вещи</button><button data-loadout-filter="magic" class="${state.loadoutFilter === "magic" ? "active" : ""}">Магия</button><button data-loadout-filter="consumable" class="${state.loadoutFilter === "consumable" ? "active" : ""}">Расходники</button><button data-loadout-filter="ammo" class="${state.loadoutFilter === "ammo" ? "active" : ""}">Снаряды</button></div><div class="loadout-inventory-list">${inventoryCards || `<div class="loadout-empty"><span>◇</span><strong>Рюкзак пуст</strong><small>Добавь предметы во вкладке «Снаряжение».</small></div>`}</div><div id="loadout-filter-empty" class="loadout-empty hidden"><span>⌕</span><strong>Ничего не найдено</strong><small>Попробуй другой запрос или нажми «Все».</small></div></aside>
       <section class="mannequin-card"><div class="mannequin-title"><span><small>Активный набор</small><strong>${esc(set.name)}</strong></span><b>${editable ? "режим сборки" : "готов к игре"}</b></div><div class="mannequin-stage"><div class="mannequin-figure" aria-hidden="true"><i class="figure-head"></i><i class="figure-neck"></i><i class="figure-torso"></i><i class="figure-arm left"></i><i class="figure-arm right"></i><i class="figure-leg left"></i><i class="figure-leg right"></i><span>${classGlyph(classEntries(sheet)[0]?.key)}</span></div>${combatSlotKeys.map(key => combatSlotMarkup(sheet,set,key,editable)).join("")}</div></section>
       <aside class="loadout-attunement"><div class="loadout-side-head"><div><span class="eyebrow">Магическая связь</span><h3>Настройка</h3></div><b>${(sheet.inventoryList || []).filter(item => item.attuned).length}/3</b></div><p>Три стандартных места. Хоумбрю сверх лимита разрешён, но будет подсвечен.</p><div class="attunement-list">${attunementSlots}</div>${editable ? `<button id="attunement-overflow" class="secondary" type="button">+ Настроить сверх лимита</button>` : ""}${overflowItems.length ? `<div class="attunement-overflow"><small>Сверх лимита</small>${overflowItems.map(item => `<button type="button" data-loadout-inspect="${esc(item.id)}">✦ ${esc(item.name)}</button>`).join("")}</div>` : ""}<div class="loadout-rule-card"><span>Совет</span><strong>${state.selectedLoadoutItemId ? `Выбран: ${esc(combatItem(sheet,state.selectedLoadoutItemId)?.name || "предмет")}` : editable ? "Сначала выбери предмет" : "Комплекты переключаются в один тап"}</strong><small>${state.selectedLoadoutItemId ? "Теперь нажми подходящий слот на герое." : editable ? "Подходящие места подсветятся после выбора." : "A, B и C могут хранить разные варианты вооружения."}</small></div></aside>
     </div>
@@ -893,7 +896,7 @@ function openModal(title, content) {
   $("#modal-content").innerHTML = content;
   $("#game-modal").showModal();
 }
-function closeModal() { $("#game-modal").close(); $("#game-modal").classList.remove("library-open", "builder-modal"); }
+function closeModal() { $("#game-modal").close(); $("#game-modal").classList.remove("library-open", "builder-modal", "catalog-modal"); }
 
 function openExperienceModal() {
   const sheet = currentSheet(), progress = rules.xpProgress(sheet.xp, totalLevel(sheet));
@@ -1081,11 +1084,14 @@ function applyLoadoutInventoryFilter() {
   const query = String(state.loadoutSearch || "").trim().toLowerCase();
   let visible = 0;
   $$('[data-loadout-item]',root).forEach(card => {
-    const kind = card.dataset.loadoutKind, matchesKind = state.loadoutFilter === "all" || kind === state.loadoutFilter || (state.loadoutFilter === "consumable" && kind === "magic");
+    const kind = card.dataset.loadoutKind;
+    const matchesKind = state.loadoutFilter === "all" || kind === state.loadoutFilter;
     const matchesSearch = !query || card.dataset.loadoutSearch.includes(query);
     card.classList.toggle("hidden",!(matchesKind && matchesSearch));
     if (matchesKind && matchesSearch) visible += 1;
   });
+  const visibleCount = $("#loadout-visible-count",root);
+  if (visibleCount) visibleCount.textContent = `${visible} из ${$$('[data-loadout-item]',root).length}`;
   $$('[data-loadout-filter]',root).forEach(button => button.classList.toggle("active",button.dataset.loadoutFilter === state.loadoutFilter));
   $("#loadout-filter-empty",root)?.classList.toggle("hidden",visible > 0 || !$$('[data-loadout-item]',root).length);
 }
@@ -1184,7 +1190,7 @@ function addOverflowAttunement() {
 }
 function showInventoryItem(itemId) {
   const item = combatItem(currentSheet(),itemId); if (!item) return;
-  openModal(item.name || "Предмет",`<div class="item-detail-hero"><span>${itemCombatIcon(item)}</span><div><span class="eyebrow">${esc(itemCombatKind(item))}</span><h3>${esc(item.name || "Предмет")}</h3><p>${esc(combatItemSummary(item))}</p></div></div><div class="item-flags">${item.equipped ? "<span>в активном комплекте</span>" : ""}${item.attuned ? "<span>настроено</span>" : ""}${item.magical ? "<span>магический</span>" : ""}<span>${Number(item.quantity || 0)} шт.</span></div><p class="item-detail-description">${esc(item.description || item.properties || "Описание не добавлено.").replace(/\n/g,"<br>")}</p><div class="modal-actions">${state.editMode ? `<button id="loadout-item-edit" class="primary">Редактировать</button>` : ""}<button id="loadout-item-close" class="secondary">Закрыть</button></div>`);
+  openModal(item.name || "Предмет",`<div class="item-detail-hero"><span>${itemCombatIcon(item)}</span><div><span class="eyebrow">${esc(item.rarity || itemCategoryNames[item.catalogCategory] || itemCombatKind(item))}</span><h3>${esc(item.name || "Предмет")}</h3>${item.originalName && item.originalName !== item.name ? `<small>${esc(item.originalName)}</small>` : ""}<p>${esc(combatItemSummary(item))}</p></div></div><div class="item-flags">${item.equipped ? "<span>в активном комплекте</span>" : ""}${item.attuned ? "<span>настроено</span>" : item.requiresAttunement ? "<span>требует настройки</span>" : ""}${item.magical ? "<span>магический</span>" : ""}<span>${Number(item.quantity || 0)} шт.</span></div><p class="item-detail-description">${esc(item.description || item.properties || "Описание не добавлено.").replace(/\n/g,"<br>")}</p><div class="modal-actions">${state.editMode ? `<button id="loadout-item-edit" class="primary">Редактировать</button>` : ""}<button id="loadout-item-close" class="secondary">Закрыть</button></div>`);
   $("#loadout-item-edit")?.addEventListener("click",()=>{ closeModal(); openItemModal(item.id); });
   $("#loadout-item-close")?.addEventListener("click",closeModal);
 }
@@ -1863,31 +1869,88 @@ function stopConcentration() {
   saveNow(next, "Концентрация завершена", "Концентрация"); renderSheet();
 }
 
-function openItemCatalog() {
-  const catalog = [...rules.weapons, ...rules.armor, ...rules.gear];
-  $("#game-modal").classList.add("library-open");
-  openModal("Справочник снаряжения", `<div class="spell-library-tools"><label>Поиск<input id="item-search" placeholder="Лук, латы, зелье..."></label><label>Категория<select id="item-type"><option value="all">Все</option><option value="weapon">Оружие</option><option value="armor">Броня</option><option value="gear">Снаряжение</option></select></label></div><div id="item-catalog-results" class="item-catalog-results"></div>`);
-  const refresh = () => {
-    const query = $("#item-search").value.trim().toLowerCase();
-    const type = $("#item-type").value;
-    const found = catalog.filter(item => (type === "all" || item.type === type) && (!query || `${item.name} ${item.properties || ""}`.toLowerCase().includes(query)));
-    $("#item-catalog-results").innerHTML = found.map(item => `<article class="catalog-item"><div><strong>${esc(item.name)}</strong><small>${item.type === "weapon" ? `${esc(item.damage)} ${esc(item.damageType)} · ${esc(item.properties || "")}` : item.type === "armor" ? `КД ${item.armorType === "shield" ? "+2" : item.baseAc} · ${item.armorType}` : "Обычное снаряжение"} · ${item.weight} фнт.</small></div><button class="primary" data-catalog-item="${item.key}">Добавить</button></article>`).join("");
-    $$('[data-catalog-item]', $("#item-catalog-results")).forEach(button => button.addEventListener("click", () => {
-      const source = catalog.find(item => item.key === button.dataset.catalogItem);
-      const next = structuredClone(currentSheet());
-      const itemId = uuid();
-      next.inventoryList.push({ ...structuredClone(source), id:itemId, quantity:Number(source.quantity || 1), equipped:false, attuned:false, magical:false, description:source.properties || "" });
-      if (source.type === "weapon") {
-        const ability = source.ability === "finesse" ? (modifier(next.stats.dex) >= modifier(next.stats.str) ? "dex" : "str") : source.ability;
-        const attackParts = [{ id:uuid(), type:"ability", value:ability },{ id:uuid(), type:"proficiency", value:"prof" }];
-        const damageParts = [...parseFormulaParts(source.damage,"damage"),{ id:uuid(), type:"ability", value:ability }];
-        next.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, attackParts, damageParts, bonus:formulaFromParts(attackParts,next), damage:formulaFromParts(damageParts,next), damageType:source.damageType });
-      }
-      saveNow(next, `${source.name} добавлен`, "Снаряжение");
-      button.textContent = "Добавлено ✓"; button.disabled = true;
-    }));
+const itemCategoryNames = {
+  weapon:"Оружие", armor:"Броня и щиты", ammo:"Боеприпасы", consumable:"Расходники",
+  gear:"Снаряжение", focus:"Фокусировки", pack:"Готовые наборы", tool:"Инструменты",
+  mount:"Скакуны", vehicle:"Транспорт", magic:"Магические предметы", potion:"Зелья", scroll:"Свитки"
+};
+function fullItemCatalog() {
+  if (itemCatalog2014.length) return itemCatalog2014;
+  return [...rules.weapons, ...rules.armor, ...rules.gear].map(item => ({ ...item, catalogCategory:item.type }));
+}
+function catalogPrice(item) {
+  if (!Number(item.costValue || 0)) return "цена не указана";
+  const units = { cp:"мм", sp:"см", ep:"эм", gp:"зм", pp:"пм" };
+  return `${Number(item.costValue).toLocaleString("ru-RU")} ${units[item.costUnit] || item.costUnit}`;
+}
+function catalogItemSummary(item) {
+  if (item.type === "weapon") return `${String(item.damage || "—").replace(/d/gi,"к")} ${item.damageType || ""}${item.properties ? ` · ${item.properties}` : ""}`;
+  if (item.type === "armor") return `${item.armorType === "shield" ? "+2 КД" : `КД ${Number(item.baseAc || 0)}`} · ${item.weight || 0} фнт.`;
+  return [itemCategoryNames[item.catalogCategory] || "Предмет", item.rarity, item.quantity > 1 ? `${item.quantity} шт.` : "", item.weight ? `${item.weight} фнт.` : ""].filter(Boolean).join(" · ");
+}
+function addCatalogItem(source) {
+  const next = structuredClone(currentSheet());
+  const stackable = source.type === "gear" && ["ammo","consumable","gear","focus","tool","potion","scroll"].includes(source.catalogCategory);
+  const existing = stackable ? next.inventoryList.find(item => item.catalogKey === source.key) : null;
+  if (existing) {
+    existing.quantity = Math.max(0,Number(existing.quantity || 0)) + Math.max(1,Number(source.quantity || 1));
+    saveNow(next, `${source.name}: теперь ${existing.quantity}`, "Пополнено снаряжение");
+    return;
+  }
+  const itemId = uuid();
+  const value = {
+    ...structuredClone(source), key:undefined, catalogKey:source.key, id:itemId,
+    quantity:Number(source.quantity || 1), equipped:false, attuned:false,
+    magical:Boolean(source.magical), description:source.description || source.properties || ""
   };
-  $("#item-search").addEventListener("input", refresh); $("#item-type").addEventListener("change", refresh); refresh();
+  next.inventoryList.push(value);
+  if (source.type === "weapon" && source.damage) {
+    const ability = source.ability === "finesse" ? (modifier(next.stats.dex) >= modifier(next.stats.str) ? "dex" : "str") : source.ability;
+    const attackParts = [{ id:uuid(), type:"ability", value:ability || "str" },{ id:uuid(), type:"proficiency", value:"prof" }];
+    const damageParts = [...parseFormulaParts(source.damage,"damage"),{ id:uuid(), type:"ability", value:ability || "str" }];
+    next.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, attackParts, damageParts, bonus:formulaFromParts(attackParts,next), damage:formulaFromParts(damageParts,next), damageType:source.damageType });
+  }
+  saveNow(next, `${source.name} добавлен`, "Снаряжение");
+}
+function openItemCatalog() {
+  const catalog = fullItemCatalog().slice().sort((a,b) => String(a.name).localeCompare(String(b.name),"ru"));
+  let visibleLimit = 80;
+  $("#game-modal").classList.add("library-open", "catalog-modal");
+  openModal("Каталог предметов 5e 2014", `<section class="item-catalog-shell">
+    <header class="catalog-hero"><div><span class="eyebrow">Открытые правила 2014</span><h3>Весь арсенал в одном месте</h3><p>Оружие, броня, походные вещи, инструменты, транспорт, зелья, свитки и магические предметы. Добавленное сразу появляется в боевом конструкторе.</p></div><strong>${catalog.length}<small>позиций</small></strong></header>
+    <div class="item-catalog-tools"><label>Поиск<input id="item-search" type="search" placeholder="Название, свойство или редкость…" autofocus></label><label>Категория<select id="item-type"><option value="all">Все категории</option>${Object.entries(itemCategoryNames).map(([key,name]) => `<option value="${key}">${name}</option>`).join("")}</select></label><label>Редкость<select id="item-rarity"><option value="all">Любая редкость</option>${["Обычный","Необычный","Редкий","Очень редкий","Легендарный","Артефакт"].map(name => `<option>${name}</option>`).join("")}</select></label></div>
+    <div class="catalog-result-head"><span id="item-result-count"></span><small>Поиск проверяет весь каталог, а не только показанные карточки.</small></div>
+    <div id="item-catalog-results" class="item-catalog-results"></div><footer id="item-catalog-more" class="catalog-more"></footer>
+  </section>`);
+  const matchingItems = () => {
+    const query = $("#item-search").value.trim().toLowerCase();
+    const type = $("#item-type").value, rarity = $("#item-rarity").value;
+    return catalog.filter(item => {
+      const matchesType = type === "all" || item.catalogCategory === type;
+      const matchesRarity = rarity === "all" || item.rarity === rarity;
+      const haystack = `${item.name} ${item.originalName || ""} ${item.properties || ""} ${item.description || ""} ${item.rarity || ""}`.toLowerCase();
+      return matchesType && matchesRarity && (!query || haystack.includes(query));
+    });
+  };
+  const refresh = (reset = false) => {
+    if (reset) visibleLimit = 80;
+    const found = matchingItems(), shown = found.slice(0,visibleLimit);
+    $("#item-result-count").textContent = `Найдено ${found.length} · показано ${shown.length}`;
+    $("#item-catalog-results").innerHTML = shown.length ? shown.map(item => {
+      const owned = currentSheet().inventoryList.filter(entry => entry.catalogKey === item.key).reduce((sum,entry) => sum + Number(entry.quantity || 0),0);
+      return `<article class="catalog-item ${item.magical ? "magical" : ""}"><span class="catalog-item-icon">${itemCombatIcon(item)}</span><div><div class="catalog-item-title"><strong>${esc(item.name)}</strong>${item.originalName && item.originalName !== item.name ? `<small>${esc(item.originalName)}</small>` : ""}</div><div class="catalog-badges"><span>${esc(itemCategoryNames[item.catalogCategory] || "Предмет")}</span>${item.rarity ? `<span>${esc(item.rarity)}</span>` : ""}${item.requiresAttunement ? "<span>настройка</span>" : ""}<span>${esc(catalogPrice(item))}</span></div><p>${esc(catalogItemSummary(item))}</p></div><button class="primary" data-catalog-item="${esc(item.key)}">${owned ? `Ещё +${Number(item.quantity || 1)}<small>есть ${owned}</small>` : "Добавить"}</button></article>`;
+    }).join("") : `<div class="catalog-nothing"><span>⌕</span><strong>Ничего не найдено</strong><p>Сбрось редкость, выбери «Все категории» или попробуй часть названия.</p></div>`;
+    $("#item-catalog-more").innerHTML = found.length > shown.length ? `<button id="item-show-more" class="secondary" type="button">Показать ещё ${Math.min(80,found.length-shown.length)}<small>осталось ${found.length-shown.length}</small></button>` : found.length ? `<span>Показаны все ${found.length} позиций</span>` : "";
+    $$('[data-catalog-item]', $("#item-catalog-results")).forEach(button => button.addEventListener("click", () => {
+      const source = catalog.find(item => item.key === button.dataset.catalogItem); if (!source) return;
+      addCatalogItem(source); refresh(); toast(`${source.name} добавлен в рюкзак`);
+    }));
+    $("#item-show-more")?.addEventListener("click", () => { visibleLimit += 80; refresh(); });
+  };
+  $("#item-search").addEventListener("input", () => refresh(true));
+  $("#item-type").addEventListener("change", () => refresh(true));
+  $("#item-rarity").addEventListener("change", () => refresh(true));
+  refresh();
 }
 
 function openSheetHistory() {
@@ -2247,10 +2310,10 @@ function openItemModal(id = null) {
   const item = currentSheet().inventoryList.find(entry => entry.id === id) || { id: uuid(), name: "", quantity: 1, weight: 0, equipped: false, attuned: false, magical: false, combatKind:"auto", useFormula:"", description: "" };
   openModal(id ? "Предмет" : "Новый предмет", `
     <label>Название<input id="item-name" value="${esc(item.name)}"></label>
-    ${item.type ? `<div class="read-only">${item.type === "weapon" ? `Оружие · ${esc(item.damage || "")} ${esc(item.damageType || "")}` : item.type === "armor" ? `Броня · базовый КД ${Number(item.baseAc || 0)} · ${esc(item.armorType || "")}` : "Обычное снаряжение"}</div>` : ""}
+    ${item.type ? `<div class="read-only">${item.type === "weapon" ? `Оружие · ${esc(item.damage || "")} ${esc(item.damageType || "")}` : item.type === "armor" ? `Броня · базовый КД ${Number(item.baseAc || 0)} · ${esc(item.armorType || "")}` : item.magical ? `Магический предмет${item.rarity ? ` · ${esc(item.rarity)}` : ""}${item.requiresAttunement ? " · требует настройки" : ""}` : "Обычное снаряжение"}${item.originalName && item.originalName !== item.name ? `<br><small>${esc(item.originalName)}</small>` : ""}</div>` : ""}
     <div class="two-col"><label>Количество<input id="item-quantity" type="number" min="0" value="${Number(item.quantity)}"></label><label>Вес одного, фнт.<input id="item-weight" type="number" min="0" step="0.1" value="${Number(item.weight)}"></label></div>
     <div class="two-col"><label>Роль в бою<select id="item-combat-kind"><option value="auto" ${!item.combatKind || item.combatKind === "auto" ? "selected" : ""}>Определить автоматически</option><option value="weapon" ${item.combatKind === "weapon" ? "selected" : ""}>Оружие</option><option value="armor" ${item.combatKind === "armor" ? "selected" : ""}>Броня или защита</option><option value="ammo" ${item.combatKind === "ammo" ? "selected" : ""}>Боеприпасы</option><option value="consumable" ${item.combatKind === "consumable" ? "selected" : ""}>Расходник</option><option value="magic" ${item.combatKind === "magic" ? "selected" : ""}>Магический предмет</option><option value="gear" ${item.combatKind === "gear" ? "selected" : ""}>Прочее</option></select></label><label>Бросок при использовании<input id="item-use-formula" value="${esc(item.useFormula || "")}" placeholder="Например, 2к4+2"></label></div>
-    <div class="item-toggle-grid"><label class="toggle-row"><span><strong>В активном комплекте</strong><small>TabaxiTable подберёт подходящий слот</small></span><input id="item-equipped" type="checkbox" ${item.equipped ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магическая настройка</strong><small>Стандартный лимит — три предмета</small></span><input id="item-attuned" type="checkbox" ${item.attuned ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магический предмет</strong><small>Показывать золотую метку</small></span><input id="item-magical" type="checkbox" ${item.magical ? "checked" : ""}><i></i></label></div>
+    <div class="item-toggle-grid"><label class="toggle-row"><span><strong>В активном комплекте</strong><small>TabaxiTable подберёт подходящий слот</small></span><input id="item-equipped" type="checkbox" ${item.equipped ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магическая настройка</strong><small>${item.requiresAttunement ? "Этому предмету нужна настройка" : "Стандартный лимит — три предмета"}</small></span><input id="item-attuned" type="checkbox" ${item.attuned ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магический предмет</strong><small>Показывать золотую метку</small></span><input id="item-magical" type="checkbox" ${item.magical ? "checked" : ""}><i></i></label></div>
     <label>Описание<textarea id="item-description">${esc(item.description)}</textarea></label>
     <div class="modal-actions"><button id="item-save" class="primary">Сохранить</button>${id ? `<button id="item-delete" class="secondary">Удалить</button>` : ""}</div>`);
   $("#item-save").addEventListener("click", () => {
@@ -2625,6 +2688,7 @@ $("#modal-close").addEventListener("click", closeModal);
 $("#game-modal").addEventListener("click", event => {
   if (event.target === $("#game-modal")) closeModal();
 });
+$("#game-modal").addEventListener("close", () => $("#game-modal").classList.remove("library-open", "builder-modal", "catalog-modal"));
 
 const hashCode = location.hash.slice(1).toUpperCase();
 if (/^[A-Z0-9]{6}$/.test(hashCode)) {

@@ -46,7 +46,7 @@ if errorlevel 1 (
 )
 
 echo Dobavlyayu fayly. Komnaty i node_modules ostanutsya tolko na etom PK...
-for %%F in (package.json package-lock.json server.js start.bat update.bat connect-github.bat README.md FEATURES.md AGENTS.md Dockerfile .dockerignore .gitignore) do (
+for %%F in (package.json package-lock.json server.js start.bat update.bat connect-github.bat README.md FEATURES.md ATTRIBUTION.md AGENTS.md Dockerfile .dockerignore .gitignore) do (
   if exist "%%F" "%GIT_CMD%" add -- "%%F"
 )
 if exist public "%GIT_CMD%" add -- public
