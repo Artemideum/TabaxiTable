@@ -22,9 +22,9 @@
         <p>Комната для вашей партии, живые броски и листы персонажей без тяжёлых правил и лишних кнопок.</p>
       </div>
       <div class="entry-card">
-        <div class="tabs">
-          <button class="tab active" data-lobby-tab="join">Войти</button>
-          <button class="tab" data-lobby-tab="create">Создать</button>
+        <div class="tabs" role="tablist" aria-label="Вход в TabaxiTable">
+          <button class="tab active" role="tab" aria-selected="true" data-lobby-tab="join">Войти</button>
+          <button class="tab" role="tab" aria-selected="false" data-lobby-tab="create">Создать</button>
         </div>
         <form id="join-form" class="entry-form">
           <label>Твоё имя<input name="name" maxlength="40" placeholder="Например, Тёма" required></label>
@@ -63,6 +63,7 @@
             <div>
               <span class="eyebrow">Общий стол бросков</span>
               <h2>Кости</h2>
+              <div class="roll-mode dice-roll-mode" aria-label="Режим броска к20"><span>Режим к20:</span><button data-dice-roll-mode="normal" class="active" aria-pressed="true">Обычно</button><button data-dice-roll-mode="advantage" aria-pressed="false">Преимущество</button><button data-dice-roll-mode="disadvantage" aria-pressed="false">Помеха</button></div>
               <div class="quick-dice">
                 <button data-die="1к4">к4</button><button data-die="1к6">к6</button><button data-die="1к8">к8</button>
                 <button data-die="1к10">к10</button><button data-die="1к12">к12</button><button data-die="1к20">к20</button>
@@ -78,10 +79,11 @@
   <div id="toast" class="toast"></div>
   <button id="roll-peek" class="roll-peek hidden" type="button" title="Открыть общий журнал бросков"><span></span><strong></strong></button>
   <dialog id="game-modal" class="game-modal">
-    <div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" type="button">×</button></div>
+    <div class="modal-head"><h2 id="modal-title"></h2><button id="modal-close" type="button" aria-label="Закрыть окно">×</button></div>
     <div id="modal-content"></div>
   </dialog>
   <script src="/socket.io/socket.io.js"></script>
+  <script src="/rules-5e.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

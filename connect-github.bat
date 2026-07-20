@@ -56,7 +56,7 @@ if errorlevel 1 goto :error
 
 "%GIT_CMD%" diff --cached --quiet
 if errorlevel 1 (
-  "%GIT_CMD%" commit -m "Initial TabaxiTable release"
+  "%GIT_CMD%" commit -m "TabaxiTable 1.0 character sheet release"
   if errorlevel 1 goto :error
 )
 

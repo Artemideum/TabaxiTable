@@ -6,8 +6,11 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 
-const START_PORT = Number(process.env.PORT) || 31777;
-const DATA_DIR = path.join(__dirname, "data");
+const cliPortIndex = process.argv.indexOf("--port");
+const cliPort = cliPortIndex >= 0 ? Number(process.argv[cliPortIndex + 1]) : 0;
+const START_PORT = Number(process.env.PORT) || cliPort || 31777;
+const STRICT_PORT = process.argv.includes("--strictPort");
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -50,22 +53,31 @@ function cleanText(value, max = 80) {
 
 function defaultSheet(playerName) {
   return {
+    schemaVersion: 2,
     characterName: playerName,
+    classKey: "",
+    raceKey: "",
     className: "",
     subclass: "",
     level: 1,
     race: "",
+    ancestryTraits: "",
     size: "Средний",
     background: "",
     alignment: "",
     xp: 0,
     proficiency: 2,
+    autoProficiency: true,
+    autoSpellSlots: true,
+    autoArmorClass: true,
     inspiration: false,
     stats: { str: 10, dex: 10, con: 10, int: 10, wis: 10, cha: 10 },
     saveProficiencies: [],
     skillProficiencies: [],
     expertise: [],
     ac: 10,
+    initiativeBonus: 0,
+    initiativeAdvantage: false,
     speed: 30,
     hpMax: 10,
     hpCurrent: 10,
@@ -78,6 +90,15 @@ function defaultSheet(playerName) {
     deathFail: 0,
     exhaustion: 0,
     conditions: [],
+    concentrationSpellId: "",
+    concentrationSpellName: "",
+    darkvision: 0,
+    blindsight: 0,
+    tremorsense: 0,
+    truesight: 0,
+    resistances: "",
+    immunities: "",
+    vulnerabilities: "",
     coins: { cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 },
     attacksList: [],
     resources: [],
@@ -140,20 +161,27 @@ function normalizeSheet(sheet, playerName) {
     notesList: Array.isArray(incoming.notesList) ? incoming.notesList : [],
     spellSlots: normalizedSlots
   };
+  normalized.schemaVersion = 2;
+  if (!("autoProficiency" in incoming)) normalized.autoProficiency = false;
+  if (!("autoSpellSlots" in incoming)) normalized.autoSpellSlots = false;
+  if (!("autoArmorClass" in incoming)) normalized.autoArmorClass = false;
   if (!("hitDiceMax" in incoming)) normalized.hitDiceMax = Math.max(1, Number(normalized.level || 1));
   if (!("hitDiceCurrent" in incoming)) normalized.hitDiceCurrent = normalized.hitDiceMax;
   return normalized;
 }
 
 function publicRoom(room) {
-  Object.values(room.players).forEach(player => {
+  const players = {};
+  Object.entries(room.players).forEach(([playerId, player]) => {
     player.sheet = normalizeSheet(player.sheet, player.name);
+    const { sheetHistory: _privateHistory, ...publicPlayer } = player;
+    players[playerId] = publicPlayer;
   });
   return {
     code: room.code,
     title: room.title,
     dmId: room.dmId,
-    players: room.players,
+    players,
     rollLog: room.rollLog.slice(-30)
   };
 }
@@ -183,7 +211,7 @@ io.on("connection", (socket) => {
       title,
       dmId: clientId,
       players: {
-        [clientId]: { id: clientId, name, role: "dm", online: true, sheet: defaultSheet(name) }
+        [clientId]: { id: clientId, name, role: "dm", online: true, sheet: defaultSheet(name), sheetHistory: [] }
       },
       rollLog: [],
       createdAt: Date.now()
@@ -208,7 +236,7 @@ io.on("connection", (socket) => {
       existing.name = name;
       existing.online = true;
     } else {
-      room.players[clientId] = { id: clientId, name, role: "player", online: true, sheet: defaultSheet(name) };
+      room.players[clientId] = { id: clientId, name, role: "player", online: true, sheet: defaultSheet(name), sheetHistory: [] };
     }
     socket.join(code);
     socket.data = { code, clientId };
@@ -217,28 +245,94 @@ io.on("connection", (socket) => {
     emitRoom(code);
   });
 
-  socket.on("sheet:update", ({ sheet }, reply = () => {}) => {
+  socket.on("sheet:update", ({ sheet, reason }, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const player = rooms[code]?.players?.[clientId];
     if (!player || !sheet || typeof sheet !== "object") return reply({ ok: false });
+    player.sheetHistory = Array.isArray(player.sheetHistory) ? player.sheetHistory : [];
+    const last = player.sheetHistory.at(-1);
+    if (cleanText(reason, 80) || !last || Date.now() - Number(last.at || 0) > 60000) {
+      player.sheetHistory.push({ id: id(), at: Date.now(), label: cleanText(reason, 80) || "Автосохранение", sheet: normalizeSheet(player.sheet, player.name) });
+      player.sheetHistory = player.sheetHistory.slice(-20);
+    }
     player.sheet = normalizeSheet({ ...sheet, characterName: cleanText(sheet.characterName, 60) }, player.name);
     saveRooms();
     emitRoom(code);
     reply({ ok: true });
   });
 
-  socket.on("dice:roll", ({ formula, label }, reply = () => {}) => {
+  socket.on("sheet:history", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const player = rooms[code]?.players?.[clientId];
+    if (!player) return reply({ ok: false });
+    const history = (player.sheetHistory || []).map(({ id, at, label, sheet }) => ({ id, at, label, characterName: sheet?.characterName || player.name, level: sheet?.level || 1 }));
+    reply({ ok: true, history: history.reverse() });
+  });
+
+  socket.on("sheet:restore", ({ revisionId }, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const player = rooms[code]?.players?.[clientId];
+    const revision = player?.sheetHistory?.find(item => item.id === cleanText(revisionId, 80));
+    if (!player || !revision) return reply({ ok: false, error: "Версия не найдена" });
+    player.sheetHistory.push({ id: id(), at: Date.now(), label: "Перед восстановлением", sheet: normalizeSheet(player.sheet, player.name) });
+    player.sheetHistory = player.sheetHistory.slice(-20);
+    player.sheet = normalizeSheet(revision.sheet, player.name);
+    saveRooms(); emitRoom(code); reply({ ok: true, sheet: player.sheet });
+  });
+
+  socket.on("room:backup", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok: false, error: "Только ведущий может сохранить кампанию" });
+    const backup = structuredClone(room);
+    Object.values(backup.players).forEach(player => { delete player.sheetHistory; player.online = false; });
+    reply({ ok: true, backup });
+  });
+
+  socket.on("room:restore-backup", ({ backup }, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий может восстановить кампанию" });
+    if (!backup || typeof backup !== "object" || !backup.players || typeof backup.players !== "object") return reply({ ok:false, error:"Неверный файл копии" });
+    const candidates = Object.entries(backup.players).slice(0, 50);
+    if (!candidates.length) return reply({ ok:false, error:"В копии нет игроков" });
+    const restoredPlayers = Object.create(null);
+    for (const [rawPlayerId, candidate] of candidates) {
+      const playerId = cleanText(rawPlayerId, 80);
+      if (!playerId || ["__proto__","prototype","constructor"].includes(playerId) || !candidate || typeof candidate !== "object") continue;
+      const existing = room.players[playerId];
+      const name = cleanText(candidate.name, 40) || existing?.name || "Игрок";
+      const history = Array.isArray(existing?.sheetHistory) ? existing.sheetHistory.slice(-19) : [];
+      if (existing?.sheet) history.push({ id:id(), at:Date.now(), label:"Перед восстановлением кампании", sheet:normalizeSheet(existing.sheet, existing.name) });
+      restoredPlayers[playerId] = { id:playerId, name, role:playerId === clientId ? "dm" : "player", online:playerId === clientId, sheet:normalizeSheet(candidate.sheet, name), sheetHistory:history.slice(-20) };
+    }
+    if (!restoredPlayers[clientId]) {
+      const current = room.players[clientId];
+      restoredPlayers[clientId] = { ...current, role:"dm", online:true, sheetHistory:Array.isArray(current.sheetHistory) ? current.sheetHistory.slice(-20) : [] };
+    }
+    room.title = cleanText(backup.title, 60) || room.title;
+    room.players = restoredPlayers;
+    room.dmId = clientId;
+    room.rollLog = Array.isArray(backup.rollLog) ? backup.rollLog.slice(-30).map(entry => ({
+      id:id(), player:cleanText(entry?.player, 40) || "Игрок", label:cleanText(entry?.label, 80), activity:cleanText(entry?.activity, 120),
+      formula:cleanText(entry?.formula, 100), dice:Array.isArray(entry?.dice) ? entry.dice.slice(0,100).map(Number) : [], modifier:Number(entry?.modifier || 0),
+      total:entry?.total === null ? null : Number(entry?.total || 0), mode:["advantage","disadvantage"].includes(entry?.mode) ? entry.mode : "normal", natural:Number(entry?.natural || 0) || null, at:Number(entry?.at || Date.now())
+    })) : [];
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("dice:roll", ({ formula, label, mode }, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     const player = room?.players?.[clientId];
     if (!room || !player) return reply({ ok: false, error: "Игрок не подключён" });
-    const parsed = parseDiceFormula(formula);
+    const parsed = parseDiceFormula(formula, mode);
     if (!parsed.ok) return reply({ ok: false, error: parsed.error });
-    room.rollLog.push({ id: id(), player: player.name, label: cleanText(label, 60) || parsed.formula, formula: parsed.formula, dice: parsed.dice, detail: parsed.detail, modifier: parsed.modifier, total: parsed.total, at: Date.now() });
+    room.rollLog.push({ id: id(), player: player.name, label: cleanText(label, 60) || parsed.formula, formula: parsed.formula, dice: parsed.dice, detail: parsed.detail, modifier: parsed.modifier, total: parsed.total, mode: parsed.mode, natural: parsed.natural, at: Date.now() });
     room.rollLog = room.rollLog.slice(-30);
     saveRooms();
     emitRoom(code);
-    reply({ ok: true, total: parsed.total });
+    reply({ ok: true, total: parsed.total, dice: parsed.dice, detail: parsed.detail, mode: parsed.mode, natural: parsed.natural });
   });
 
   socket.on("activity:log", ({ label, detail }, reply = () => {}) => {
@@ -262,7 +356,7 @@ io.on("connection", (socket) => {
   });
 });
 
-function parseDiceFormula(value) {
+function parseDiceFormula(value, requestedMode = "normal") {
   const formula = String(value || "").toLowerCase().replace(/d/g, "к").replace(/\s/g, "");
   if (!formula || formula.length > 100) return { ok: false, error: "Формат броска: 1к20+5 или 1d8+5d6+7" };
   const tokens = formula.match(/[+-]?(?:\d*к\d+|\d+)/g);
@@ -295,7 +389,21 @@ function parseDiceFormula(value) {
     total += subtotal;
     detail.push({ count, sides, sign, rolls, subtotal });
   }
-  return { ok: true, formula, dice, detail, modifier, total };
+  let mode = ["advantage", "disadvantage"].includes(requestedMode) ? requestedMode : "normal";
+  const d20 = detail.find(entry => entry.sign === 1 && entry.count === 1 && entry.sides === 20);
+  let natural = d20?.rolls?.[0] ?? null;
+  if (mode !== "normal" && d20) {
+    const first = d20.rolls[0];
+    const second = crypto.randomInt(1, 21);
+    const kept = mode === "advantage" ? Math.max(first, second) : Math.min(first, second);
+    total += kept - first;
+    d20.rolls = [first, second];
+    d20.kept = kept;
+    d20.subtotal = kept;
+    dice.push(second);
+    natural = kept;
+  } else if (!d20) mode = "normal";
+  return { ok: true, formula, dice, detail, modifier, total, mode, natural };
 }
 
 function openBrowser(url) {
@@ -321,7 +429,7 @@ function startServer(port, attemptsLeft = 20) {
   });
 }
 
-startServer(START_PORT);
+startServer(START_PORT, STRICT_PORT ? 0 : 20);
 
 function shutdown() {
   clearTimeout(saveTimer);
