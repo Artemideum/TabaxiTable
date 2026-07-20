@@ -53,7 +53,7 @@ function cleanText(value, max = 80) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     characterName: playerName,
     classKey: "",
     subclassKey: "",
@@ -202,13 +202,31 @@ function normalizeSheet(sheet, playerName) {
       const total = Math.max(0, Math.min(20, Number(pool?.total) || 0));
       return { sides: Math.max(4, Math.min(20, Number(pool?.sides) || 8)), total, current: Math.max(0, Math.min(total, Number(pool?.current) || 0)) };
     }).filter(pool => pool.total > 0);
+  const normalizeParts = parts => Array.isArray(parts) ? parts.slice(0, 16).map(part => ({
+    id: cleanText(part?.id, 80),
+    type: cleanText(part?.type, 24),
+    value: cleanText(part?.value, 24),
+    count: Math.max(1, Math.min(20, Number(part?.count) || 1)),
+    sides: Math.max(2, Math.min(100, Number(part?.sides) || 6))
+  })).filter(part => ["ability","proficiency","dice","flat","sneak","martial","rage","spell"].includes(part.type)) : [];
+  const normalizedAttacks = (Array.isArray(incoming.attacksList) ? incoming.attacksList : []).slice(0, 100).map(attack => ({
+    ...attack,
+    id: cleanText(attack?.id, 80),
+    name: cleanText(attack?.name, 100),
+    bonus: cleanText(attack?.bonus, 120),
+    damage: cleanText(attack?.damage, 160),
+    damageType: cleanText(attack?.damageType, 40),
+    notes: cleanText(attack?.notes, 1000),
+    attackParts: normalizeParts(attack?.attackParts),
+    damageParts: normalizeParts(attack?.damageParts)
+  }));
   const normalized = {
     ...base,
     ...incoming,
     stats: { ...base.stats, ...(incoming.stats || {}) },
     coins: { ...base.coins, ...(incoming.coins || {}) },
     conditions: Array.isArray(incoming.conditions) ? incoming.conditions : [],
-    attacksList: Array.isArray(incoming.attacksList) ? incoming.attacksList : [],
+    attacksList: normalizedAttacks,
     resources: Array.isArray(incoming.resources) ? incoming.resources : [],
     inventoryList: Array.isArray(incoming.inventoryList) ? incoming.inventoryList : [],
     spellsList: Array.isArray(incoming.spellsList) ? incoming.spellsList : [],
@@ -222,7 +240,10 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 3;
+  normalized.schemaVersion = 4;
+  normalized.xp = Math.max(0, Math.min(999999999, Number(incoming.xp) || 0));
+  normalized.skillProficiencies = Array.isArray(incoming.skillProficiencies) ? [...new Set(incoming.skillProficiencies.map(value => cleanText(value, 30)).filter(Boolean))] : [];
+  normalized.expertise = Array.isArray(incoming.expertise) ? [...new Set(incoming.expertise.map(value => cleanText(value, 30)).filter(Boolean))] : [];
   normalized.level = totalLevel;
   if (normalizedClasses.length) {
     const primary = normalizedClasses[0];

@@ -80,8 +80,31 @@ function progressionMarkup(sheet) {
   if (!progression.length) return "";
   return `<section class="level-path"><div class="level-path-head"><span>Путь героя</span><strong>${esc(classSummary(sheet))}</strong></div><div class="level-tokens">${progression.map(entry => {
     const name = rules.classes[entry.classKey]?.name || entry.classKey;
-    return `<div class="level-token" title="Общий уровень ${entry.level}: ${esc(name)} ${Number(entry.classLevel)}">${classGlyph(entry.classKey)}<small>${Number(entry.level)}</small></div>`;
+    return `<button class="level-token" type="button" data-level-info="${Number(entry.level)}" title="Что получено на ${Number(entry.level)} уровне: ${esc(name)} ${Number(entry.classLevel)}">${classGlyph(entry.classKey)}<small>${Number(entry.level)}</small></button>`;
   }).join("")}${totalLevel(sheet) < 20 ? `<button id="level-up-track" class="level-token next" type="button" title="Повысить уровень"><span>+</span><small>${totalLevel(sheet) + 1}</small></button>` : ""}</div></section>`;
+}
+function experienceMarkup(sheet, mine) {
+  const progress = rules.xpProgress(sheet.xp, totalLevel(sheet));
+  const levelByXpNote = progress.xpLevel !== totalLevel(sheet) ? `<span class="xp-milestone">Уровень по вехам · по XP: ${progress.xpLevel}</span>` : "";
+  return `<section class="xp-track" ${mine ? "role=button tabindex=0 title=\"Добавить или изменить опыт\"" : ""}>
+    <div class="xp-head"><span><b>Опыт</b>${levelByXpNote}</span><strong>${progress.xp.toLocaleString("ru-RU")}${totalLevel(sheet) >= 20 ? " · максимум" : ` / ${progress.next.toLocaleString("ru-RU")}`}</strong></div>
+    <div class="xp-bar"><i style="width:${Math.round(progress.value * 100)}%"></i></div>
+    <div class="xp-foot"><span>${totalLevel(sheet)} уровень</span><span>${totalLevel(sheet) >= 20 ? "Легенда" : `ещё ${progress.remaining.toLocaleString("ru-RU")} XP до ${totalLevel(sheet) + 1}`}</span></div>
+  </section>`;
+}
+function classHighlightsMarkup(sheet) {
+  const cards = classEntries(sheet).flatMap(entry => rules.classHighlights(entry.key, entry.level, sheet).map(item => ({ ...item, classKey:entry.key })));
+  if (!cards.length) return "";
+  return `<section class="class-highlights">${cards.map(item => `<button type="button" class="class-highlight ${item.accent ? "accent" : ""}" ${item.formula ? `data-class-damage="${esc(item.formula)}" title="Нажми, чтобы бросить"` : "disabled"}>${classGlyph(item.classKey)}<span><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong></span>${item.formula ? "<i>бросить</i>" : ""}</button>`).join("")}</section>`;
+}
+function levelFeaturesMarkup(classKey, classLevel) {
+  return rules.featuresAt(classKey, classLevel).map(feature => `<article class="level-gain ${feature.choice ? "choice" : ""}"><span>${feature.choice ? "?" : "✓"}</span><div><strong>${esc(feature.name)}</strong><p>${esc(feature.summary)}</p></div>${feature.choice ? "<b>нужен выбор</b>" : ""}</article>`).join("");
+}
+function commonLevelFeaturesMarkup(level) {
+  const items = [];
+  if ([5,9,13,17].includes(Number(level))) items.push({ name:`Бонус мастерства ${signed(rules.proficiency(level))}`, summary:"Автоматически улучшает атаки с владением, навыки, спасброски и сложность многих умений." });
+  if ([5,11,17].includes(Number(level))) items.push({ name:"Усиление заговоров", summary:"Большинство атакующих заговоров получает дополнительную кость урона по общему уровню персонажа." });
+  return items.map(feature => `<article class="level-gain common"><span>★</span><div><strong>${esc(feature.name)}</strong><p>${esc(feature.summary)}</p></div></article>`).join("");
 }
 function mergeText(current, addition) {
   if (!addition || addition === "Нет") return current || "";
@@ -126,7 +149,8 @@ function syncCharacterMechanics(sheet) {
       } else sheet.resources.push({ id:uuid(), ...source, current:source.max, automatic:true, automaticKey });
     });
   });
-  sheet.schemaVersion = 3;
+  sheet.xp = Math.max(0, Number(sheet.xp) || 0);
+  sheet.schemaVersion = 4;
   if (sheet.autoArmorClass) sheet.ac = calculateAc(sheet);
   return sheet;
 }
@@ -309,6 +333,58 @@ function resolveDiceFormula(expression, sheet) {
   const variables = formulaVariables(sheet);
   return String(expression || "").replace(/\[([A-Z]+)]/gi, (_, key) => String(variables[key.toUpperCase()] ?? 0)).replace(/\+\-/g, "-").replace(/d/gi, "к");
 }
+const abilityAbbreviations = { str:"СИЛ", dex:"ЛОВ", con:"ТЕЛ", int:"ИНТ", wis:"МДР", cha:"ХАР" };
+function parseFormulaParts(expression, kind = "damage") {
+  const source = String(expression || "").replace(/\s+/g, "").replace(/-/g, "+-");
+  return source.split("+").filter(Boolean).map(token => {
+    const variable = token.match(/^\[?(STR|DEX|CON|INT|WIS|CHA|SPELL|PROF)\]?$/i)?.[1]?.toLowerCase();
+    if (variable === "prof") return { id:uuid(), type:"proficiency", value:"prof" };
+    if (variable === "spell") return { id:uuid(), type:"spell", value:"spell" };
+    if (variable && abilityAbbreviations[variable]) return { id:uuid(), type:"ability", value:variable };
+    const die = token.match(/^(\d*)[dк](\d+)$/i);
+    if (die) return { id:uuid(), type:"dice", count:Number(die[1] || 1), sides:Number(die[2]) };
+    if (/^-?\d+$/.test(token)) return { id:uuid(), type:"flat", value:String(Number(token)) };
+    return null;
+  }).filter(Boolean).filter(part => kind === "attack" ? !["dice","sneak","martial"].includes(part.type) : part.type !== "proficiency");
+}
+function formulaParts(attack, kind, sheet) {
+  const saved = kind === "attack" ? attack.attackParts : attack.damageParts;
+  if (Array.isArray(saved) && saved.length) return saved.map(part => ({ ...part, id:part.id || uuid() }));
+  const parsed = parseFormulaParts(kind === "attack" ? attack.bonus : attack.damage, kind);
+  if (parsed.length) return parsed;
+  if (kind === "attack") return [{ id:uuid(), type:"ability", value:modifier(sheet.stats.dex) >= modifier(sheet.stats.str) ? "dex" : "str" },{ id:uuid(), type:"proficiency", value:"prof" }];
+  return [{ id:uuid(), type:"dice", count:1, sides:6 },{ id:uuid(), type:"ability", value:modifier(sheet.stats.dex) >= modifier(sheet.stats.str) ? "dex" : "str" }];
+}
+function formulaPartValue(part, sheet) {
+  if (part.type === "ability") return `[${String(part.value || "str").toUpperCase()}]`;
+  if (part.type === "proficiency") return "[PROF]";
+  if (part.type === "spell") return "[SPELL]";
+  if (part.type === "dice") return `${Math.max(1, Number(part.count) || 1)}к${Math.max(2, Number(part.sides) || 6)}`;
+  if (part.type === "flat") return String(Number(part.value) || 0);
+  if (part.type === "sneak") return `${rules.sneakAttackDice(classLevel(sheet,"rogue"))}к6`;
+  if (part.type === "martial") { const level = classLevel(sheet,"monk"); return `1к${level >= 17 ? 10 : level >= 11 ? 8 : level >= 5 ? 6 : 4}`; }
+  if (part.type === "rage") { const level = classLevel(sheet,"barbarian"); return String(level >= 16 ? 4 : level >= 9 ? 3 : 2); }
+  return "0";
+}
+function formulaFromParts(parts, sheet) {
+  return (parts || []).map(part => formulaPartValue(part, sheet)).filter(Boolean).join("+").replace(/\+(-)/g, "$1") || "0";
+}
+function attackBonusFormula(attack, sheet) { return Array.isArray(attack.attackParts) && attack.attackParts.length ? formulaFromParts(attack.attackParts, sheet) : String(attack.bonus || "0"); }
+function attackDamageFormula(attack, sheet) { return Array.isArray(attack.damageParts) && attack.damageParts.length ? formulaFromParts(attack.damageParts, sheet) : String(attack.damage || ""); }
+function formulaPartLabel(part, sheet) {
+  if (part.type === "ability") return `${signed(modifier(sheet.stats[part.value]))} ${abilityAbbreviations[part.value] || String(part.value).toUpperCase()}`;
+  if (part.type === "proficiency") return `${signed(effectiveProficiency(sheet))} мастерство`;
+  if (part.type === "spell") return `${signed(formulaVariables(sheet).SPELL)} магия`;
+  if (part.type === "flat") return signed(Number(part.value) || 0);
+  if (part.type === "sneak") return `${rules.sneakAttackDice(classLevel(sheet,"rogue"))}к6 скрытая атака`;
+  if (part.type === "martial") return `${formulaPartValue(part,sheet)} кость монаха`;
+  if (part.type === "rage") return `${signed(Number(formulaPartValue(part,sheet)))} ярость`;
+  return `${Math.max(1, Number(part.count) || 1)}к${Math.max(2, Number(part.sides) || 6)}`;
+}
+function friendlyFormula(attack, kind, sheet) {
+  const parts = formulaParts(attack, kind, sheet);
+  return parts.map(part => formulaPartLabel(part, sheet)).join(" + ").replace(/\+ -/g, "− ");
+}
 function getSkillBonus(sheet, key) {
   const skill = skills.find(entry => entry[0] === key);
   if (!skill) return 0;
@@ -338,8 +414,8 @@ function renderSheet() {
   const attackRows = attacksList.length ? attacksList.map(attack => `
     <div class="attack-row">
       <button class="attack-name" data-attack-roll="${esc(attack.id)}">${esc(attack.name || "Безымянная атака")}</button>
-      <button data-attack-roll="${esc(attack.id)}">${signed(resolveBonus(attack.bonus, s))}</button>
-      <button class="attack-damage" data-damage-roll="${esc(attack.id)}">${esc(attack.damage || "—")} ${esc(attack.damageType || "")}</button>
+      <button data-attack-roll="${esc(attack.id)}">${signed(resolveBonus(attackBonusFormula(attack, s), s))}</button>
+      <button class="attack-damage" data-damage-roll="${esc(attack.id)}"><span>${esc(friendlyFormula(attack,"damage",s) || "—")}</span><small>${esc(attack.damageType || "")}</small></button>
       <button data-critical-damage="${esc(attack.id)}" title="Критический урон">✦</button>
       <button data-attack-edit="${esc(attack.id)}">⋮</button>
     </div>`).join("") : `<div class="read-only">Добавь оружие или атаку — бонус и урон можно будет бросать одним нажатием.</div>`;
@@ -364,9 +440,10 @@ function renderSheet() {
   const spellAttack = proficiency + spellMod;
   const preparedCount = (s.spellsList || []).filter(spell => spell.prepared && Number(spell.level) > 0).length;
   const preparedLimit = preparedSpellLimit(s);
-  const monkLevel = classLevel(s, "monk"), rogueLevel = classLevel(s, "rogue");
-  const monkDie = monkLevel >= 17 ? "1к10" : monkLevel >= 11 ? "1к8" : monkLevel >= 5 ? "1к6" : "1к4";
-  const classCombat = rogueLevel ? { label:`Скрытая атака ${rules.sneakAttackDice(rogueLevel)}к6`, formula:`${rules.sneakAttackDice(rogueLevel)}к6` } : monkLevel ? { label:`Безоружный удар ${monkDie}`, formula:`${monkDie}+[DEX]` } : hasClass(s, "warlock") ? { label:"Ячейки договора восстанавливаются после короткого отдыха", formula:"" } : null;
+  const classRoadmaps = classEntries(s).map(entry => `<details class="class-roadmap" ${classEntries(s).length === 1 ? "open" : ""}><summary>${classGlyph(entry.key)}<span><strong>${esc(entry.name || rules.classes[entry.key]?.name)} · ${Number(entry.level)} уровень</strong><small>Все особенности класса по уровням</small></span><i>раскрыть</i></summary><div>${Array.from({length:20},(_,index) => {
+    const level = index + 1, unlocked = level <= Number(entry.level);
+    return `<article class="roadmap-level ${unlocked ? "unlocked" : "locked"} ${level === Number(entry.level) ? "current" : ""}"><b>${level}</b><div><strong>${rules.featuresAt(entry.key,level).map(feature => esc(feature.name)).join(" · ")}</strong><p>${rules.featuresAt(entry.key,level).map(feature => esc(feature.summary)).join(" ")}</p></div></article>`;
+  }).join("")}</div></details>`).join("");
   const featRows = (s.feats || []).map(feat => {
     const key = featKey(feat), info = rules.feats[key];
     return `<article class="feat-chip"><span>${classGlyph(feat.classKey || s.classKey)}</span><div><strong>${esc(feat.name || info?.name || key || "Черта")}</strong><small>${esc(info?.summary || feat.summary || "Добавлена вручную")}</small></div></article>`;
@@ -383,7 +460,9 @@ function renderSheet() {
       <div class="hero-identity"><span class="eyebrow">${esc(s.race || "Раса не выбрана")} · ${esc(s.background || "Предыстория не выбрана")}</span><h1>${esc(s.characterName || player.name)}</h1><p>${esc(classSummary(s))} · общий ${totalLevel(s)} уровень</p></div>
       <div class="hero-vitals"><button data-quick="ac"><small>КД</small><strong>${armorClass}</strong></button><button id="quick-hp"><small>HP</small><strong>${Number(s.hpCurrent)}/${Number(s.hpMax)}</strong></button><button id="quick-initiative"><small>Инициатива</small><strong>${signed(initiative)}</strong></button><button data-quick="passive"><small>Пассивка</small><strong>${10 + getSkillBonus(s,"perception") + passiveBonus(s,"perception")}</strong></button><button id="quick-inspiration" class="${s.inspiration ? "lit" : ""}"><small>Вдохновение</small><strong>${s.inspiration ? "◆" : "◇"}</strong></button></div>
     </section>
+    ${experienceMarkup(s, mine)}
     ${progressionMarkup(s)}
+    ${classHighlightsMarkup(s)}
     ${mine && !s.classKey ? `<section class="character-onboarding"><div><span class="eyebrow">Новый персонаж</span><h2>Готовый герой примерно за минуту</h2><p>Выбери класс, расу, уровень и предысторию — TabaxiTable сам распределит характеристики, рассчитает HP и КД, выдаст навыки, оружие и стартовые заклинания.</p></div><button id="quick-character" class="primary" type="button">✦ Быстро создать</button></section>` : ""}
     <details class="identity-editor"><summary>Ручное редактирование паспорта</summary><div class="sheet-head">
       <label class="character-name">Имя персонажа<input data-field="characterName" value="${esc(s.characterName)}"></label>
@@ -411,7 +490,6 @@ function renderSheet() {
           <label>Инициатива<input data-derived="initiative" value="${signed(initiative)}" readonly></label>
           <label>Скорость<input type="number" data-field="speed" value="${Number(s.speed)}"></label>
         </div>
-        ${classCombat ? `<div class="class-combat-hint" data-section="combat">✦ <span>${esc(classCombat.label)}</span>${classCombat.formula ? `<button type="button" data-class-damage="${esc(classCombat.formula)}">Бросить</button>` : ""}</div>` : ""}
         <div class="panel two-col" data-section="combat">${field("Прыжок в высоту", "jumpHigh", s.jumpHigh || Math.max(0, 3 + modifier(s.stats.str)))}${field("Прыжок в длину", "jumpLong", s.jumpLong || Number(s.stats.str))}</div>
         <div class="panel hp" data-section="combat">
           <label>Максимум<input type="number" data-field="hpMax" value="${Number(s.hpMax)}"></label>
@@ -432,7 +510,7 @@ function renderSheet() {
       <div class="stack">
         <div class="panel" data-section="combat"><h3 class="panel-title">Состояния и истощение</h3><div class="active-conditions">${activeConditions}</div><div class="two-col">${field("Истощение", "exhaustion", s.exhaustion || 0, "number")}${mine ? `<button id="conditions-manager" class="secondary" type="button">Изменить</button>` : ""}</div>${Number(s.exhaustion || 0) > 0 ? `<div class="exhaustion-effect">Уровень ${Math.min(6, Number(s.exhaustion))}: ${esc(rules.exhaustionInfo[Math.min(6, Number(s.exhaustion))])}</div>` : ""}${s.concentrationSpellName ? `<div class="concentration"><span>◉ Концентрация: <strong>${esc(s.concentrationSpellName)}</strong></span>${mine ? `<button id="stop-concentration">Завершить</button>` : ""}</div>` : ""}</div>
         <div class="panel" data-section="equipment"><h3 class="panel-title">Монеты</h3><div class="coins">${coins}</div></div>
-        <div class="panel progression-panel" data-section="features"><div class="panel-heading"><h3 class="panel-title">Развитие персонажа</h3>${mine && totalLevel(s) < 20 ? `<button id="level-up-features" class="secondary" type="button">+ Уровень</button>` : ""}</div><div class="class-summary-list">${classEntries(s).map(entry => `<article>${classGlyph(entry.key)}<div><strong>${esc(entry.name || rules.classes[entry.key]?.name)} ${Number(entry.level)}</strong><small>${esc(entry.subclass || `Подкласс на ${rules.subclassLevel(entry.key)} уровне`)}</small></div></article>`).join("") || `<div class="read-only">Сначала выбери класс.</div>`}</div>${featRows ? `<h3 class="panel-title feat-title">Черты</h3><div class="feat-list">${featRows}</div>` : ""}</div>
+        <div class="panel progression-panel" data-section="features"><div class="panel-heading"><h3 class="panel-title">Развитие персонажа</h3>${mine && totalLevel(s) < 20 ? `<button id="level-up-features" class="secondary" type="button">+ Уровень</button>` : ""}</div><div class="class-summary-list">${classEntries(s).map(entry => `<article>${classGlyph(entry.key)}<div><strong>${esc(entry.name || rules.classes[entry.key]?.name)} ${Number(entry.level)}</strong><small>${esc(entry.subclass || `Подкласс на ${rules.subclassLevel(entry.key)} уровне`)}</small></div></article>`).join("") || `<div class="read-only">Сначала выбери класс.</div>`}</div>${featRows ? `<h3 class="panel-title feat-title">Черты</h3><div class="feat-list">${featRows}</div>` : ""}<h3 class="panel-title roadmap-title">Классовые особенности 1–20</h3><div class="class-roadmaps">${classRoadmaps}</div></div>
         <div class="panel" data-section="features"><h3 class="panel-title">Наследие и особенности</h3>${area("Расовые особенности", "ancestryTraits", s.ancestryTraits || "")}${area("Классовые особенности и умения", "features", s.features)}</div>
         <div class="panel" data-section="features"><h3 class="panel-title">Чувства и защита</h3><div class="bio-grid">${field("Тёмное зрение", "darkvision", s.darkvision || 0, "number")}${field("Слепое зрение", "blindsight", s.blindsight || 0, "number")}${field("Чувство вибрации", "tremorsense", s.tremorsense || 0, "number")}${field("Истинное зрение", "truesight", s.truesight || 0, "number")}</div>${area("Сопротивления", "resistances", s.resistances || "")}${area("Иммунитеты", "immunities", s.immunities || "")}${area("Уязвимости", "vulnerabilities", s.vulnerabilities || "")}</div>
         <div class="panel" data-section="spells"><h3 class="panel-title">Гримуар</h3><div class="spell-summary"><div><small>Сложность</small><strong>${spellSave}</strong></div><div><small>Атака</small><strong>${signed(spellAttack)}</strong></div><div class="${preparedLimit !== null && preparedCount > preparedLimit ? "over-limit" : ""}"><small>Подготовлено</small><strong>${preparedCount}${preparedLimit === null ? "" : `/${preparedLimit}`}</strong></div><label>Характеристика<select data-field="spellcastingAbility"><option value="">—</option>${Object.entries(abilities).map(([key,name]) => `<option value="${key}" ${spellAbility === key ? "selected" : ""}>${name}</option>`).join("")}</select></label></div><div class="spell-slots">${slots || (!pactSlots ? `<span class="read-only">Настрой доступные ячейки.</span>` : "")}${pactSlots}</div><div class="section-actions">${mine ? `<button id="slots-manager" class="secondary" type="button">Ячейки</button><button id="spell-library" class="secondary" type="button">Справочник</button><button id="spell-add" class="secondary" type="button">Хоумбрю</button>` : ""}</div><div class="spell-filters"><input id="owned-spell-search" aria-label="Поиск в гримуаре" placeholder="Поиск в гримуаре"><select id="owned-spell-level" aria-label="Уровень заклинаний"><option value="all">Все уровни</option><option value="0">Заговоры</option>${Array.from({length:9},(_,i)=>`<option value="${i+1}">${i+1} уровень</option>`).join("")}</select><select id="owned-spell-prepared" aria-label="Статус подготовки"><option value="all">Все</option><option value="yes">Подготовленные</option><option value="no">Неподготовленные</option></select></div><div class="entity-list" id="owned-spells">${spellRows || `<div class="read-only">Гримуар пока пуст.</div>`}</div>${area("Заметки заклинателя", "spells", s.spells)}</div>
@@ -551,6 +629,30 @@ function openModal(title, content) {
 }
 function closeModal() { $("#game-modal").close(); $("#game-modal").classList.remove("library-open", "builder-modal"); }
 
+function openExperienceModal() {
+  const sheet = currentSheet(), progress = rules.xpProgress(sheet.xp, totalLevel(sheet));
+  openModal("Опыт персонажа", `<div class="xp-modal-summary"><span><small>Сейчас</small><strong>${progress.xp.toLocaleString("ru-RU")} XP</strong></span><span><small>${totalLevel(sheet) >= 20 ? "Максимальный уровень" : `До ${totalLevel(sheet) + 1} уровня`}</small><strong>${totalLevel(sheet) >= 20 ? "Легенда" : `${progress.remaining.toLocaleString("ru-RU")} XP`}</strong></span></div>
+    <section class="xp-add-card"><span class="eyebrow">После встречи</span><h3>Сколько опыта получил персонаж?</h3><div class="xp-quick">${[50,100,250,500,1000].map(value => `<button type="button" data-xp-quick="${value}">+${value}</button>`).join("")}</div><label>Другое количество<input id="xp-earned" type="number" min="0" step="1" value="0"></label><button id="xp-add" class="primary" type="button">Добавить опыт</button></section>
+    <details class="xp-exact"><summary>Установить точное значение</summary><div><input id="xp-exact-value" type="number" min="0" step="1" value="${progress.xp}"><button id="xp-set" class="secondary" type="button">Сохранить значение</button></div></details>`);
+  $$('[data-xp-quick]').forEach(button => button.addEventListener("click", () => { $("#xp-earned").value = button.dataset.xpQuick; }));
+  const saveXp = (value, reason) => {
+    const next = structuredClone(currentSheet()); next.xp = Math.max(0, Math.floor(Number(value) || 0));
+    const earnedLevel = rules.levelFromXp(next.xp);
+    closeModal(); saveNow(next, "Опыт сохранён", reason); renderSheet();
+    if (earnedLevel > totalLevel(next)) toast(`Опыта хватает на ${earnedLevel} уровень — можно повысить героя`);
+  };
+  $("#xp-add").addEventListener("click", () => saveXp(Number(sheet.xp || 0) + Math.max(0, Number($("#xp-earned").value) || 0), "Получен опыт"));
+  $("#xp-set").addEventListener("click", () => saveXp($("#xp-exact-value").value, "Изменён опыт"));
+}
+
+function openLevelInfo(total) {
+  const sheet = currentSheet(), entry = levelProgression(sheet).find(item => Number(item.level) === Number(total));
+  if (!entry) return;
+  const cls = rules.classes[entry.classKey];
+  openModal(`${Number(total)} уровень · ${cls?.name || entry.classKey}`, `<div class="level-info-head">${classGlyph(entry.classKey)}<div><span class="eyebrow">Общий уровень ${Number(total)}</span><h3>${esc(cls?.name || entry.classKey)} ${Number(entry.classLevel)}</h3>${entry.choice ? `<p>Сделанный выбор: <strong>${esc(entry.choice)}</strong></p>` : ""}</div></div><div class="level-gains">${levelFeaturesMarkup(entry.classKey, entry.classLevel)}${commonLevelFeaturesMarkup(total)}</div><div class="read-only">Также увеличиваются максимум HP и запас костей хитов этого класса.</div><button id="level-info-close" class="primary" type="button">Понятно</button>`);
+  $("#level-info-close").addEventListener("click", closeModal);
+}
+
 function bindGameControls() {
   $("#character-builder")?.addEventListener("click", () => openCharacterBuilderV2(false));
   $("#quick-character")?.addEventListener("click", () => openCharacterBuilderV2(true));
@@ -565,6 +667,9 @@ function bindGameControls() {
   $("#quick-hp")?.addEventListener("click", openHealthModal);
   $("#quick-initiative")?.addEventListener("click", () => roll(`1к20${signed(initiativeBonus(currentSheet()))}`, "Инициатива", currentSheet().initiativeAdvantage ? { mode:"advantage" } : {}));
   $("#quick-inspiration")?.addEventListener("click", toggleInspiration);
+  $(".xp-track")?.addEventListener("click", openExperienceModal);
+  $(".xp-track")?.addEventListener("keydown", event => { if (["Enter"," "].includes(event.key)) { event.preventDefault(); openExperienceModal(); } });
+  $$('[data-level-info]').forEach(button => button.addEventListener("click", () => openLevelInfo(button.dataset.levelInfo)));
   $("#death-save-roll")?.addEventListener("click", rollDeathSave);
   $$('[data-class-damage]').forEach(button => button.addEventListener("click", () => roll(resolveDiceFormula(button.dataset.classDamage, currentSheet()), button.closest(".class-combat-hint")?.querySelector("span")?.textContent || "Классовый урон", { mode:"normal" })));
   $("#attack-add")?.addEventListener("click", () => openAttackModal());
@@ -573,18 +678,20 @@ function bindGameControls() {
   $$('[data-attack-edit]').forEach(button => button.addEventListener("click", () => openAttackModal(button.dataset.attackEdit)));
   $$('[data-attack-roll]').forEach(button => button.addEventListener("click", () => {
     const attack = currentSheet().attacksList.find(item => item.id === button.dataset.attackRoll);
-    if (attack) roll(`1к20${signed(resolveBonus(attack.bonus, currentSheet()))}`, `Атака: ${attack.name}`, { onResult: response => {
+    if (attack) roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,currentSheet()), currentSheet()))}`, `Атака: ${attack.name}`, { onResult: response => {
       if (response.natural === 20) { state.lastCriticalAttackId = attack.id; toast("Натуральная 20! Жми ✦ для критического урона"); }
       else if (response.natural === 1) toast("Натуральная 1 — автоматический промах");
     }});
   }));
   $$('[data-damage-roll]').forEach(button => button.addEventListener("click", () => {
     const attack = currentSheet().attacksList.find(item => item.id === button.dataset.damageRoll);
-    if (attack?.damage) roll(resolveDiceFormula(attack.damage, currentSheet()), `Урон: ${attack.name}`, { mode:"normal" });
+    const formula = attack ? attackDamageFormula(attack,currentSheet()) : "";
+    if (formula) roll(resolveDiceFormula(formula, currentSheet()), `Урон: ${attack.name}`, { mode:"normal" });
   }));
   $$('[data-critical-damage]').forEach(button => button.addEventListener("click", () => {
     const attack = currentSheet().attacksList.find(item => item.id === button.dataset.criticalDamage);
-    if (attack?.damage) roll(criticalFormula(resolveDiceFormula(attack.damage, currentSheet())), `Критический урон: ${attack.name}`, { mode:"normal" });
+    const formula = attack ? attackDamageFormula(attack,currentSheet()) : "";
+    if (formula) roll(criticalFormula(resolveDiceFormula(formula, currentSheet())), `Критический урон: ${attack.name}`, { mode:"normal" });
   }));
   $$('[data-slot-use]').forEach(button => button.addEventListener("click", () => changeSlot(Number(button.dataset.slotUse), 1)));
   $$('[data-slot-restore]').forEach(button => button.addEventListener("click", () => changeSlot(Number(button.dataset.slotRestore), -1)));
@@ -629,8 +736,10 @@ function addStarterItem(sheet, source) {
   const equipped = source.type === "armor";
   sheet.inventoryList.push({ ...structuredClone(source), key:undefined, catalogKey:source.key, id:itemId, quantity:1, equipped, attuned:false, magical:false, description:source.properties || "" });
   if (source.type !== "weapon") return;
-  const ability = source.ability === "finesse" ? (modifier(sheet.stats.dex) >= modifier(sheet.stats.str) ? "DEX" : "STR") : source.ability.toUpperCase();
-  sheet.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, bonus:`[${ability}]+[PROF]`, damage:`${source.damage}+[${ability}]`, damageType:source.damageType });
+  const ability = source.ability === "finesse" ? (modifier(sheet.stats.dex) >= modifier(sheet.stats.str) ? "dex" : "str") : source.ability;
+  const attackParts = [{ id:uuid(), type:"ability", value:ability },{ id:uuid(), type:"proficiency", value:"prof" }];
+  const damageParts = [...parseFormulaParts(source.damage,"damage"),{ id:uuid(), type:"ability", value:ability }];
+  sheet.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, attackParts, damageParts, bonus:formulaFromParts(attackParts,sheet), damage:formulaFromParts(damageParts,sheet), damageType:source.damageType });
 }
 
 function addStarterEquipment(sheet, classKey, backgroundKey) {
@@ -701,6 +810,7 @@ function openCharacterBuilderV2(quickStart = false) {
         <div class="builder-section-head"><div><span class="eyebrow">Последние штрихи</span><h3>Навыки и готовый набор</h3></div><span id="builder-skill-count" class="builder-counter"></span></div>
         <div id="builder-background-skills" class="builder-grants"></div>
         <div id="builder-skills" class="builder-skills-v2"></div>
+        <div id="builder-expertise" class="builder-expertise"></div>
         <div id="builder-review" class="builder-review"></div>
         <details class="builder-advanced"><summary>Дополнительные настройки</summary><div class="automation-options">
           <label class="toggle-row"><span><strong>Автоматическая КД</strong><small>По классу и надетой броне</small></span><input id="builder-ac" type="checkbox" ${s.autoArmorClass !== false ? "checked" : ""}><i></i></label>
@@ -767,6 +877,25 @@ function openCharacterBuilderV2(quickStart = false) {
     $$('[data-builder-skill]').forEach(input => input.addEventListener("change", () => {
       const checked = $$('[data-builder-skill]:checked');
       if (checked.length > (rule?.count || 0)) input.checked = false;
+      refreshExpertise(false); refreshReview();
+    }));
+  };
+
+  const refreshExpertise = (autoPick = false) => {
+    const { classKey, raceKey, backgroundKey, level } = currentKeys();
+    const count = Array.from({length:level}, (_,index) => rules.expertiseChoicesAt(classKey,index + 1)).reduce((sum,value) => sum + value, 0);
+    const root = $("#builder-expertise");
+    if (!count) { root.innerHTML = ""; return; }
+    const background = rules.backgrounds[backgroundKey], race = rules.races[raceKey];
+    const available = [...new Set([...(background.skills || []), ...(race.skills || []), ...$$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill)])];
+    const previous = new Set($$('[data-builder-expertise]:checked').map(input => input.dataset.builderExpertise));
+    const selected = available.filter(key => previous.has(key) || (s.expertise || []).includes(key)).slice(0,count);
+    if (autoPick || !selected.length) available.forEach(key => { if (selected.length < count && !selected.includes(key)) selected.push(key); });
+    root.innerHTML = `<div class="builder-section-head"><div><span class="eyebrow">Особенность ${rules.classes[classKey].name.toLowerCase()}</span><h3>Компетентность: выбери ${count}</h3></div><span class="builder-counter" id="builder-expertise-count">${selected.length}/${count}</span></div><p class="builder-help">Для выбранных навыков бонус мастерства удваивается. Это особенно важно для плута.</p><div class="builder-skills-v2">${available.map(key => `<label class="skill-choice expertise-choice"><input type="checkbox" data-builder-expertise="${key}" ${selected.includes(key) ? "checked" : ""}><i></i><span>${skillName(key)}</span></label>`).join("")}</div>`;
+    $$('[data-builder-expertise]').forEach(input => input.addEventListener("change", () => {
+      const checked = $$('[data-builder-expertise]:checked');
+      if (checked.length > count) input.checked = false;
+      $("#builder-expertise-count").textContent = `${$$('[data-builder-expertise]:checked').length}/${count}`;
       refreshReview();
     }));
   };
@@ -788,15 +917,18 @@ function openCharacterBuilderV2(quickStart = false) {
     $("#builder-next").classList.toggle("hidden", index === order.length - 1);
     $("#builder-finish").classList.toggle("hidden", index !== order.length - 1);
     if (step === "abilities" && autoStats) applyRecommendedStats();
-    if (step === "details") { refreshSkills(!s.classKey); refreshReview(); }
+    if (step === "details") { refreshSkills(!s.classKey); refreshExpertise(!s.classKey); refreshReview(); }
   };
 
   const finish = async instant => {
     const { classKey, raceKey, backgroundKey, level } = currentKeys();
-    if (instant) { applyRecommendedStats(); refreshSkills(true); }
+    if (instant) { applyRecommendedStats(); refreshSkills(true); refreshExpertise(true); }
     const cls = rules.classes[classKey], race = rules.races[raceKey], background = rules.backgrounds[backgroundKey], skillRule = rules.classSkills[classKey];
     const selectedClassSkills = $$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill);
+    const selectedExpertise = $$('[data-builder-expertise]:checked').map(input => input.dataset.builderExpertise);
+    const expertiseCount = Array.from({length:level}, (_,index) => rules.expertiseChoicesAt(classKey,index + 1)).reduce((sum,value) => sum + value, 0);
     if (selectedClassSkills.length < (skillRule?.count || 0) && !instant) return toast(`Выбери ещё ${(skillRule?.count || 0) - selectedClassSkills.length} навык(а)`);
+    if (selectedExpertise.length < expertiseCount && !instant) return toast(`Выбери ещё ${expertiseCount - selectedExpertise.length} навык(а) для компетентности`);
     const next = structuredClone(currentSheet());
     next.characterName = $("#builder-name").value.trim() || next.characterName || "Безымянный герой";
     next.classKey = classKey; next.className = cls.name; next.raceKey = raceKey; next.race = race.name;
@@ -809,6 +941,7 @@ function openCharacterBuilderV2(quickStart = false) {
     next.autoProficiency = true; next.autoSpellSlots = true; next.autoArmorClass = $("#builder-ac").checked;
     next.proficiency = rules.proficiency(level); next.saveProficiencies = [...cls.saves];
     next.skillProficiencies = [...new Set([...(background.skills || []), ...(race.skills || []), ...selectedClassSkills])];
+    next.expertise = [...new Set(selectedExpertise)];
     next.spellcastingAbility = cls.spellAbility || "";
     next.hitDieSize = cls.hitDie; next.hitDiceMax = level; next.hitDiceCurrent = level; next.hitDicePools = [{ sides:cls.hitDie, total:level, current:level }];
     const recommendedAdvancements = rules.abilityBuild(classKey, raceKey, level).advancements;
@@ -817,6 +950,7 @@ function openCharacterBuilderV2(quickStart = false) {
     next.armorProficiencies = cls.armor; next.weaponProficiencies = cls.weapons;
     next.toolProficiencies = background.tools || ""; next.languages = [race.languages, background.languages].filter(value => value && value !== "—").join("; ");
     next.size = race.size; next.speed = race.speed; next.darkvision = race.darkvision; next.ancestryTraits = race.traits;
+    next.xp = Math.max(Number(next.xp || 0), rules.xpForLevel(level));
     if ($("#builder-hp").checked || instant) { next.hpMax = rules.fixedHp(cls.hitDie, level, modifier(next.stats.con)); next.hpCurrent = next.hpMax; next.hpTemp = 0; }
     const totals = rules.slotsFor(classKey, level);
     next.spellSlots = Array.from({length:9}, (_,i) => ({ level:i+1, total:Number(totals[i] || 0), used:0 }));
@@ -837,7 +971,7 @@ function openCharacterBuilderV2(quickStart = false) {
   ["builder-class","builder-race","builder-background","builder-level"].forEach(id => $("#" + id).addEventListener("change", () => {
     refreshConcept();
     if (autoStats) applyRecommendedStats();
-    if (currentStep === "details") { refreshSkills(true); refreshReview(); }
+    if (currentStep === "details") { refreshSkills(true); refreshExpertise(true); refreshReview(); }
   }));
   $("#builder-name").addEventListener("input", refreshReview);
   statInputs().forEach(input => input.addEventListener("input", () => { autoStats = false; input.dataset.base = Number(input.value || 10) - Number(input.dataset.bonus || 0); refreshStatsSummary(); }));
@@ -883,7 +1017,9 @@ function openLevelUpWizard() {
       <div id="level-up-eligibility"></div>
       <div id="level-up-subclass"></div>
       <div id="level-up-skill"></div>
+      <div id="level-up-expertise"></div>
       <div id="level-up-advancement"></div>
+      <section class="level-choice level-gains-panel"><div class="panel-heading"><div><span class="eyebrow">Что откроется</span><h3>Новые возможности уровня</h3></div></div><div id="level-up-gains" class="level-gains"></div></section>
       <div id="level-up-preview" class="level-up-preview"></div>
       <footer class="builder-footer"><button id="level-up-cancel" class="secondary" type="button">Отмена</button><span></span><button id="level-up-apply" class="primary" type="button">Получить ${oldTotal + 1} уровень</button></footer>
     </div>`);
@@ -930,6 +1066,19 @@ function openLevelUpWizard() {
     showChoice("asi2");
   };
 
+  const renderLevelExpertise = () => {
+    const { key, nextClassLevel } = targetData(), count = rules.expertiseChoicesAt(key,nextClassLevel), root = $("#level-up-expertise");
+    if (!count) { root.innerHTML = ""; return; }
+    const addedSkill = $("#level-up-multiclass-skill")?.value;
+    const available = [...new Set([...(current.skillProficiencies || []), ...(addedSkill ? [addedSkill] : [])])].filter(skillKey => !(current.expertise || []).includes(skillKey));
+    root.innerHTML = `<section class="level-choice"><div class="panel-heading"><div><span class="eyebrow">Классовый выбор</span><h3>Компетентность: выбери ${count}</h3></div><span id="level-expertise-count" class="required-badge">0/${count}</span></div><p class="builder-help">Бонус мастерства выбранных навыков будет удвоен.</p><div class="level-skill-picks">${available.map(skillKey => `<label><input type="checkbox" data-level-expertise="${skillKey}"><span>${skillName(skillKey)}</span></label>`).join("")}</div></section>`;
+    $$('[data-level-expertise]').forEach(input => input.addEventListener("change", () => {
+      if ($$('[data-level-expertise]:checked').length > count) input.checked = false;
+      $("#level-expertise-count").textContent = `${$$('[data-level-expertise]:checked').length}/${count}`;
+      updatePreview();
+    }));
+  };
+
   const renderTarget = () => {
     const { key, cls, existing, nextClassLevel } = targetData();
     const eligibility = multiclassEligibility(current, key);
@@ -942,8 +1091,10 @@ function openLevelUpWizard() {
     const skillOptions = (rules.classSkills[key]?.options || skills.map(([skillKey]) => skillKey)).filter(skillKey => !current.skillProficiencies.includes(skillKey));
     $("#level-up-skill").innerHTML = grants ? `<section class="level-choice"><span class="eyebrow">Мультикласс</span><h3>Дополнительный навык</h3><select id="level-up-multiclass-skill">${skillOptions.map(skillKey => `<option value="${skillKey}">${skillName(skillKey)}</option>`).join("")}</select></section>` : "";
     renderAdvancement();
+    renderLevelExpertise();
+    $("#level-up-gains").innerHTML = levelFeaturesMarkup(key,nextClassLevel) + commonLevelFeaturesMarkup(oldTotal + 1);
     $("#level-up-subclass-select")?.addEventListener("change", updatePreview);
-    $("#level-up-multiclass-skill")?.addEventListener("change", updatePreview);
+    $("#level-up-multiclass-skill")?.addEventListener("change", () => { renderLevelExpertise(); updatePreview(); });
     $("#level-up-apply").disabled = !eligibility.ok;
     updatePreview();
   };
@@ -964,6 +1115,9 @@ function openLevelUpWizard() {
     const { key, cls, existing, nextClassLevel } = targetData();
     const eligibility = multiclassEligibility(current, key);
     if (!eligibility.ok) return toast("Характеристики пока не подходят для этого мультикласса");
+    const expertiseRequired = rules.expertiseChoicesAt(key,nextClassLevel);
+    const expertisePicks = $$('[data-level-expertise]:checked').map(input => input.dataset.levelExpertise);
+    if (expertisePicks.length < expertiseRequired) return toast(`Выбери ${expertiseRequired} навык(а) для компетентности`);
     const next = structuredClone(current);
     next.classes = classEntries(next).map(entry => ({ ...entry }));
     next.levelProgression = levelProgression(next).map(entry => ({ ...entry }));
@@ -1021,6 +1175,9 @@ function openLevelUpWizard() {
     const hpGain = Math.max(1, baseGain + (newCon - oldCon) * oldTotal + toughGain);
     next.hpMax = Math.max(1, Number(next.hpMax || 0) + hpGain);
     next.hpCurrent = Math.min(next.hpMax, Number(next.hpCurrent || 0) + hpGain);
+    next.expertise = [...new Set([...(next.expertise || []), ...expertisePicks])];
+    if (expertisePicks.length) advancementChoice = [advancementChoice, `Компетентность: ${expertisePicks.map(skillName).join(", ")}`].filter(Boolean).join(" · ");
+    next.xp = Math.max(Number(next.xp || 0), rules.xpForLevel(oldTotal + 1));
     next.levelProgression.push({ level:oldTotal + 1, classKey:key, classLevel:nextClassLevel, choice:advancementChoice });
     syncCharacterMechanics(next);
     closeModal(); saveNow(next, `${oldTotal + 1} уровень получен`, `Повышение уровня: ${cls.name} ${nextClassLevel}`); renderSheet();
@@ -1221,8 +1378,10 @@ function openItemCatalog() {
       const itemId = uuid();
       next.inventoryList.push({ ...structuredClone(source), id:itemId, quantity:1, equipped:false, attuned:false, magical:false, description:source.properties || "" });
       if (source.type === "weapon") {
-        const ability = source.ability === "finesse" ? (modifier(next.stats.dex) >= modifier(next.stats.str) ? "DEX" : "STR") : source.ability.toUpperCase();
-        next.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, bonus:`[${ability}]+[PROF]`, damage:`${source.damage}+[${ability}]`, damageType:source.damageType });
+        const ability = source.ability === "finesse" ? (modifier(next.stats.dex) >= modifier(next.stats.str) ? "dex" : "str") : source.ability;
+        const attackParts = [{ id:uuid(), type:"ability", value:ability },{ id:uuid(), type:"proficiency", value:"prof" }];
+        const damageParts = [...parseFormulaParts(source.damage,"damage"),{ id:uuid(), type:"ability", value:ability }];
+        next.attacksList.push({ id:uuid(), sourceItemId:itemId, name:source.name, attackParts, damageParts, bonus:formulaFromParts(attackParts,next), damage:formulaFromParts(damageParts,next), damageType:source.damageType });
       }
       saveNow(next, `${source.name} добавлен`, "Снаряжение");
       button.textContent = "Добавлено ✓"; button.disabled = true;
@@ -1375,15 +1534,73 @@ function rollDeathSave() {
 function openAttackModal(id = null) {
   const sheet = currentSheet();
   const attack = sheet.attacksList.find(item => item.id === id) || { id: uuid(), name: "", bonus: "[DEX]+[PROF]", damage: "1d6+[DEX]", damageType: "", notes: "" };
-  openModal(id ? "Настроить атаку" : "Новая атака", `
-    <label>Название<input id="attack-name" value="${esc(attack.name)}" placeholder="Длинный лук +1"></label>
-    <div class="two-col"><label>Бонус атаки<input id="attack-bonus" value="${esc(attack.bonus)}" placeholder="[DEX]+[PROF]+1"></label><label>Урон<input id="attack-damage" value="${esc(attack.damage)}" placeholder="1d8+[DEX]+1"></label></div>
-    <label>Тип урона<input id="attack-type" value="${esc(attack.damageType)}" placeholder="колющий"></label>
-    <label>Заметки<textarea id="attack-notes">${esc(attack.notes)}</textarea></label>
-    <div class="modal-actions"><button id="attack-save" class="primary">Сохранить</button>${id ? `<button id="attack-delete" class="secondary">Удалить</button>` : ""}</div>`);
+  const draft = { attack:formulaParts(attack,"attack",sheet), damage:formulaParts(attack,"damage",sheet) };
+  const palettePiece = (zone, type, label, extra = {}) => `<button type="button" draggable="true" data-lego-zone="${zone}" data-lego-type="${type}" ${extra.value !== undefined ? `data-lego-value="${esc(extra.value)}"` : ""} ${extra.count ? `data-lego-count="${extra.count}"` : ""} ${extra.sides ? `data-lego-sides="${extra.sides}"` : ""}><b>${esc(label)}</b><small>нажми или перетащи</small></button>`;
+  const abilityPieces = Object.keys(abilities).map(key => palettePiece("attack","ability",`+ ${abilityAbbreviations[key]}`,{value:key})).join("");
+  const damageAbilities = Object.keys(abilities).map(key => palettePiece("damage","ability",`+ ${abilityAbbreviations[key]}`,{value:key})).join("");
+  const classPieces = [
+    hasClass(sheet,"rogue") ? palettePiece("damage","sneak","+ Скрытая атака") : "",
+    hasClass(sheet,"monk") ? palettePiece("damage","martial","Кость монаха") : "",
+    hasClass(sheet,"barbarian") ? palettePiece("damage","rage","+ Урон ярости") : ""
+  ].join("");
+  $("#game-modal").classList.add("library-open");
+  openModal(id ? "Конструктор атаки" : "Новая атака", `
+    <div class="attack-builder">
+      <div class="lego-intro"><span>🧱</span><div><strong>Собери атаку как конструктор</strong><p>Нажимай на детали или перетаскивай их в полосу. TabaxiTable сам посчитает характеристики и мастерство.</p></div></div>
+      <label class="attack-builder-name">Название<input id="attack-name" value="${esc(attack.name)}" placeholder="Например, длинный лук +1"></label>
+      <section class="formula-builder-card"><div class="formula-builder-head"><div><span class="eyebrow">Попадание</span><h3>Что прибавить к к20?</h3></div><b>к20 уже добавлен</b></div>
+        <div class="lego-palette compact">${abilityPieces}${palettePiece("attack","proficiency","+ Мастерство")}${palettePiece("attack","spell","+ Магия")}${palettePiece("attack","flat","+ Свой бонус",{value:1})}</div>
+        <div id="attack-parts" class="lego-zone" data-lego-drop="attack"></div><div id="attack-formula-preview" class="formula-preview"></div>
+      </section>
+      <section class="formula-builder-card"><div class="formula-builder-head"><div><span class="eyebrow">Урон</span><h3>Из чего складывается урон?</h3></div><b>порядок не важен</b></div>
+        <div class="lego-palette">${[4,6,8,10,12].map(sides => palettePiece("damage","dice",`1к${sides}`,{count:1,sides})).join("")}${palettePiece("damage","dice","2к6",{count:2,sides:6})}${damageAbilities}${palettePiece("damage","spell","+ Магия")}${palettePiece("damage","flat","+ Свой бонус",{value:1})}${classPieces}</div>
+        <div id="damage-parts" class="lego-zone damage-zone" data-lego-drop="damage"></div><div id="damage-formula-preview" class="formula-preview"></div>
+      </section>
+      <div class="two-col"><label>Тип урона<input id="attack-type" list="damage-types" value="${esc(attack.damageType)}" placeholder="Выбери или напиши"><datalist id="damage-types">${["дробящий","колющий","рубящий","огонь","холод","электричество","кислота","яд","психический","некротический","излучение","силовое поле","звук"].map(type => `<option value="${type}">`).join("")}</datalist></label><label>Короткая памятка<input id="attack-notes" value="${esc(attack.notes)}" placeholder="Дальность, особое условие..."></label></div>
+      <div class="modal-actions"><button id="attack-save" class="primary">Сохранить атаку</button>${id ? `<button id="attack-delete" class="secondary">Удалить</button>` : `<button id="attack-cancel" class="secondary">Отмена</button>`}</div>
+    </div>`);
+
+  const addPart = (zone, source) => {
+    const type = source.dataset.legoType;
+    if (!["dice","flat"].includes(type) && draft[zone].some(part => part.type === type && String(part.value || "") === String(source.dataset.legoValue || ""))) return toast("Такая деталь уже добавлена");
+    draft[zone].push({ id:uuid(), type, value:source.dataset.legoValue || "", count:Number(source.dataset.legoCount || 1), sides:Number(source.dataset.legoSides || 6) });
+    renderParts();
+  };
+  const partChip = (part, zone) => `<div class="lego-piece" draggable="true" data-lego-part="${esc(part.id)}"><span>${esc(formulaPartLabel(part,sheet))}</span>${part.type === "flat" ? `<input data-lego-flat="${esc(part.id)}" type="number" value="${Number(part.value) || 0}" aria-label="Числовой бонус">` : ""}<button type="button" data-lego-remove="${esc(part.id)}" data-lego-remove-zone="${zone}" aria-label="Убрать деталь">×</button></div>`;
+  function renderParts() {
+    ["attack","damage"].forEach(zone => {
+      const root = $(`#${zone}-parts`);
+      root.innerHTML = draft[zone].length ? draft[zone].map(part => partChip(part,zone)).join("") : `<span class="lego-empty">Перетащи детали сюда или нажми на них выше</span>`;
+    });
+    const attackFormula = formulaFromParts(draft.attack,sheet), damageFormula = formulaFromParts(draft.damage,sheet);
+    $("#attack-formula-preview").innerHTML = `<span>Получится</span><strong>к20 ${signed(resolveBonus(attackFormula,sheet))}</strong><small>${esc(draft.attack.map(part => formulaPartLabel(part,sheet)).join(" + ") || "без бонуса")}</small>`;
+    $("#damage-formula-preview").innerHTML = `<span>Получится</span><strong>${esc(resolveDiceFormula(damageFormula,sheet))}</strong><small>${esc(draft.damage.map(part => formulaPartLabel(part,sheet)).join(" + ") || "урон не задан")}</small>`;
+    $$('[data-lego-remove]').forEach(button => button.addEventListener("click", () => { draft[button.dataset.legoRemoveZone] = draft[button.dataset.legoRemoveZone].filter(part => part.id !== button.dataset.legoRemove); renderParts(); }));
+    $$('[data-lego-flat]').forEach(input => input.addEventListener("input", () => { const part = [...draft.attack,...draft.damage].find(item => item.id === input.dataset.legoFlat); if (part) part.value = String(Number(input.value) || 0); renderPreviews(); }));
+  }
+  function renderPreviews() {
+    const attackFormula = formulaFromParts(draft.attack,sheet), damageFormula = formulaFromParts(draft.damage,sheet);
+    $("#attack-formula-preview").innerHTML = `<span>Получится</span><strong>к20 ${signed(resolveBonus(attackFormula,sheet))}</strong><small>${esc(draft.attack.map(part => formulaPartLabel(part,sheet)).join(" + ") || "без бонуса")}</small>`;
+    $("#damage-formula-preview").innerHTML = `<span>Получится</span><strong>${esc(resolveDiceFormula(damageFormula,sheet))}</strong><small>${esc(draft.damage.map(part => formulaPartLabel(part,sheet)).join(" + ") || "урон не задан")}</small>`;
+  }
+  $$('[data-lego-type]').forEach(button => {
+    button.addEventListener("click", () => addPart(button.dataset.legoZone,button));
+    button.addEventListener("dragstart", event => event.dataTransfer.setData("text/plain", JSON.stringify({ zone:button.dataset.legoZone, type:button.dataset.legoType, value:button.dataset.legoValue || "", count:button.dataset.legoCount || 1, sides:button.dataset.legoSides || 6 })));
+  });
+  $$('[data-lego-drop]').forEach(zone => {
+    zone.addEventListener("dragover", event => { event.preventDefault(); zone.classList.add("dragover"); });
+    zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
+    zone.addEventListener("drop", event => {
+      event.preventDefault(); zone.classList.remove("dragover");
+      try { const data = JSON.parse(event.dataTransfer.getData("text/plain")); if (data.zone !== zone.dataset.legoDrop) return toast("Эта деталь сюда не подходит"); addPart(data.zone,{ dataset:{ legoType:data.type, legoValue:data.value, legoCount:data.count, legoSides:data.sides } }); } catch { toast("Не получилось добавить деталь"); }
+    });
+  });
+  renderParts();
   $("#attack-save").addEventListener("click", () => {
     const next = structuredClone(currentSheet());
-    const value = { ...attack, id: attack.id, name: $("#attack-name").value.trim(), bonus: $("#attack-bonus").value.trim(), damage: $("#attack-damage").value.trim(), damageType: $("#attack-type").value.trim(), notes: $("#attack-notes").value.trim() };
+    const name = $("#attack-name").value.trim();
+    if (!name) return toast("Дай атаке понятное название");
+    const value = { ...attack, id: attack.id, name, attackParts:draft.attack, damageParts:draft.damage, bonus:formulaFromParts(draft.attack,sheet), damage:formulaFromParts(draft.damage,sheet), damageType: $("#attack-type").value.trim(), notes: $("#attack-notes").value.trim() };
     const index = next.attacksList.findIndex(item => item.id === attack.id);
     if (index >= 0) next.attacksList[index] = value; else next.attacksList.push(value);
     closeModal(); saveNow(next, "Атака сохранена", "Атаки"); renderSheet();
@@ -1394,6 +1611,7 @@ function openAttackModal(id = null) {
     next.attacksList = next.attacksList.filter(item => item.id !== attack.id);
     closeModal(); saveNow(next, "Атака удалена", "Удаление атаки"); renderSheet();
   });
+  $("#attack-cancel")?.addEventListener("click", closeModal);
 }
 
 function openConditionsModal() {

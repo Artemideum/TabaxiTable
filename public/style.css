@@ -495,6 +495,104 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .pact-slot-row .slot-pip { border-color: #9076c7; background: #9076c7; }
 .pact-slot-row .slot-pip.used { background: transparent; }
 
+/* Опыт и заметные классовые показатели */
+.xp-track { display: grid; gap: 7px; margin: -4px 0 12px; padding: 11px 14px; border: 1px solid var(--line); border-radius: 13px; background: linear-gradient(90deg,#100e0c,#17120e); }
+.xp-track[role="button"] { cursor: pointer; transition: border-color .18s, transform .18s; }
+.xp-track[role="button"]:hover, .xp-track[role="button"]:focus-visible { border-color: var(--gold); transform: translateY(-1px); outline: none; }
+.xp-head, .xp-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.xp-head > span { display: flex; align-items: center; gap: 8px; }
+.xp-head b { color: var(--gold-2); font-size: 12px; }
+.xp-head strong { font-size: 11px; }
+.xp-foot { color: var(--muted); font-size: 9px; }
+.xp-milestone { padding: 3px 7px; border: 1px solid #745737; border-radius: 999px; color: var(--muted); font-size: 8px; }
+.xp-bar { height: 8px; overflow: hidden; border-radius: 99px; background: #080706; box-shadow: inset 0 1px 3px #000; }
+.xp-bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#93652f,#e4bd73); box-shadow: 0 0 16px #c8974d88; }
+.class-highlights { display: flex; gap: 7px; overflow-x: auto; margin: -5px 0 15px; padding: 2px 1px 5px; scrollbar-width: thin; }
+.class-highlight { flex: 0 0 auto; min-width: 145px; display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); text-align: left; border: 1px solid var(--line); border-radius: 12px; background: #0e0c0a; }
+.class-highlight:not(:disabled) { cursor: pointer; }
+.class-highlight:not(:disabled):hover, .class-highlight.accent { border-color: #a87c43; background: #9f78421c; }
+.class-highlight:disabled { opacity: 1; }
+.class-highlight .class-glyph { width: 27px; height: 27px; flex-basis: 27px; transform: scale(.9); }
+.class-highlight span, .class-highlight small, .class-highlight strong { display: block; }
+.class-highlight small { color: var(--muted); font-size: 9px; }
+.class-highlight strong { margin-top: 2px; color: var(--gold-2); font-size: 12px; }
+.class-highlight i { margin-left: auto; color: var(--gold); font-size: 8px; font-style: normal; text-transform: uppercase; }
+.xp-modal-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.xp-modal-summary span { padding: 13px; border: 1px solid var(--line); border-radius: 12px; background: #100e0c; }
+.xp-modal-summary small, .xp-modal-summary strong { display: block; }
+.xp-modal-summary small { color: var(--muted); }
+.xp-modal-summary strong { margin-top: 4px; color: var(--gold-2); }
+.xp-add-card { display: grid; gap: 10px; padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.xp-add-card h3 { margin: 0; font: 700 17px Unbounded; }
+.xp-quick { display: grid; grid-template-columns: repeat(5,1fr); gap: 6px; }
+.xp-quick button { padding: 8px 4px; color: var(--gold-2); border: 1px solid #745737; border-radius: 8px; background: #100e0c; cursor: pointer; }
+.xp-exact summary { color: var(--muted); cursor: pointer; }
+.xp-exact > div { display: grid; grid-template-columns: 1fr auto; gap: 8px; margin-top: 8px; }
+
+/* Дорожная карта способностей */
+.roadmap-title { margin-top: 18px; }
+.class-roadmaps { display: grid; gap: 8px; }
+.class-roadmap { border: 1px solid var(--line); border-radius: 12px; background: #0d0b09; overflow: hidden; }
+.class-roadmap > summary { display: flex; align-items: center; gap: 10px; padding: 10px; cursor: pointer; list-style: none; }
+.class-roadmap > summary::-webkit-details-marker { display: none; }
+.class-roadmap > summary span, .class-roadmap > summary strong, .class-roadmap > summary small { display: block; }
+.class-roadmap > summary span { min-width: 0; flex: 1; }
+.class-roadmap > summary small { color: var(--muted); margin-top: 2px; }
+.class-roadmap > summary i { color: var(--muted); font-size: 9px; font-style: normal; }
+.class-roadmap > div { max-height: 520px; overflow-y: auto; border-top: 1px solid var(--line); }
+.roadmap-level { display: grid; grid-template-columns: 30px 1fr; gap: 9px; padding: 10px; border-bottom: 1px solid #4b3b2b55; }
+.roadmap-level > b { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 50%; color: var(--muted); background: #17130f; }
+.roadmap-level strong, .roadmap-level p { margin: 0; }
+.roadmap-level strong { color: var(--text); font-size: 11px; }
+.roadmap-level p { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.45; }
+.roadmap-level.locked { opacity: .42; }
+.roadmap-level.current { background: #9f78421b; box-shadow: inset 3px 0 var(--gold); }
+.roadmap-level.current > b, .roadmap-level.unlocked > b { color: #171009; background: var(--gold-2); }
+.level-info-head { display: flex; gap: 12px; align-items: center; }
+.level-info-head .class-glyph { width: 48px; height: 48px; flex-basis: 48px; }
+.level-info-head h3, .level-info-head p { margin: 3px 0; }
+.level-gains { display: grid; gap: 7px; }
+.level-gain { display: grid; grid-template-columns: 28px 1fr auto; gap: 9px; align-items: start; padding: 11px; border: 1px solid var(--line); border-radius: 11px; background: #100e0c; }
+.level-gain > span { width: 25px; height: 25px; display: grid; place-items: center; border-radius: 50%; color: #171009; background: #83b984; font-weight: 900; }
+.level-gain.choice > span { background: var(--gold-2); }
+.level-gain.common > span { color: #171009; background: #88b8d4; }
+.level-gain strong, .level-gain p { margin: 0; }
+.level-gain p { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.level-gain > b { color: var(--gold-2); font-size: 8px; text-transform: uppercase; }
+.level-gains-panel { background: #0d0b09; }
+.builder-expertise { display: grid; gap: 8px; margin-top: 12px; padding-top: 13px; border-top: 1px dashed #745737; }
+.expertise-choice input:checked + i { box-shadow: 0 0 0 3px #d8b66e33; }
+
+/* Конструктор атак */
+.attack-builder { display: grid; gap: 13px; }
+.lego-intro { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid #745737; border-radius: 13px; background: linear-gradient(100deg,#1b140d,#100e0c); }
+.lego-intro > span { font-size: 27px; }
+.lego-intro strong, .lego-intro p { display: block; margin: 0; }
+.lego-intro p { margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.formula-builder-card { display: grid; gap: 9px; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); }
+.formula-builder-head { display: flex; justify-content: space-between; align-items: end; gap: 12px; }
+.formula-builder-head h3 { margin: 3px 0 0; font: 700 16px Unbounded; }
+.formula-builder-head > b { color: var(--muted); font-size: 9px; }
+.lego-palette { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-radius: 11px; background: #0b0908; }
+.lego-palette button { min-width: 68px; display: grid; gap: 2px; padding: 8px 9px; color: var(--gold-2); border: 1px solid #745737; border-radius: 8px; background: linear-gradient(#251b12,#16110d); cursor: grab; box-shadow: inset 0 -3px #0003; }
+.lego-palette button:hover { border-color: #d1a865; transform: translateY(-1px); }
+.lego-palette button:active { cursor: grabbing; transform: translateY(1px); }
+.lego-palette button small { color: var(--muted); font-size: 7px; }
+.lego-palette.compact button { min-width: 78px; }
+.lego-zone { min-height: 62px; display: flex; flex-wrap: wrap; align-items: center; gap: 7px; padding: 10px; border: 2px dashed #5d4935; border-radius: 12px; background: #0b0908; transition: .15s; }
+.lego-zone.dragover { border-color: var(--gold-2); background: #9f78421c; }
+.lego-empty { width: 100%; color: var(--muted); font-size: 10px; text-align: center; }
+.lego-piece { display: inline-flex; align-items: center; gap: 6px; min-height: 36px; padding: 6px 7px 6px 10px; color: #20170d; border: 1px solid #e0bd79; border-radius: 8px; background: linear-gradient(145deg,#e3bd74,#ae7a3f); box-shadow: inset 0 -3px #6c452566, 0 3px 8px #0006; font-weight: 900; }
+.damage-zone .lego-piece { background: linear-gradient(145deg,#caa86b,#8d6338); }
+.lego-piece input { width: 56px; padding: 5px; color: #21170d; border: 1px solid #76502b; background: #f4d99e; text-align: center; }
+.lego-piece button { width: 23px; height: 23px; display: grid; place-items: center; padding: 0; color: #2b1a0e; border: 1px solid #7b542d; border-radius: 6px; background: #f1d29199; cursor: pointer; font-size: 17px; }
+.formula-preview { display: grid; grid-template-columns: auto auto 1fr; gap: 9px; align-items: baseline; padding: 8px 10px; border-radius: 9px; background: #0d0b09; }
+.formula-preview span, .formula-preview small { color: var(--muted); font-size: 9px; }
+.formula-preview strong { color: var(--gold-2); }
+.formula-preview small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attack-damage span, .attack-damage small { display: block; }
+.attack-damage small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+
 .level-up-wizard { display: grid; gap: 14px; }
 .level-up-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; background: radial-gradient(circle at 85% 10%, #9f784233, transparent 42%), #100e0c; border: 1px solid var(--line); border-radius: 16px; }
 .level-up-hero h3, .level-choice h3 { margin: 4px 0; font: 700 19px Unbounded; }
@@ -538,5 +636,18 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .level-up-number { width: 54px; height: 54px; flex-basis: 54px; font-size: 21px; }
   .sheet-tools { justify-content: stretch; }
   .sheet-tools > button { flex: 1; }
+  .xp-head { align-items: flex-start; }
+  .xp-head > span { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .class-highlight { min-width: 132px; }
+  .xp-quick { grid-template-columns: repeat(3,1fr); }
+  .lego-palette { flex-wrap: nowrap; overflow-x: auto; }
+  .lego-palette button { flex: 0 0 78px; }
+  .formula-builder-head { align-items: start; }
+  .formula-builder-head > b { max-width: 90px; text-align: right; }
+  .formula-preview { grid-template-columns: auto 1fr; }
+  .formula-preview small { grid-column: 1/-1; }
+  .attack-builder .two-col { grid-template-columns: 1fr; }
+  .level-gain { grid-template-columns: 28px 1fr; }
+  .level-gain > b { grid-column: 2; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }

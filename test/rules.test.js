@@ -66,6 +66,44 @@ test("уровни ASI и пулы костей хитов учитывают о
   assert.ok(Object.keys(rules.feats).length >= 15);
 });
 
+test("опыт использует полную шкалу уровней 5e", () => {
+  assert.equal(rules.experienceThresholds.length, 20);
+  assert.equal(rules.xpForLevel(2), 300);
+  assert.equal(rules.xpForLevel(10), 64000);
+  assert.equal(rules.levelFromXp(6499), 4);
+  assert.equal(rules.levelFromXp(6500), 5);
+  assert.deepEqual(rules.xpProgress(7000, 5), {
+    xp:7000, currentLevel:5, start:6500, next:14000, value:500/7500, remaining:7000, xpLevel:5
+  });
+});
+
+test("все 12 классов имеют подсказки на каждом уровне и заметный показатель", () => {
+  assert.equal(Object.keys(rules.classes).length, 12);
+  Object.keys(rules.classes).forEach(classKey => {
+    for (let level = 1; level <= 20; level += 1) {
+      const features = rules.featuresAt(classKey, level);
+      assert.ok(features.length > 0, `Нет описания ${classKey} ${level}`);
+      features.forEach(feature => {
+        assert.ok(feature.name, `Нет названия ${classKey} ${level}`);
+        assert.ok(feature.summary, `Нет пояснения ${classKey} ${level}: ${feature.name}`);
+      });
+    }
+    assert.ok(rules.classHighlights(classKey, 10).length > 0, `Нет показателей ${classKey}`);
+  });
+  assert.match(rules.featuresAt("rogue", 5).map(feature => feature.name).join(" "), /Скрытая атака 3к6/);
+  assert.match(rules.featuresAt("fighter", 20).map(feature => feature.name).join(" "), /Дополнительная атака/);
+  assert.match(rules.featuresAt("wizard", 18).map(feature => feature.name).join(" "), /Мастерство заклинаний/);
+});
+
+test("компетентность предлагается плуту и барду в нужные уровни", () => {
+  assert.equal(rules.expertiseChoicesAt("rogue", 1), 2);
+  assert.equal(rules.expertiseChoicesAt("rogue", 6), 2);
+  assert.equal(rules.expertiseChoicesAt("rogue", 5), 0);
+  assert.equal(rules.expertiseChoicesAt("bard", 3), 2);
+  assert.equal(rules.expertiseChoicesAt("bard", 10), 2);
+  assert.equal(rules.expertiseChoicesAt("fighter", 1), 0);
+});
+
 test("быстрая сборка ссылается только на существующие предметы и заклинания", () => {
   const itemKeys = new Set([...rules.weapons, ...rules.armor, ...rules.gear].map(item => item.key));
   const spellKeys = new Set(spells.map(spell => spell.key));

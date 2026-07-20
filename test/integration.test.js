@@ -70,7 +70,7 @@ test("комната, лист, броски, история и резервна
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 3);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 4);
     assert.equal(created.room.players["test-dm"].sheet.autoProficiency, true);
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
@@ -87,7 +87,8 @@ test("комната, лист, броски, история и резервна
     sheet.raceKey = "tabaxi";
     sheet.stats.dex = 18;
     sheet.coins.gp = 458;
-    sheet.attacksList.push({ id:"bow", name:"Длинный лук +1", bonus:"[DEX]+[PROF]+1", damage:"1d8+[DEX]+1+5d6", damageType:"колющий" });
+    sheet.xp = 6500;
+    sheet.attacksList.push({ id:"bow", name:"Длинный лук +1", bonus:"[DEX]+[PROF]+1", damage:"1d8+[DEX]+1+5d6", damageType:"колющий", attackParts:[{ id:"dex", type:"ability", value:"dex" },{ id:"prof", type:"proficiency", value:"prof" },{ id:"magic", type:"flat", value:"1" }], damageParts:[{ id:"die", type:"dice", count:1, sides:8 },{ id:"damage-dex", type:"ability", value:"dex" },{ id:"sneak", type:"sneak" }] });
     sheet.resources.push({ id:"arrows", name:"Стрелы", current:19, max:20, reset:"none" });
     sheet.inventoryList.push({ id:"cloak", name:"Плащ летучей мыши", quantity:1, weight:3, equipped:true, attuned:true, magical:true });
     sheet.spellsList.push({ id:"acid", catalogKey:"acid-splash", name:"Брызги кислоты", level:0, prepared:true, damage:"2d6" });
@@ -101,11 +102,14 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 3);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 4);
+    assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",1]]);
     assert.equal(updatedRoom.players["test-player"].sheet.levelProgression.length, 1);
     assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[0].attuned, true);
     assert.deepEqual(updatedRoom.players["test-player"].sheet.expertise, ["stealth"]);
+    assert.deepEqual(updatedRoom.players["test-player"].sheet.attacksList[0].attackParts.map(part => part.type), ["ability","proficiency","flat"]);
+    assert.deepEqual(updatedRoom.players["test-player"].sheet.attacksList[0].damageParts.map(part => part.type), ["dice","ability","sneak"]);
     assert.equal("sheetHistory" in updatedRoom.players["test-player"], false);
 
     const multiclass = structuredClone(updatedRoom.players["test-player"].sheet);
