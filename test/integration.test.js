@@ -64,6 +64,7 @@ test("комната, лист, броски, история и резервна
     assert.deepEqual(health, { ok:true });
     const index = await fetch(`http://127.0.0.1:${PORT}/`).then(response => response.text());
     assert.match(index, /TabaxiTable/);
+    assert.match(index, /roll-peek[^>]*>[\s\S]*?<small>/);
     const catalog = await fetch(`http://127.0.0.1:${PORT}/spells-5e.json`).then(response => response.json());
     assert.equal(catalog.length, 120);
 
@@ -155,8 +156,16 @@ test("комната, лист, броски, история и резервна
     assert.equal(advantage.ok, true);
     assert.equal(advantage.mode, "advantage");
     assert.equal(advantage.detail[0].rolls.length, 2);
+    assert.equal(advantage.modifier, 7);
     assert.equal(advantage.natural, Math.max(...advantage.detail[0].rolls));
     assert.equal(advantage.total, advantage.natural + 7);
+
+    const customDie = await emit(player, "dice:roll", { formula:"3d137+2", label:"Кастомный кубик" });
+    assert.equal(customDie.ok, true);
+    assert.equal(customDie.detail[0].count, 3);
+    assert.equal(customDie.detail[0].sides, 137);
+    assert.equal(customDie.detail[0].rolls.length, 3);
+    assert.equal(customDie.modifier, 2);
 
     const invalidRoll = await emit(player, "dice:roll", { formula:"101d6", label:"Слишком много" });
     assert.equal(invalidRoll.ok, false);

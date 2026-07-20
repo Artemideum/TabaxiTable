@@ -485,7 +485,7 @@ function renderSheet() {
     <section class="character-hero">
       <div class="hero-avatar">${s.portraitUrl ? `<img src="${esc(s.portraitUrl)}" alt="Портрет ${esc(s.characterName || player.name)}">` : esc((s.characterName || player.name || "?")[0].toUpperCase())}<span class="hero-class-mark">${classGlyph(classEntries(s)[0]?.key)}</span></div>
       <div class="hero-identity"><span class="eyebrow">${esc(s.race || "Раса не выбрана")} · ${esc(s.background || "Предыстория не выбрана")}</span><h1>${esc(s.characterName || player.name)}</h1><p>${esc(classSummary(s))} · общий ${totalLevel(s)} уровень</p></div>
-      <div class="hero-vitals"><button data-quick="ac"><small>КД</small><strong>${armorClass}</strong></button><button id="quick-hp"><small>HP</small><strong>${Number(s.hpCurrent)}/${Number(s.hpMax)}</strong></button><button id="quick-initiative"><small>Инициатива</small><strong>${signed(initiative)}</strong></button><button data-quick="passive"><small>Пассивка</small><strong>${10 + getSkillBonus(s,"perception") + passiveBonus(s,"perception")}</strong></button><button id="quick-inspiration" class="${s.inspiration ? "lit" : ""}"><small>Вдохновение</small><strong>${s.inspiration ? "◆" : "◇"}</strong></button></div>
+      <div class="hero-vitals"><button data-quick="ac"><small>КД</small><strong>${armorClass}</strong></button><button id="quick-hp"><small>HP${Number(s.hpTemp) ? ` · +${Number(s.hpTemp)}` : ""}</small><strong>${Number(s.hpCurrent)}/${Number(s.hpMax)}</strong></button><button id="quick-initiative"><small>Инициатива</small><strong>${signed(initiative)}</strong></button><button data-quick="speed"><small>Скорость</small><strong>${Number(s.speed)}</strong></button><button data-quick="proficiency"><small>Мастерство</small><strong>${signed(proficiency)}</strong></button><button data-quick="passive"><small>Пассивка</small><strong>${10 + getSkillBonus(s,"perception") + passiveBonus(s,"perception")}</strong></button><button id="quick-inspiration" class="${s.inspiration ? "lit" : ""}"><small>Вдохновение</small><strong>${s.inspiration ? "◆" : "◇"}</strong></button></div>
     </section>
     ${experienceMarkup(s, mine)}
     ${progressionMarkup(s)}
@@ -525,6 +525,7 @@ function renderSheet() {
           <button id="hp-manager" class="secondary manage" type="button">Здоровье и отдых</button>
         </div>
         <div class="panel skills-panel" data-section="main"><div class="panel-heading"><h3 class="panel-title">Навыки</h3>${mine ? `<button id="proficiencies-manager" class="quiet-action" type="button">Настроить</button>` : ""}</div><div class="checks skill-checks">${skillRows}</div></div>
+        <div class="panel proficiency-overview" data-section="main"><div class="panel-heading"><h3 class="panel-title">Владения</h3><small>бонус мастерства ${signed(proficiency)}</small></div><div class="proficiency-overview-grid"><article><small>Доспехи</small><span>${esc(s.armorProficiencies || "—")}</span></article><article><small>Оружие</small><span>${esc(s.weaponProficiencies || "—")}</span></article><article><small>Инструменты</small><span>${esc(s.toolProficiencies || "—")}</span></article><article><small>Языки</small><span>${esc(s.languages || "—")}</span></article></div></div>
         <div class="panel" data-section="combat">
           <div class="panel-heading"><h3 class="panel-title">Кости хитов</h3><small>${(s.hitDicePools || []).reduce((sum,pool)=>sum+Number(pool.current),0)}/${(s.hitDicePools || []).reduce((sum,pool)=>sum+Number(pool.total),0)} осталось</small></div>
           <div class="hit-dice-pills">${(s.hitDicePools || [{sides:s.hitDieSize,total:s.hitDiceMax,current:s.hitDiceCurrent}]).map(pool => `<span><b>${Number(pool.current)}/${Number(pool.total)}</b> к${Number(pool.sides)}</span>`).join("")}</div>
@@ -911,7 +912,8 @@ function openCharacterBuilderV2(quickStart = false) {
     const base = Object.fromEntries(statInputs().map(input => [input.dataset.builderStat, Number(input.dataset.base || input.value || 10)]));
     const hp = rules.fixedHp(rules.classes[classKey].hitDie, level, modifier(stats.con));
     const pointBuy = rules.pointBuyTotal(base);
-    $("#builder-stat-summary").innerHTML = `<span><small>Максимум HP</small><strong>${hp}</strong></span><span><small>Инициатива</small><strong>${signed(modifier(stats.dex))}</strong></span><span><small>Покупка очков</small><strong class="${pointBuy !== null && pointBuy > 27 ? "danger-text" : ""}">${pointBuy === null ? "свой набор" : `${pointBuy}/27`}</strong></span><span><small>Главная характеристика</small><strong>${abilities[rules.statPriorities[classKey][0]]} ${stats[rules.statPriorities[classKey][0]]}</strong></span>`;
+    const pointBuyWarning = pointBuy === null ? `<div class="builder-warning" role="status"><b>Нестандартные значения</b><span>Одна из базовых характеристик вышла за диапазон point buy 8–15. Это разрешено — просто проверь выбор с мастером.</span></div>` : pointBuy > 27 ? `<div class="builder-warning" role="status"><b>Лимит превышен на ${pointBuy - 27}</b><span>По стандартному point buy доступно 27 очков. TabaxiTable предупреждает, но не запрещает создать такого персонажа.</span></div>` : "";
+    $("#builder-stat-summary").innerHTML = `<span><small>Максимум HP</small><strong>${hp}</strong></span><span><small>Инициатива</small><strong>${signed(modifier(stats.dex))}</strong></span><span><small>Покупка очков</small><strong class="${pointBuy !== null && pointBuy > 27 ? "danger-text" : ""}">${pointBuy === null ? "свой набор" : `${pointBuy}/27`}</strong></span><span><small>Главная характеристика</small><strong>${abilities[rules.statPriorities[classKey][0]]} ${stats[rules.statPriorities[classKey][0]]}</strong></span>${pointBuyWarning}`;
   };
 
   const refreshSkills = (autoPick = false) => {
@@ -1132,7 +1134,7 @@ function openLevelUpWizard() {
   const renderTarget = () => {
     const { key, cls, existing, nextClassLevel } = targetData();
     const eligibility = multiclassEligibility(current, key);
-    $("#level-up-eligibility").innerHTML = existing ? `<div class="eligibility ok">${classGlyph(key)}<span><strong>Продолжение класса</strong><small>${cls.name} ${classLevel(current,key)} → ${nextClassLevel}</small></span></div>` : `<div class="eligibility ${eligibility.ok ? "ok" : "fail"}">${classGlyph(key)}<span><strong>${eligibility.ok ? "Мультикласс доступен" : "Не хватает характеристик"}</strong><small>${eligibility.checks.map(check => `${rules.classes[check.key]?.name}: ${check.text} ${check.ok ? "✓" : "✕"}`).join(" · ")}</small></span></div>`;
+    $("#level-up-eligibility").innerHTML = existing ? `<div class="eligibility ok">${classGlyph(key)}<span><strong>Продолжение класса</strong><small>${cls.name} ${classLevel(current,key)} → ${nextClassLevel}</small></span></div>` : `<div class="eligibility ${eligibility.ok ? "ok" : "warn"}">${classGlyph(key)}<span><strong>${eligibility.ok ? "Мультикласс доступен" : "Требования не выполнены — но продолжить можно"}</strong><small>${eligibility.checks.map(check => `${rules.classes[check.key]?.name}: ${check.text} ${check.ok ? "✓" : "✕"}`).join(" · ")}${eligibility.ok ? "" : " · согласуй исключение с мастером"}</small></span></div>`;
     const unlock = rules.subclassLevel(key);
     const oldEntry = classEntries(current).find(entry => entry.key === key);
     const chooseSubclass = nextClassLevel >= unlock && !oldEntry?.subclass;
@@ -1145,7 +1147,7 @@ function openLevelUpWizard() {
     $("#level-up-gains").innerHTML = levelFeaturesMarkup(key,nextClassLevel) + commonLevelFeaturesMarkup(oldTotal + 1);
     $("#level-up-subclass-select")?.addEventListener("change", updatePreview);
     $("#level-up-multiclass-skill")?.addEventListener("change", () => { renderLevelExpertise(); updatePreview(); });
-    $("#level-up-apply").disabled = !eligibility.ok;
+    $("#level-up-apply").disabled = false;
     updatePreview();
   };
 
@@ -1163,8 +1165,6 @@ function openLevelUpWizard() {
 
   const applyLevel = hitRoll => {
     const { key, cls, existing, nextClassLevel } = targetData();
-    const eligibility = multiclassEligibility(current, key);
-    if (!eligibility.ok) return toast("Характеристики пока не подходят для этого мультикласса");
     const expertiseRequired = rules.expertiseChoicesAt(key,nextClassLevel);
     const expertisePicks = $$('[data-level-expertise]:checked').map(input => input.dataset.levelExpertise);
     if (expertisePicks.length < expertiseRequired) return toast(`Выбери ${expertiseRequired} навык(а) для компетентности`);
@@ -1238,7 +1238,9 @@ function openLevelUpWizard() {
   $("#level-up-hp").addEventListener("change", updatePreview);
   $("#level-up-cancel").addEventListener("click", closeModal);
   $("#level-up-apply").addEventListener("click", () => {
-    const { cls } = targetData();
+    const { key, cls, existing } = targetData();
+    const eligibility = multiclassEligibility(current,key);
+    if (!existing && !eligibility.ok && !confirm("Характеристики не соответствуют стандартным требованиям мультикласса. Всё равно получить этот уровень?")) return;
     if ($("#level-up-hp").value === "roll") socket.emit("dice:roll", { formula:`1к${cls.hitDie}`, label:`HP за новый уровень · к${cls.hitDie}`, mode:"normal" }, response => response.ok ? applyLevel(response.total) : toast(response.error));
     else applyLevel(Math.floor(cls.hitDie / 2) + 1);
   });
@@ -1295,7 +1297,8 @@ function openCharacterBuilder() {
     const selectedSkills = $$('[data-builder-skill]:checked').length;
     $("#builder-skill-count").textContent = `· выбрано ${selectedSkills}${skillRule ? ` · класс даёт ${skillRule.count}` : ""}`;
     $$('[data-builder-skill]').forEach(input => input.closest("label").classList.toggle("recommended", Boolean(skillRule?.options.includes(input.dataset.builderSkill))));
-    $("#builder-preview").innerHTML = `<strong>${cls.name} ${level}</strong> · мастерство ${signed(rules.proficiency(level))} · кость хитов к${cls.hitDie} · средние HP ${rules.fixedHp(cls.hitDie, level, con)} · КД ${calculateAc({ ...s, classKey, stats, autoArmorClass:true })} · скорость ${race.speed} · ячейки ${slots.some(Boolean) ? slots.map((n,i)=>n ? `${i+1}:${n}` : "").filter(Boolean).join(" / ") : "нет"}<br><span class="${pointBuy !== null && pointBuy > 27 ? "danger-text" : ""}">Покупка характеристик: ${pointBuy === null ? "значения вне диапазона 8–15" : `${pointBuy}/27 очков`}</span>`;
+    const warning = pointBuy === null ? `<div class="builder-warning"><b>Нестандартный набор</b><span>Значения вышли за диапазон 8–15. Применить всё равно можно.</span></div>` : pointBuy > 27 ? `<div class="builder-warning"><b>Лимит превышен на ${pointBuy - 27}</b><span>Стандартный лимит — 27. Применить всё равно можно.</span></div>` : "";
+    $("#builder-preview").innerHTML = `<strong>${cls.name} ${level}</strong> · мастерство ${signed(rules.proficiency(level))} · кость хитов к${cls.hitDie} · средние HP ${rules.fixedHp(cls.hitDie, level, con)} · КД ${calculateAc({ ...s, classKey, stats, autoArmorClass:true })} · скорость ${race.speed} · ячейки ${slots.some(Boolean) ? slots.map((n,i)=>n ? `${i+1}:${n}` : "").filter(Boolean).join(" / ") : "нет"}<br><span class="${pointBuy !== null && pointBuy > 27 ? "danger-text" : ""}">Покупка характеристик: ${pointBuy === null ? "значения вне диапазона 8–15" : `${pointBuy}/27 очков`}</span>${warning}`;
   };
   $("#builder-class").addEventListener("change", () => { $("#builder-custom-class").value = rules.classes[$("#builder-class").value].name; refreshPreview(); });
   $("#builder-race").addEventListener("change", () => { $("#builder-custom-race").value = rules.races[$("#builder-race").value].name; refreshPreview(); });
@@ -1588,6 +1591,7 @@ function openAttackModal(id = null) {
   const attack = sheet.attacksList.find(item => item.id === id) || { id: uuid(), name: "", bonus: "[DEX]+[PROF]", damage: "1d6+[DEX]", damageType: "", notes: "" };
   const draft = { attack:formulaParts(attack,"attack",sheet), damage:formulaParts(attack,"damage",sheet) };
   const palettePiece = (zone, type, label, extra = {}) => `<button type="button" draggable="true" data-lego-zone="${zone}" data-lego-type="${type}" ${extra.value !== undefined ? `data-lego-value="${esc(extra.value)}"` : ""} ${extra.count ? `data-lego-count="${extra.count}"` : ""} ${extra.sides ? `data-lego-sides="${extra.sides}"` : ""}><b>${esc(label)}</b><small>нажми или перетащи</small></button>`;
+  const customDieControl = zone => `<div class="lego-custom-die"><span>Свой кубик</span><input data-custom-die-count="${zone}" type="number" min="1" max="100" value="1" aria-label="Количество кубиков"><b>к</b><input data-custom-die-sides="${zone}" type="number" min="2" max="1000" value="6" aria-label="Количество граней"><button type="button" data-custom-die-add="${zone}">Добавить</button></div>`;
   const abilityPieces = Object.keys(abilities).map(key => palettePiece("attack","ability",`+ ${abilityAbbreviations[key]}`,{value:key})).join("");
   const damageAbilities = Object.keys(abilities).map(key => palettePiece("damage","ability",`+ ${abilityAbbreviations[key]}`,{value:key})).join("");
   const classPieces = [
@@ -1607,7 +1611,7 @@ function openAttackModal(id = null) {
         <div id="attack-parts" class="lego-zone" data-lego-drop="attack"></div><div id="attack-formula-preview" class="formula-preview"></div>
       </section>
       <section class="formula-builder-card"><div class="formula-builder-head"><div><span class="eyebrow">Урон</span><h3>Из чего складывается урон?</h3></div><b>порядок не важен</b></div>
-        <div class="lego-palette">${[4,6,8,10,12].map(sides => palettePiece("damage","dice",`1к${sides}`,{count:1,sides})).join("")}${palettePiece("damage","dice","2к6",{count:2,sides:6})}${damageAbilities}${palettePiece("damage","spell","+ Магия")}${palettePiece("damage","flat","+ Свой бонус",{value:1})}${classPieces}</div>
+        <div class="lego-palette">${[4,6,8,10,12].map(sides => palettePiece("damage","dice",`1к${sides}`,{count:1,sides})).join("")}${palettePiece("damage","dice","2к6",{count:2,sides:6})}${damageAbilities}${palettePiece("damage","spell","+ Магия")}${palettePiece("damage","flat","+ Свой бонус",{value:1})}${classPieces}</div>${customDieControl("damage")}
         <div id="damage-parts" class="lego-zone damage-zone" data-lego-drop="damage"></div><div id="damage-formula-preview" class="formula-preview"></div>
       </section>
       <div class="attack-builder-options"><label>Цена атаки<select id="attack-action-cost"><option value="action" ${!attack.actionCost || attack.actionCost === "action" ? "selected" : ""}>Действие</option><option value="bonus" ${attack.actionCost === "bonus" ? "selected" : ""}>Бонусное действие</option><option value="reaction" ${attack.actionCost === "reaction" ? "selected" : ""}>Реакция</option><option value="free" ${attack.actionCost === "free" ? "selected" : ""}>Без действия</option></select></label><label>Тип урона<input id="attack-type" list="damage-types" value="${esc(attack.damageType)}" placeholder="Выбери или напиши"><datalist id="damage-types">${["дробящий","колющий","рубящий","огонь","холод","электричество","кислота","яд","психический","некротический","излучение","силовое поле","звук"].map(type => `<option value="${type}">`).join("")}</datalist></label><label>Режим попадания<select id="attack-roll-mode"><option value="inherit" ${!attack.rollMode || attack.rollMode === "inherit" ? "selected" : ""}>Как выбрано на листе</option><option value="normal" ${attack.rollMode === "normal" ? "selected" : ""}>Всегда обычно</option><option value="advantage" ${attack.rollMode === "advantage" ? "selected" : ""}>Всегда с преимуществом</option><option value="disadvantage" ${attack.rollMode === "disadvantage" ? "selected" : ""}>Всегда с помехой</option></select></label><label>Короткая памятка<input id="attack-notes" value="${esc(attack.notes)}" placeholder="Дальность, особое условие..."></label></div>
@@ -1641,6 +1645,12 @@ function openAttackModal(id = null) {
     button.addEventListener("click", () => addPart(button.dataset.legoZone,button));
     button.addEventListener("dragstart", event => event.dataTransfer.setData("text/plain", JSON.stringify({ zone:button.dataset.legoZone, type:button.dataset.legoType, value:button.dataset.legoValue || "", count:button.dataset.legoCount || 1, sides:button.dataset.legoSides || 6 })));
   });
+  $$('[data-custom-die-add]', $("#modal-content")).forEach(button => button.addEventListener("click", () => {
+    const zone = button.dataset.customDieAdd;
+    const count = Math.max(1, Math.min(100, Number($(`[data-custom-die-count="${zone}"]`).value) || 1));
+    const sides = Math.max(2, Math.min(1000, Number($(`[data-custom-die-sides="${zone}"]`).value) || 6));
+    addPart(zone,{ dataset:{ legoType:"dice", legoCount:count, legoSides:sides, legoValue:"" } });
+  }));
   $$('[data-lego-drop]').forEach(zone => {
     zone.addEventListener("dragover", event => { event.preventDefault(); zone.classList.add("dragover"); });
     zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
@@ -1808,6 +1818,7 @@ function openSpellModal(id = null) {
   };
   const palettePiece = (zone, type, label, extra = {}) => `<button type="button" draggable="true" data-spell-lego-zone="${zone}" data-spell-lego-type="${type}" ${extra.value !== undefined ? `data-spell-lego-value="${esc(extra.value)}"` : ""} ${extra.count ? `data-spell-lego-count="${extra.count}"` : ""} ${extra.sides ? `data-spell-lego-sides="${extra.sides}"` : ""}><b>${esc(label)}</b><small>нажми или перетащи</small></button>`;
   const dicePalette = zone => [4,6,8,10,12].map(sides => palettePiece(zone,"dice",`1к${sides}`,{count:1,sides})).join("") + palettePiece(zone,"dice","2к6",{count:2,sides:6});
+  const customDieControl = zone => `<div class="lego-custom-die"><span>Свой кубик</span><input data-spell-custom-count="${zone}" type="number" min="1" max="100" value="1" aria-label="Количество кубиков"><b>к</b><input data-spell-custom-sides="${zone}" type="number" min="2" max="1000" value="6" aria-label="Количество граней"><button type="button" data-spell-custom-add="${zone}">Добавить</button></div>`;
   const abilityPalette = Object.keys(abilities).map(key => palettePiece("effect","ability",`+ ${abilityAbbreviations[key]}`,{value:key})).join("");
   const knownUpcast = spellUpcastDice[spell.catalogKey] || "";
   $("#game-modal").classList.add("library-open");
@@ -1817,12 +1828,12 @@ function openSpellModal(id = null) {
       <div class="spell-builder-basics"><label>Название<input id="spell-name" value="${esc(spell.name)}" placeholder="Например, Ледяная игла"></label>${casterClasses.length ? `<label>Источник магии<select id="spell-source-class">${casterClasses.map(entry => `<option value="${entry.key}" ${spell.sourceClassKey === entry.key ? "selected" : ""}>${esc(entry.name)}</option>`).join("")}</select></label>` : ""}<label>Что бросаем<select id="spell-roll-kind"><option value="damage" ${spellRollKind(spell) === "damage" ? "selected" : ""}>Урон</option><option value="healing" ${spellRollKind(spell) === "healing" ? "selected" : ""}>Лечение</option><option value="none" ${spellRollKind(spell) === "none" ? "selected" : ""}>Без числового броска</option></select></label></div>
       <div id="spell-roll-builders">
         <section class="formula-builder-card"><div class="formula-builder-head"><div><span class="eyebrow">Основной эффект</span><h3>Что бросить при сотворении?</h3></div><b>кубики + модификатор</b></div>
-          <div class="lego-palette">${dicePalette("effect")}${palettePiece("effect","spell","+ Магия")}${palettePiece("effect","flat","+ Число",{value:1})}</div>
+          <div class="lego-palette">${dicePalette("effect")}${palettePiece("effect","spell","+ Магия")}${palettePiece("effect","flat","+ Число",{value:1})}</div>${customDieControl("effect")}
           <details class="lego-more"><summary>Другой модификатор характеристики</summary><div class="lego-palette compact">${abilityPalette}</div></details>
           <div id="spell-effect-parts" class="lego-zone spell-effect-zone" data-spell-lego-drop="effect"></div><div id="spell-effect-preview" class="formula-preview"></div>
         </section>
         <section class="formula-builder-card upcast-builder"><div class="formula-builder-head"><div><span class="eyebrow">Ячейка выше</span><h3>Что добавить за каждый круг?</h3></div><b>можно оставить пустым</b></div>
-          <div class="lego-palette">${dicePalette("upcast")}${palettePiece("upcast","flat","+ Число",{value:1})}</div>
+          <div class="lego-palette">${dicePalette("upcast")}${palettePiece("upcast","flat","+ Число",{value:1})}</div>${customDieControl("upcast")}
           <div id="spell-upcast-parts" class="lego-zone spell-upcast-zone" data-spell-lego-drop="upcast"></div><div id="spell-upcast-preview" class="formula-preview"></div>
           ${knownUpcast ? `<p class="spell-upcast-note">Справочник уже знает усиление этого заклинания: <b>+${esc(knownUpcast)}</b> за круг. Оно работает, пока полоса выше пустая.</p>` : ""}
         </section>
@@ -1863,6 +1874,12 @@ function openSpellModal(id = null) {
     button.addEventListener("click", () => addPart(button.dataset.spellLegoZone,button));
     button.addEventListener("dragstart", event => event.dataTransfer.setData("text/plain", JSON.stringify({ spellLego:true, zone:button.dataset.spellLegoZone, type:button.dataset.spellLegoType, value:button.dataset.spellLegoValue || "", count:button.dataset.spellLegoCount || 1, sides:button.dataset.spellLegoSides || 6 })));
   });
+  $$('[data-spell-custom-add]', $("#modal-content")).forEach(button => button.addEventListener("click", () => {
+    const zone = button.dataset.spellCustomAdd;
+    const count = Math.max(1, Math.min(100, Number($(`[data-spell-custom-count="${zone}"]`).value) || 1));
+    const sides = Math.max(2, Math.min(1000, Number($(`[data-spell-custom-sides="${zone}"]`).value) || 6));
+    addPart(zone,{ dataset:{ spellLegoType:"dice", spellLegoCount:count, spellLegoSides:sides, spellLegoValue:"" } });
+  }));
   $$('[data-spell-lego-drop]', $("#modal-content")).forEach(zone => {
     zone.addEventListener("dragover", event => { event.preventDefault(); zone.classList.add("dragover"); });
     zone.addEventListener("dragleave", () => zone.classList.remove("dragover"));
@@ -2086,6 +2103,13 @@ function showRollPeek(label, response) {
   const modeLabel = response.mode === "advantage" ? " · преимущество" : response.mode === "disadvantage" ? " · помеха" : "";
   const naturalLabel = response.natural === 20 ? " · КРИТ" : response.natural === 1 ? " · ПРОВАЛ" : "";
   $("span", peek).textContent = `${label}${modeLabel}${naturalLabel}`;
+  const diceDetails = (response.detail || []).map(entry => {
+    const sign = Number(entry.sign) < 0 ? "−" : "";
+    const rolls = (entry.rolls || []).join(", ");
+    return `${sign}${Number(entry.count)}к${Number(entry.sides)}: [${rolls}]${entry.kept !== undefined ? ` → оставлен ${entry.kept}` : ""}`;
+  });
+  if (Number(response.modifier)) diceDetails.push(`модификатор ${signed(response.modifier)}`);
+  $("small", peek).textContent = diceDetails.join(" · ") || "без кубиков";
   $("strong", peek).textContent = response.total;
   peek.classList.toggle("critical", response.natural === 20);
   peek.classList.toggle("fumble", response.natural === 1);

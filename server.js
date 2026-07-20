@@ -206,8 +206,8 @@ function normalizeSheet(sheet, playerName) {
     id: cleanText(part?.id, 80),
     type: cleanText(part?.type, 24),
     value: cleanText(part?.value, 24),
-    count: Math.max(1, Math.min(20, Number(part?.count) || 1)),
-    sides: Math.max(2, Math.min(100, Number(part?.sides) || 6))
+    count: Math.max(1, Math.min(100, Number(part?.count) || 1)),
+    sides: Math.max(2, Math.min(1000, Number(part?.sides) || 6))
   })).filter(part => ["ability","proficiency","dice","flat","sneak","martial","rage","spell","smite","superiority"].includes(part.type)) : [];
   const normalizedAttacks = (Array.isArray(incoming.attacksList) ? incoming.attacksList : []).slice(0, 100).map(attack => ({
     ...attack,
@@ -442,7 +442,7 @@ io.on("connection", (socket) => {
     room.rollLog = room.rollLog.slice(-30);
     saveRooms();
     emitRoom(code);
-    reply({ ok: true, total: parsed.total, dice: parsed.dice, detail: parsed.detail, mode: parsed.mode, natural: parsed.natural });
+    reply({ ok: true, formula:parsed.formula, total: parsed.total, dice: parsed.dice, detail: parsed.detail, modifier:parsed.modifier, mode: parsed.mode, natural: parsed.natural });
   });
 
   socket.on("activity:log", ({ label, detail }, reply = () => {}) => {
