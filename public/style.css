@@ -1,8 +1,8 @@
 :root {
   --bg: #080706;
-  --panel: #13110f;
-  --panel-2: #1d1915;
-  --line: #3b3024;
+  --panel: #141311;
+  --panel-2: #1d1a17;
+  --line: #30281f;
   --text: #e9dfcf;
   --muted: #958979;
   --gold: #9f7842;
@@ -76,7 +76,7 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
 .sheet-grid.columns-2 { grid-template-columns: repeat(2, minmax(260px, 1fr)); }
 .sheet-grid.columns-3 { grid-template-columns: repeat(3, minmax(240px, 1fr)); }
 .sheet-grid > .stack:first-child textarea { min-height: 58px; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.panel { background: var(--panel); border: 1px solid #30281fcc; border-radius: var(--radius); padding: 14px; box-shadow: 0 7px 24px #0000001f; }
 .panel-title { color: var(--muted); text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .12em; margin: 0 0 11px; }
 .stats { display: grid; gap: 9px; }
 .stat { background: #100e0c; border: 1px solid var(--line); border-radius: 14px; text-align: center; padding: 10px; }
@@ -198,8 +198,12 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
 .identity-editor .sheet-head { padding: 14px; margin: 0; }
 .sheet-tools { flex-wrap: wrap; }
 .sheet-tools button { padding: 9px 12px; }
-.roll-mode { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; color: var(--muted); font-size: 11px; }
-.roll-mode button { padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: #100e0c; cursor: pointer; }
+.roll-mode { display: block; width: fit-content; margin: 0 0 10px auto; color: var(--muted); font-size: 10px; }
+.roll-mode summary { padding: 6px 10px; border-radius: 999px; background: #100e0c; cursor: pointer; list-style: none; }
+.roll-mode summary::-webkit-details-marker { display: none; }
+.roll-mode summary b { color: var(--gold-2); }
+.roll-mode > div { display: flex; gap: 5px; margin-top: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 12px; background: #0d0b09; }
+.roll-mode button { padding: 6px 10px; border: 1px solid transparent; border-radius: 999px; color: var(--muted); background: transparent; cursor: pointer; }
 .roll-mode button.active { color: #171009; background: var(--gold-2); border-color: var(--gold-2); font-weight: 800; }
 .class-combat-hint { display: flex; align-items: center; gap: 6px; padding: 9px 12px; margin: -5px 0 14px; border: 1px solid #9f784244; border-radius: 10px; color: var(--gold-2); background: #9f784212; font-size: 12px; }
 .class-combat-hint span { flex: 1; }
@@ -253,6 +257,17 @@ textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
 }
 .skill-row input[data-expertise] { border-width: 3px; }
 .skill-row input[data-expertise]:checked { box-shadow: inset 0 0 0 2px #17120d, 0 0 0 2px #d3ad6e55; }
+.clean-check, .check-row.clean-check.skill-row { grid-template-columns: 18px 38px minmax(0,1fr) auto; padding: 4px 3px; }
+.clean-check .mastery-mark { color: #62594e; text-align: center; font-size: 10px; }
+.clean-check.proficient .mastery-mark { color: #a68454; }
+.clean-check.expert .mastery-mark { color: var(--gold-2); text-shadow: 0 0 10px #d3ad6e77; }
+.clean-check .bonus { width: 36px; padding: 4px 3px; color: var(--gold-2); border: 0; border-radius: 7px; background: #0f0e0c; cursor: pointer; font-weight: 900; }
+.clean-check .bonus:hover { background: #9f784229; }
+.mastery-label { padding: 3px 6px; color: #736a5f; border-radius: 999px; background: #0f0e0c; font-size: 7px; text-transform: uppercase; letter-spacing: .04em; }
+.clean-check.proficient .mastery-label { color: #b29a78; }
+.clean-check.expert .mastery-label { color: var(--gold-2); background: #9f78421c; }
+.quiet-action { padding: 4px 7px; color: var(--muted); border: 0; border-radius: 7px; background: transparent; cursor: pointer; font-size: 9px; }
+.quiet-action:hover { color: var(--gold-2); background: #9f78421c; }
 .save-checks { grid-template-columns: repeat(2, minmax(0,1fr)); gap: 2px 10px; }
 .skill-checks { grid-template-columns: repeat(2, minmax(180px,1fr)); gap: 2px 12px; }
 .skills-panel { min-width: 0; }
@@ -462,12 +477,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .hero-avatar { position: relative; }
 .hero-class-mark { position: absolute; right: -6px; bottom: -6px; display: block; }
 .hero-class-mark .class-glyph { width: 34px; height: 34px; border-radius: 50%; box-shadow: 0 5px 15px #000b; }
-.level-path { display: grid; grid-template-columns: minmax(160px, auto) minmax(0, 1fr); gap: 18px; align-items: center; margin: -4px 0 15px; padding: 11px 14px; background: linear-gradient(90deg, #16120f, #0e0c0a); border: 1px solid var(--line); border-radius: 14px; }
+.level-path { display: block; margin: -4px 0 15px; background: linear-gradient(90deg, #16120f, #0e0c0a); border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.level-path > summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 10px 14px; cursor: pointer; list-style: none; }
+.level-path > summary::-webkit-details-marker { display: none; }
+.level-path[open] > summary { border-bottom: 1px solid var(--line); }
 .level-path-head { min-width: 0; }
 .level-path-head span, .level-path-head strong { display: block; }
 .level-path-head span { color: var(--muted); text-transform: uppercase; letter-spacing: .12em; font-size: 9px; font-weight: 800; }
 .level-path-head strong { margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: var(--gold-2); }
-.level-tokens { display: flex; gap: 5px; min-width: 0; overflow-x: auto; padding: 3px 1px 5px; scrollbar-width: thin; }
+.level-path-peek { display: flex; align-items: center; gap: 3px; }
+.level-path-peek .class-glyph { width: 25px; height: 25px; flex-basis: 25px; transform: scale(.82); }
+.level-path-peek small { margin-left: -8px; align-self: flex-end; min-width: 14px; height: 14px; display: grid; place-items: center; color: #171009; background: var(--gold-2); border-radius: 50%; font-size: 7px; font-weight: 900; }
+.level-path-peek b { margin-left: 7px; color: var(--muted); font-size: 9px; }
+.level-path[open] .level-path-peek b { font-size: 0; }
+.level-path[open] .level-path-peek b::after { content: "скрыть"; font-size: 9px; }
+.level-tokens { display: flex; gap: 5px; min-width: 0; overflow-x: auto; padding: 10px 13px 12px; scrollbar-width: thin; }
 .level-token { position: relative; flex: 0 0 38px; height: 42px; display: grid; place-items: center; border: 0; background: transparent; padding: 0; }
 .level-token .class-glyph { width: 34px; height: 34px; flex-basis: 34px; border-radius: 50%; }
 .level-token small { position: absolute; right: 0; bottom: 0; min-width: 15px; height: 15px; display: grid; place-items: center; border-radius: 99px; color: #16100a; background: var(--gold-2); border: 2px solid #100d0b; font-size: 8px; font-weight: 900; }
@@ -562,9 +586,30 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .level-gains-panel { background: #0d0b09; }
 .builder-expertise { display: grid; gap: 8px; margin-top: 12px; padding-top: 13px; border-top: 1px dashed #745737; }
 .expertise-choice input:checked + i { box-shadow: 0 0 0 3px #d8b66e33; }
+.mastery-editor { display: grid; gap: 18px; }
+.mastery-intro { padding: 13px 15px; border-radius: 13px; background: #9f784214; }
+.mastery-intro strong, .mastery-intro p { margin: 0; }
+.mastery-intro p { margin-top: 4px; color: var(--muted); font-size: 11px; }
+.mastery-editor section { display: grid; gap: 9px; }
+.mastery-editor .panel-heading h3 { margin: 0; font: 700 14px Unbounded; }
+.save-mastery-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 7px; }
+.mastery-toggle { position: relative; display: block; }
+.mastery-toggle input { position: absolute; opacity: 0; pointer-events: none; }
+.mastery-toggle > span { display: block; padding: 10px 34px 10px 10px; border: 1px solid var(--line); border-radius: 10px; background: #100e0c; cursor: pointer; }
+.mastery-toggle b, .mastery-toggle small { display: block; }
+.mastery-toggle small { color: var(--muted); }
+.mastery-toggle i { position: absolute; right: 10px; top: 50%; width: 15px; height: 15px; border: 1px solid #655443; border-radius: 50%; transform: translateY(-50%); }
+.mastery-toggle input:checked ~ span { color: var(--gold-2); border-color: #8a683e; background: #9f78421c; }
+.mastery-toggle input:checked ~ i { border: 4px solid var(--gold-2); }
+.skill-mastery-grid { display: grid; grid-template-columns: repeat(2,1fr); gap: 6px; }
+.skill-mastery-grid label { grid-template-columns: minmax(0,1fr) 145px; align-items: center; padding: 7px 8px; border-radius: 9px; background: #100e0c; }
+.skill-mastery-grid b, .skill-mastery-grid small { display: block; }
+.skill-mastery-grid small { color: var(--muted); }
+.skill-mastery-grid select { padding: 7px; font-size: 10px; }
 
 /* Конструктор атак */
 .attack-builder { display: grid; gap: 13px; }
+.attack-builder-options { display: grid; grid-template-columns: .8fr .8fr 1fr 1.2fr; gap: 9px; }
 .lego-intro { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid #745737; border-radius: 13px; background: linear-gradient(100deg,#1b140d,#100e0c); }
 .lego-intro > span { font-size: 27px; }
 .lego-intro strong, .lego-intro p { display: block; margin: 0; }
@@ -592,6 +637,34 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .formula-preview small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attack-damage span, .attack-damage small { display: block; }
 .attack-damage small { margin-top: 2px; color: var(--muted); font-size: 8px; }
+.attack-name { text-align: left; }
+.attack-name span, .attack-name small { display: block; }
+.attack-name small { margin-top: 2px; color: var(--muted); font-size: 7px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.smite-card { display: flex; gap: 13px; align-items: center; padding: 15px; border: 1px solid #8a683e; border-radius: 14px; background: radial-gradient(circle at 10% 20%,#d8b66e24,transparent 35%),#100e0c; }
+.smite-symbol { flex: 0 0 50px; width: 50px; height: 50px; display: grid; place-items: center; color: #ffe5a7; border: 1px solid var(--gold); border-radius: 50%; background: #9f784229; font-size: 26px; box-shadow: 0 0 24px #d7ae6355; }
+.smite-card h3, .smite-card p { margin: 3px 0; }
+.smite-card h3 { font: 700 17px Unbounded; }
+.smite-card p { color: var(--muted); font-size: 11px; }
+
+/* Конструктор заклинаний */
+.spell-builder, #spell-roll-builders { display: grid; gap: 13px; }
+.spell-builder-basics { display: grid; grid-template-columns: minmax(220px,1.4fr) 1fr 1fr; gap: 9px; }
+.spell-effect-zone .lego-piece { background: linear-gradient(145deg,#d9b978,#a67d46); }
+.spell-upcast-zone { min-height: 52px; }
+.spell-upcast-zone .lego-piece { background: linear-gradient(145deg,#9ab4c5,#678292); border-color: #b7d1df; }
+.upcast-builder { background: linear-gradient(145deg,#151617,#12110f); }
+.lego-more { border: 0; }
+.lego-more > summary { width: max-content; color: var(--muted); cursor: pointer; font-size: 9px; font-weight: 800; }
+.lego-more[open] > summary { margin-bottom: 7px; color: var(--gold-2); }
+.spell-upcast-note { margin: 0; padding: 8px 10px; color: var(--muted); border-radius: 8px; background: #7392a014; font-size: 9px; }
+.spell-upcast-note b { color: #b9d1df; }
+.spell-builder-details { border: 1px solid var(--line); border-radius: 12px; background: #100e0c; }
+.spell-builder-details > summary { padding: 12px 14px; color: var(--muted); cursor: pointer; font-weight: 800; }
+.spell-builder-details[open] > summary { color: var(--gold-2); border-bottom: 1px solid var(--line); }
+.spell-builder-details > div { display: grid; gap: 10px; padding: 13px; }
+.spell-kind { display: inline-block; margin-left: 6px; padding: 2px 5px; border-radius: 999px; font-style: normal; font-size: 7px; text-transform: uppercase; vertical-align: 2px; }
+.spell-kind.damage { color: #e8a99f; background: #b94b4222; }
+.spell-kind.healing { color: #9fd2aa; background: #5fa87922; }
 
 .level-up-wizard { display: grid; gap: 14px; }
 .level-up-hero { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 18px; background: radial-gradient(circle at 85% 10%, #9f784233, transparent 42%), #100e0c; border: 1px solid var(--line); border-radius: 16px; }
@@ -647,7 +720,13 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .formula-preview { grid-template-columns: auto 1fr; }
   .formula-preview small { grid-column: 1/-1; }
   .attack-builder .two-col { grid-template-columns: 1fr; }
+  .attack-builder-options { grid-template-columns: 1fr; }
+  .spell-builder-basics { grid-template-columns: 1fr; }
+  .spell-builder .formula-builder-card { padding: 11px; }
   .level-gain { grid-template-columns: 28px 1fr; }
   .level-gain > b { grid-column: 2; }
+  .save-mastery-grid { grid-template-columns: repeat(2,1fr); }
+  .skill-mastery-grid { grid-template-columns: 1fr; }
+  .roll-mode { margin-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; } }
