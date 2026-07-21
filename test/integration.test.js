@@ -59,6 +59,7 @@ function waitFor(socket, event, predicate) {
 test("комната, лист, броски, история и резервная копия работают вместе", async () => {
   const dm = await connect();
   let player = await connect();
+  let watcher = null;
   try {
     const health = await fetch(`http://127.0.0.1:${PORT}/health`).then(response => response.json());
     assert.deepEqual(health, { ok:true });
@@ -77,15 +78,31 @@ test("комната, лист, броски, история и резервна
     const vttScript = await fetch(`http://127.0.0.1:${PORT}/vtt.js`).then(response => response.text());
     assert.match(vttScript, /TT_VTT/);
     assert.match(vttScript, /scene:asset-place/);
+    assert.match(vttScript, /scene:annotation-add/);
+    assert.match(vttScript, /scene:items-transform/);
+    assert.match(vttScript, /scene:history-undo/);
+    assert.match(vttScript, /beginMarquee/);
+    assert.match(vttScript, /vtt-place-own/);
+    assert.match(vttScript, /vtt-roll-visibility/);
+    assert.match(vttScript, /vtt-combat-attacks/);
+    assert.match(vttScript, /ui\.leftPanel === panel \? null : panel/);
     const vttStyle = await fetch(`http://127.0.0.1:${PORT}/vtt.css`).then(response => response.text());
     assert.match(vttStyle, /vtt-viewport/);
+    assert.match(vttStyle, /room\.map-fullscreen/);
+    assert.match(vttStyle, /body\.vtt-active/);
+    assert.match(vttStyle, /game-modal \.vtt-modal-form button/);
+    assert.match(vttStyle, /vtt-token-hp/);
+    assert.match(vttStyle, /vtt-roll-entry/);
+    assert.match(vttStyle, /vtt-combat-quick/);
+    assert.doesNotMatch(vttStyle, /\.vtt-ping i::before/);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 8);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 2);
+    assert.equal(created.room.scene.schemaVersion, 4);
+    assert.deepEqual(created.room.scene.annotations, []);
     assert.equal(created.room.scene.tokens.length, 0);
     assert.equal(created.room.scenes.length, 1);
     assert.equal(created.room.scenes[0].active, true);
@@ -185,6 +202,15 @@ test("комната, лист, броски, история и резервна
     assert.equal(restored.ok, true);
     assert.equal(restored.sheet.characterName, "Шёпот");
 
+    const ownTokenForDm = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.playerId === "test-player"));
+    const ownTokenPlaced = await emit(player, "scene:token-add", { playerId:"test-player" });
+    assert.equal(ownTokenPlaced.ok, true);
+    const ownTokenRoom = await ownTokenForDm;
+    const ownPlacedToken = ownTokenRoom.scene.tokens.find(token => token.playerId === "test-player");
+    assert.equal(ownPlacedToken.name, "Шёпот");
+    assert.equal(ownPlacedToken.initiativeBonus, 4);
+    assert.equal((await emit(player, "scene:token-add", { playerId:"test-dm" })).ok, false);
+
     const advantage = await emit(player, "dice:roll", { formula:"1d20+7", label:"Скрытность", mode:"advantage" });
     assert.equal(advantage.ok, true);
     assert.equal(advantage.mode, "advantage");
@@ -203,10 +229,10 @@ test("комната, лист, броски, история и резервна
     const invalidRoll = await emit(player, "dice:roll", { formula:"101d6", label:"Слишком много" });
     assert.equal(invalidRoll.ok, false);
 
-    const partySceneUpdate = waitFor(player, "room:state", room => room.scene.tokens.some(token => token.playerId === "test-player"));
+    const partySceneUpdate = waitFor(player, "room:state", room => room.scene.tokens.some(token => token.playerId === "test-dm") && room.scene.tokens.some(token => token.playerId === "test-player"));
     const partyAdded = await emit(dm, "scene:party-add", {});
     assert.equal(partyAdded.ok, true);
-    assert.equal(partyAdded.added, 2);
+    assert.equal(partyAdded.added, 1);
     const partyRoom = await partySceneUpdate;
     const playerToken = partyRoom.scene.tokens.find(token => token.playerId === "test-player");
     assert.ok(playerToken);
@@ -301,6 +327,74 @@ test("комната, лист, броски, история и резервна
     assert.equal(duplicatedObject.ok, true);
     assert.ok(duplicatedObject.objectId);
 
+    const snappingState = waitFor(dm, "room:state", room => room.scene.grid.snap === true && room.scene.grid.type === "square" && room.scene.grid.offsetX === 7);
+    assert.equal((await emit(dm, "scene:settings", { grid:{ columns:30, rows:20, cellSize:48, visible:true, snap:true, type:"square", color:"#d3ad6e", opacity:.3, offsetX:7, offsetY:-5 } })).ok, true);
+    await snappingState;
+
+    const playerLineState = waitFor(dm, "room:state", room => room.scene.annotations.some(annotation => annotation.name === "Линия игрока"));
+    const playerLine = await emit(player, "scene:annotation-add", { kind:"line", name:"Линия игрока", x:1, y:1, x2:4, y2:4, color:"#44ccff", strokeWidth:3 });
+    assert.equal(playerLine.ok, true);
+    const playerLineRoom = await playerLineState;
+    const ownedLine = playerLineRoom.scene.annotations.find(annotation => annotation.id === playerLine.annotationId);
+    assert.equal(ownedLine.ownerId, "test-player");
+    assert.equal((await emit(player, "scene:annotation-update", { annotationId:ownedLine.id, color:"#33aaee", strokeWidth:5 })).ok, true);
+    const playerLineCopy = await emit(player, "scene:items-duplicate", { refs:[{ kind:"annotation", id:ownedLine.id }], offsetX:1, offsetY:0 });
+    assert.equal(playerLineCopy.ok, true);
+    assert.equal(playerLineCopy.created.length, 1);
+    assert.equal((await emit(player, "scene:items-remove", { refs:playerLineCopy.created })).ok, true);
+
+    const drawState = waitFor(dm, "room:state", room => room.scene.annotations.some(annotation => annotation.name === "Свободный след"));
+    const drawAdded = await emit(dm, "scene:annotation-add", { kind:"draw", name:"Свободный след", x:1.2, y:1.3, x2:2.7, y2:2.8, points:[{ x:1.2, y:1.3 },{ x:1.6, y:1.9 },{ x:2.7, y:2.8 }], color:"#f4c875", strokeWidth:4 });
+    assert.equal(drawAdded.ok, true);
+    const drawRoom = await drawState;
+    const drawAnnotation = drawRoom.scene.annotations.find(annotation => annotation.id === drawAdded.annotationId);
+    assert.deepEqual(drawAnnotation.points, [{ x:1.2, y:1.3 },{ x:1.6, y:1.9 },{ x:2.7, y:2.8 }]);
+
+    const hiddenAnnotationForDm = waitFor(dm, "room:state", room => room.scene.annotations.some(annotation => annotation.name === "Секретная зона"));
+    const hiddenAnnotationForPlayer = waitFor(player, "room:state", room => !room.scene.annotations.some(annotation => annotation.name === "Секретная зона"));
+    const hiddenAnnotation = await emit(dm, "scene:annotation-add", { kind:"circle", name:"Секретная зона", x:5.4, y:5.4, x2:7.4, y2:5.4, hidden:true });
+    assert.equal(hiddenAnnotation.ok, true);
+    assert.ok((await hiddenAnnotationForDm).scene.annotations.some(annotation => annotation.name === "Секретная зона"));
+    assert.equal((await hiddenAnnotationForPlayer).scene.annotations.some(annotation => annotation.name === "Секретная зона"), false);
+
+    const transformState = waitFor(dm, "room:state", room => room.scene.objects.some(object => object.id === mapObject.id && object.x === 4 && object.y === 5) && room.scene.annotations.some(annotation => annotation.id === drawAdded.annotationId && annotation.x === 2.2));
+    const transformed = await emit(dm, "scene:items-transform", { moves:[{ kind:"object", id:mapObject.id, dx:1, dy:1 },{ kind:"annotation", id:drawAdded.annotationId, dx:1, dy:0 }] });
+    assert.equal(transformed.ok, true);
+    assert.equal(transformed.moved, 2);
+    const transformedRoom = await transformState;
+    assert.deepEqual(transformedRoom.scene.annotations.find(annotation => annotation.id === drawAdded.annotationId).points, [{ x:2.2, y:1.3 },{ x:2.6, y:1.9 },{ x:3.7, y:2.8 }]);
+
+    const batchDuplicateState = waitFor(dm, "room:state", room => room.scene.annotations.length >= 3 && room.scene.objects.length >= 3);
+    const batchDuplicated = await emit(dm, "scene:items-duplicate", { refs:[{ kind:"object", id:mapObject.id },{ kind:"annotation", id:drawAdded.annotationId }], offsetX:2, offsetY:2 });
+    assert.equal(batchDuplicated.ok, true);
+    assert.equal(batchDuplicated.created.length, 2);
+    await batchDuplicateState;
+
+    const removeState = waitFor(dm, "room:state", room => !room.scene.annotations.some(annotation => annotation.id === batchDuplicated.created.find(ref => ref.kind === "annotation").id));
+    assert.equal((await emit(dm, "scene:items-remove", { refs:batchDuplicated.created })).ok, true);
+    await removeState;
+    const undoState = waitFor(dm, "room:state", room => room.scene.annotations.some(annotation => annotation.id === batchDuplicated.created.find(ref => ref.kind === "annotation").id));
+    assert.equal((await emit(dm, "scene:history-undo", {})).ok, true);
+    await undoState;
+    const redoState = waitFor(dm, "room:state", room => !room.scene.annotations.some(annotation => annotation.id === batchDuplicated.created.find(ref => ref.kind === "annotation").id));
+    assert.equal((await emit(dm, "scene:history-redo", {})).ok, true);
+    await redoState;
+
+    const pingState = waitFor(player, "room:state", room => room.scene.ping?.by === "Мастер");
+    assert.equal((await emit(dm, "scene:ping", { x:3, y:4, color:"#ffcc00" })).ok, true);
+    assert.equal((await pingState).scene.ping.color, "#ffcc00");
+
+    watcher = await connect();
+    const watcherJoined = await emit(watcher, "room:join", { code:created.code, name:"Наблюдатель", clientId:"test-watcher" });
+    assert.equal(watcherJoined.ok, true);
+    const privateForDm = waitFor(dm, "room:state", room => room.rollLog.some(entry => entry.label === "Тихая проверка"));
+    const privateForAuthor = waitFor(player, "room:state", room => room.rollLog.some(entry => entry.label === "Тихая проверка"));
+    const privateHiddenFromWatcher = waitFor(watcher, "room:state", room => !room.rollLog.some(entry => entry.label === "Тихая проверка"));
+    assert.equal((await emit(player, "dice:roll", { formula:"1d20+9", label:"Тихая проверка", visibility:"private" })).ok, true);
+    assert.ok((await privateForDm).rollLog.some(entry => entry.label === "Тихая проверка" && entry.visibility === "private"));
+    assert.ok((await privateForAuthor).rollLog.some(entry => entry.label === "Тихая проверка"));
+    assert.equal((await privateHiddenFromWatcher).rollLog.some(entry => entry.label === "Тихая проверка"), false);
+
     const sceneCreatedState = waitFor(dm, "room:state", room => room.scenes.some(scene => scene.name === "Тайная лаборатория"));
     const sceneCreated = await emit(dm, "scene:create", { name:"Тайная лаборатория", activate:false });
     assert.equal(sceneCreated.ok, true);
@@ -346,5 +440,6 @@ test("комната, лист, броски, история и резервна
   } finally {
     dm.disconnect();
     player.disconnect();
+    watcher?.disconnect();
   }
 });

@@ -1167,3 +1167,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   .initiative-actions,.token-inspector-actions { grid-template-columns:1fr; }
   .token-inspector-actions .danger-action { grid-column:auto; }
 }
+
+/* Roll privacy shared by the full dice view. */
+.roll.private-roll {
+  border-style: dashed;
+  border-color: #66513d;
+  background: linear-gradient(90deg,#17130f,#120f0c);
+}
+.roll.private-roll > b { color: #eadfce; background: #33291f; }

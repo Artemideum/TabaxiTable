@@ -28,6 +28,7 @@ function readRooms() {
 
 const rooms = readRooms();
 let saveTimer;
+const sceneHistories = new Map();
 function saveRooms() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
@@ -144,7 +145,7 @@ function normalizeCombatLoadout(source, inventory, itemIdAliases = new Map()) {
 
 function defaultScene(name = "Главная сцена") {
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     id: id(),
     name: cleanText(name, 60) || "Главная сцена",
     published: true,
@@ -164,6 +165,8 @@ function defaultScene(name = "Главная сцена") {
     },
     tokens: [],
     objects: [],
+    annotations: [],
+    ping: null,
     initiative: { active: false, round: 1, currentTokenId: "" },
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -186,6 +189,7 @@ function normalizeScene(source, players = {}) {
     offsetX: Math.max(-1000, Math.min(1000, Number(gridSource.offsetX) || 0)),
     offsetY: Math.max(-1000, Math.min(1000, Number(gridSource.offsetY) || 0))
   };
+  const normalizeFreeCoordinate = value => Math.max(-500, Math.min(500, Math.round((Number(value) || 0) * 10) / 10));
   const normalizeCoordinate = value => {
     const number = Number(value) || 0;
     const positioned = grid.snap ? Math.round(number) : Math.round(number * 10) / 10;
@@ -245,10 +249,46 @@ function normalizeScene(source, players = {}) {
       z: Math.max(-1000, Math.min(1000, Number(raw?.z) || (type === "map" ? -100 : 0)))
     };
   }).filter(Boolean);
+  const annotationIds = new Set();
+  const annotations = (Array.isArray(incoming.annotations) ? incoming.annotations : []).slice(0, 2000).map((raw, index) => {
+    const annotationId = cleanText(raw?.id, 80) || id();
+    if (annotationIds.has(annotationId) || seenIds.has(annotationId) || objectIds.has(annotationId)) return null;
+    annotationIds.add(annotationId);
+    const kind = ["line", "rect", "circle", "cone", "draw", "text"].includes(raw?.kind) ? raw.kind : "line";
+    const coordinate = kind === "draw" ? normalizeFreeCoordinate : normalizeCoordinate;
+    const points = Array.isArray(raw?.points) ? raw.points.slice(0, 1000).map(point => ({ x: coordinate(point?.x), y: coordinate(point?.y) })) : [];
+    return {
+      id: annotationId,
+      ownerId: cleanText(raw?.ownerId, 80),
+      kind,
+      name: cleanText(raw?.name, 80) || `${kind === "text" ? "Текст" : "Рисунок"} ${index + 1}`,
+      x: coordinate(raw?.x),
+      y: coordinate(raw?.y),
+      x2: coordinate(raw?.x2),
+      y2: coordinate(raw?.y2),
+      points,
+      text: cleanText(raw?.text, 500),
+      color: /^#[0-9a-f]{6}$/i.test(raw?.color) ? raw.color : "#f4c875",
+      fill: /^#[0-9a-f]{6}$/i.test(raw?.fill) ? raw.fill : "#b94b42",
+      fillOpacity: Math.max(0, Math.min(1, Number(raw?.fillOpacity) || 0.18)),
+      opacity: Math.max(0.05, Math.min(1, Number(raw?.opacity) || 1)),
+      strokeWidth: Math.max(1, Math.min(20, Number(raw?.strokeWidth) || 3)),
+      hidden: Boolean(raw?.hidden),
+      locked: Boolean(raw?.locked),
+      z: Math.max(-1000, Math.min(1000, Number(raw?.z) || 50))
+    };
+  }).filter(Boolean);
+  const pingSource = incoming.ping && typeof incoming.ping === "object" ? incoming.ping : null;
+  const ping = pingSource && Date.now() - Number(pingSource.at || 0) < 10000 ? {
+    id: cleanText(pingSource.id, 80) || `${Number(pingSource.at) || Date.now()}-${cleanText(pingSource.by, 20)}`,
+    x: normalizeCoordinate(pingSource.x), y: normalizeCoordinate(pingSource.y),
+    color: /^#[0-9a-f]{6}$/i.test(pingSource.color) ? pingSource.color : "#f4c875",
+    at: Number(pingSource.at) || Date.now(), by: cleanText(pingSource.by, 60)
+  } : null;
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
-    schemaVersion: 2,
+    schemaVersion: 4,
     id: cleanText(incoming.id, 80) || base.id,
     name: cleanText(incoming.name, 60) || base.name,
     published: incoming.published !== false,
@@ -257,6 +297,8 @@ function normalizeScene(source, players = {}) {
     grid,
     tokens,
     objects,
+    annotations,
+    ping,
     initiative: {
       active: Boolean(initiativeSource.active) && tokens.some(token => token.initiative !== null),
       round: Math.max(1, Math.min(999, Number(initiativeSource.round) || 1)),
@@ -330,6 +372,59 @@ function setActiveScene(room, scene) {
   return normalized;
 }
 
+function sceneHistoryKey(room, sceneId = room.activeSceneId) {
+  return `${room.code}:${sceneId}`;
+}
+
+function sceneHistoryState(room, sceneId = room.activeSceneId) {
+  const key = sceneHistoryKey(room, sceneId);
+  if (!sceneHistories.has(key)) sceneHistories.set(key, { undo: [], redo: [] });
+  return sceneHistories.get(key);
+}
+
+function rememberScene(room, scene) {
+  const history = sceneHistoryState(room, scene.id);
+  history.undo.push(structuredClone(scene));
+  if (history.undo.length > 60) history.undo.shift();
+  history.redo = [];
+}
+
+function restoreSceneFromHistory(room, direction) {
+  const current = activeScene(room);
+  const history = sceneHistoryState(room, current.id);
+  const from = direction === "redo" ? history.redo : history.undo;
+  const to = direction === "redo" ? history.undo : history.redo;
+  const snapshot = from.pop();
+  if (!snapshot) return null;
+  to.push(structuredClone(current));
+  if (to.length > 60) to.shift();
+  return setActiveScene(room, { ...snapshot, id: current.id });
+}
+
+function sceneFreeCoordinate(value) {
+  return Math.max(-500, Math.min(500, Math.round((Number(value) || 0) * 10) / 10));
+}
+
+function sceneCoordinate(scene, value) {
+  const number = Number(value) || 0;
+  const positioned = scene.grid.snap ? Math.round(number) : Math.round(number * 10) / 10;
+  return Math.max(-500, Math.min(500, positioned));
+}
+
+function translateAnnotation(annotation, dx, dy, scene) {
+  const moveX = Number(dx) || 0;
+  const moveY = Number(dy) || 0;
+  const coordinate = annotation.kind === "draw" ? sceneFreeCoordinate : value => sceneCoordinate(scene, value);
+  annotation.x = coordinate(annotation.x + moveX);
+  annotation.y = coordinate(annotation.y + moveY);
+  annotation.x2 = coordinate(annotation.x2 + moveX);
+  annotation.y2 = coordinate(annotation.y2 + moveY);
+  annotation.points = (annotation.points || []).map(point => ({
+    x: coordinate(point.x + moveX),
+    y: coordinate(point.y + moveY)
+  }));
+}
+
 function sceneSummaries(room, viewerId = "") {
   ensureRoomVtt(room);
   const isDm = viewerId === room.dmId;
@@ -340,6 +435,7 @@ function sceneSummaries(room, viewerId = "") {
     active: scene.id === room.activeSceneId,
     tokenCount: scene.tokens.filter(token => isDm || !token.hidden).length,
     objectCount: scene.objects.filter(object => isDm || !object.hidden).length,
+    annotationCount: scene.annotations.filter(annotation => isDm || !annotation.hidden).length,
     updatedAt: scene.updatedAt
   }));
 }
@@ -684,6 +780,7 @@ function publicRoom(room, viewerId = "") {
   if (!isDm) {
     scene.tokens = scene.tokens.filter(token => !token.hidden);
     scene.objects = scene.objects.filter(object => !object.hidden);
+    scene.annotations = scene.annotations.filter(annotation => !annotation.hidden);
     if (!scene.tokens.some(token => token.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
     scene.initiative.active = scene.tokens.some(token => token.initiative !== null);
   }
@@ -692,7 +789,13 @@ function publicRoom(room, viewerId = "") {
     title: room.title,
     dmId: room.dmId,
     players,
-    rollLog: room.rollLog.filter(entry => !entry.privateToDm || isDm).slice(-30),
+    rollLog: (Array.isArray(room.rollLog) ? room.rollLog : []).filter(entry => {
+      const visibility = ["private","gm"].includes(entry?.visibility) ? entry.visibility : "public";
+      if (entry?.privateToDm) return isDm;
+      if (visibility === "gm") return isDm;
+      if (visibility === "private") return isDm || cleanText(entry?.playerId, 80) === viewerId;
+      return true;
+    }).slice(-100),
     scene,
     activeSceneId: room.activeSceneId,
     scenes: sceneSummaries(room, viewerId),
@@ -933,10 +1036,11 @@ io.on("connection", (socket) => {
     room.activeSceneId = cleanText(backup.activeSceneId, 80) || room.scenes[0]?.id || "";
     room.assets = normalizeAssets(backup.assets || room.assets, room.code);
     ensureRoomVtt(room);
-    room.rollLog = Array.isArray(backup.rollLog) ? backup.rollLog.slice(-30).map(entry => ({
-      id:id(), player:cleanText(entry?.player, 40) || "Игрок", label:cleanText(entry?.label, 80), activity:cleanText(entry?.activity, 120),
+    room.rollLog = Array.isArray(backup.rollLog) ? backup.rollLog.slice(-100).map(entry => ({
+      id:id(), playerId:cleanText(entry?.playerId, 80), player:cleanText(entry?.player, 40) || "Игрок", label:cleanText(entry?.label, 80), activity:cleanText(entry?.activity, 120),
       formula:cleanText(entry?.formula, 100), dice:Array.isArray(entry?.dice) ? entry.dice.slice(0,100).map(Number) : [], modifier:Number(entry?.modifier || 0),
-      total:entry?.total === null ? null : Number(entry?.total || 0), mode:["advantage","disadvantage"].includes(entry?.mode) ? entry.mode : "normal", natural:Number(entry?.natural || 0) || null, at:Number(entry?.at || Date.now())
+      total:entry?.total === null ? null : Number(entry?.total || 0), mode:["advantage","disadvantage"].includes(entry?.mode) ? entry.mode : "normal", natural:Number(entry?.natural || 0) || null,
+      visibility:["private","gm"].includes(entry?.visibility) ? entry.visibility : "public", privateToDm:Boolean(entry?.privateToDm), at:Number(entry?.at || Date.now())
     })) : [];
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
@@ -969,6 +1073,7 @@ io.on("connection", (socket) => {
     copy.name = cleanText(name,60) || `${source.name} — копия`;
     copy.tokens = copy.tokens.map(token => ({ ...token, id:id(), initiative:null }));
     copy.objects = copy.objects.map(object => ({ ...object, id:id() }));
+    copy.annotations = (copy.annotations || []).map(annotation => ({ ...annotation, id:id() }));
     copy.initiative = { active:false, round:1, currentTokenId:"" };
     copy.published = Boolean(activate);
     copy.createdAt = Date.now(); copy.updatedAt = Date.now();
@@ -1028,6 +1133,7 @@ io.on("connection", (socket) => {
     const asset = room.assets.find(entry => entry.id === cleanText(payload.assetId,80));
     if (!asset) return reply({ ok:false, error:"Ресурс не найден в библиотеке" });
     const scene = activeScene(room);
+    rememberScene(room, scene);
     const snap = value => scene.grid.snap ? Math.round(Number(value)||0) : Math.round((Number(value)||0)*10)/10;
     const x = Math.max(-500,Math.min(500,snap(payload.x)));
     const y = Math.max(-500,Math.min(500,snap(payload.y)));
@@ -1070,6 +1176,7 @@ io.on("connection", (socket) => {
     const object = scene.objects.find(entry => entry.id === cleanText(objectId,80));
     if (!object) return reply({ ok:false, error:"Объект не найден" });
     if (object.locked) return reply({ ok:false, error:"Сначала разблокируй объект" });
+    rememberScene(room, scene);
     const position = value => scene.grid.snap ? Math.round(Number(value)||0) : Math.round((Number(value)||0)*10)/10;
     object.x = Math.max(-500,Math.min(500,position(x)));
     object.y = Math.max(-500,Math.min(500,position(y)));
@@ -1083,6 +1190,7 @@ io.on("connection", (socket) => {
     const scene = activeScene(room);
     const object = scene.objects.find(entry => entry.id === cleanText(payload.objectId,80));
     if (!object) return reply({ ok:false, error:"Объект не найден" });
+    rememberScene(room, scene);
     object.name = cleanText(payload.name ?? object.name,80) || object.name;
     object.width = Math.max(.25,Math.min(200,Number(payload.width)||object.width));
     object.height = Math.max(.25,Math.min(200,Number(payload.height)||object.height));
@@ -1101,6 +1209,7 @@ io.on("connection", (socket) => {
     const scene = activeScene(room);
     const object = scene.objects.find(entry => entry.id === cleanText(objectId,80));
     if (!object) return reply({ ok:false, error:"Объект не найден" });
+    rememberScene(room, scene);
     const copy = { ...object, id:id(), name:`${object.name} — копия`, x:object.x+1, y:object.y+1, locked:false };
     scene.objects.push(copy);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, objectId:copy.id });
@@ -1112,6 +1221,7 @@ io.on("connection", (socket) => {
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий удаляет объекты" });
     const scene = activeScene(room);
     const targetId = cleanText(objectId,80);
+    rememberScene(room, scene);
     scene.objects = scene.objects.filter(object => object.id !== targetId);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
   });
@@ -1123,6 +1233,7 @@ io.on("connection", (socket) => {
     const scene = activeScene(room);
     const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
     if (!token) return reply({ ok:false, error:"Токен не найден" });
+    rememberScene(room, scene);
     const copies = Math.max(1,Math.min(50,Number(count)||1));
     const baseName = token.name.replace(/\s+\d+$/, "");
     const sameCount = scene.tokens.filter(entry => entry.assetId && entry.assetId === token.assetId || entry.name.replace(/\s+\d+$/, "") === baseName).length;
@@ -1135,6 +1246,7 @@ io.on("connection", (socket) => {
     const room = rooms[code];
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет сцену" });
     const current = activeScene(room);
+    rememberScene(room, current);
     const updated = setActiveScene(room, {
       ...current,
       name: payload.name ?? current.name,
@@ -1149,11 +1261,16 @@ io.on("connection", (socket) => {
   socket.on("scene:token-add", (payload = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
-    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий добавляет токены" });
-    const scene = activeScene(room);
-    const playerId = cleanText(payload.playerId, 80);
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const isDm = room.dmId === clientId;
+    const requestedPlayerId = cleanText(payload.playerId, 80);
+    const playerId = isDm ? requestedPlayerId : clientId;
     const player = room.players[playerId];
+    if (!isDm && !player) return reply({ ok:false, error:"Персонаж не найден" });
+    if (!isDm && requestedPlayerId && requestedPlayerId !== clientId) return reply({ ok:false, error:"Можно поставить только своего персонажа" });
+    const scene = activeScene(room);
     if (player && sceneTokenForPlayer(scene, playerId)) return reply({ ok:false, error:"Токен этого персонажа уже на сцене" });
+    rememberScene(room, scene);
     const position = nextScenePosition(scene);
     const sheet = player?.sheet || {};
     scene.tokens.push({
@@ -1164,7 +1281,7 @@ io.on("connection", (socket) => {
       color:/^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : payload.color) ? (player ? sheet.tokenColor : payload.color) : "#9f7842",
       imageUrl:cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : payload.imageUrl, 1000),
       vision:Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : payload.vision) || 0)),
-      hidden:Boolean(payload.hidden), locked:Boolean(payload.locked), z:100,
+      hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:100,
       initiativeBonus:Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : payload.initiativeBonus) || 0)),
       initiativeAdvantage:Boolean(player ? sheet.initiativeAdvantage : payload.initiativeAdvantage),
       initiative:null
@@ -1178,6 +1295,7 @@ io.on("connection", (socket) => {
     const room = rooms[code];
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий добавляет токены" });
     const scene = activeScene(room);
+    rememberScene(room, scene);
     let added = 0;
     Object.entries(room.players).forEach(([playerId, player]) => {
       if (sceneTokenForPlayer(scene, playerId)) return;
@@ -1198,6 +1316,7 @@ io.on("connection", (socket) => {
     if (!token) return reply({ ok:false, error:"Токен не найден" });
     const allowed = room.dmId === clientId || token.playerId === clientId;
     if (!allowed || token.locked && room.dmId !== clientId) return reply({ ok:false, error:"Этот токен нельзя двигать" });
+    rememberScene(room, scene);
     const positionValue = value => scene.grid.snap ? Math.round(Number(value) || 0) : Math.round((Number(value) || 0) * 10) / 10;
     token.x = Math.max(-500, Math.min(500, positionValue(x)));
     token.y = Math.max(-500, Math.min(500, positionValue(y)));
@@ -1214,6 +1333,7 @@ io.on("connection", (socket) => {
     if (!token) return reply({ ok:false, error:"Токен не найден" });
     const isDm = room.dmId === clientId;
     if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Нет доступа к токену" });
+    rememberScene(room, scene);
     if (!token.playerId) {
       token.name = cleanText(payload.name ?? token.name,60) || token.name;
       token.imageUrl = cleanText(payload.imageUrl ?? token.imageUrl,1000);
@@ -1235,10 +1355,200 @@ io.on("connection", (socket) => {
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий удаляет токены" });
     const scene = activeScene(room);
     const idToRemove = cleanText(tokenId,80);
+    rememberScene(room, scene);
     scene.tokens = scene.tokens.filter(token => token.id !== idToRemove);
     if (scene.initiative.currentTokenId === idToRemove) scene.initiative.currentTokenId = "";
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:annotation-add", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || !room.players?.[clientId]) return reply({ ok:false, error:"Игрок не подключён" });
+    const isDm = room.dmId === clientId;
+    const scene = activeScene(room);
+    rememberScene(room, scene);
+    const annotationId = id();
+    scene.annotations.push({
+      id:annotationId,
+      ownerId:clientId,
+      kind:["line","rect","circle","cone","draw","text"].includes(payload.kind) ? payload.kind : "line",
+      name:cleanText(payload.name,80),
+      x:payload.x, y:payload.y, x2:payload.x2, y2:payload.y2,
+      points:Array.isArray(payload.points) ? payload.points : [],
+      text:cleanText(payload.text,500), color:payload.color, fill:payload.fill,
+      fillOpacity:payload.fillOpacity, opacity:payload.opacity, strokeWidth:payload.strokeWidth,
+      hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:Number(payload.z) || 50
+    });
+    const updated = setActiveScene(room, scene);
+    saveRooms(); emitRoom(code); reply({ ok:true, annotationId, annotation:updated.annotations.find(entry => entry.id === annotationId) });
+  });
+
+  socket.on("scene:annotation-update", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const scene = activeScene(room);
+    const annotation = scene.annotations.find(entry => entry.id === cleanText(payload.annotationId,80));
+    if (!annotation) return reply({ ok:false, error:"Рисунок не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && annotation.ownerId !== clientId) return reply({ ok:false, error:"Можно менять только свои рисунки" });
+    rememberScene(room, scene);
+    if (payload.name !== undefined) annotation.name = cleanText(payload.name,80) || annotation.name;
+    if (payload.text !== undefined) annotation.text = cleanText(payload.text,500);
+    if (/^#[0-9a-f]{6}$/i.test(payload.color)) annotation.color = payload.color;
+    if (/^#[0-9a-f]{6}$/i.test(payload.fill)) annotation.fill = payload.fill;
+    if (payload.fillOpacity !== undefined) annotation.fillOpacity = Math.max(0,Math.min(1,Number(payload.fillOpacity)||0));
+    if (payload.opacity !== undefined) annotation.opacity = Math.max(.05,Math.min(1,Number(payload.opacity)||1));
+    if (payload.strokeWidth !== undefined) annotation.strokeWidth = Math.max(1,Math.min(20,Number(payload.strokeWidth)||3));
+    if (isDm && payload.hidden !== undefined) annotation.hidden = Boolean(payload.hidden);
+    if (isDm && payload.locked !== undefined) annotation.locked = Boolean(payload.locked);
+    if (isDm && payload.z !== undefined) annotation.z = Math.max(-1000,Math.min(1000,Number(payload.z)||50));
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:annotation-remove", ({ annotationId } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const scene = activeScene(room);
+    const targetId = cleanText(annotationId,80);
+    const annotation = scene.annotations.find(entry => entry.id === targetId);
+    if (!annotation) return reply({ ok:false, error:"Рисунок не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && annotation.ownerId !== clientId) return reply({ ok:false, error:"Можно удалять только свои рисунки" });
+    rememberScene(room, scene);
+    scene.annotations = scene.annotations.filter(entry => entry.id !== targetId);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:items-transform", ({ moves } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = activeScene(room);
+    const isDm = room.dmId === clientId;
+    const safeMoves = Array.isArray(moves) ? moves.slice(0,500) : [];
+    const applicable = safeMoves.filter(move => {
+      if (move?.kind === "token") {
+        const token = scene.tokens.find(entry => entry.id === cleanText(move.id,80));
+        return token && (isDm || token.playerId === clientId) && (!token.locked || isDm);
+      }
+      if (move?.kind === "object") return isDm && scene.objects.some(entry => entry.id === cleanText(move.id,80) && !entry.locked);
+      if (move?.kind === "annotation") {
+        const annotation = scene.annotations.find(entry => entry.id === cleanText(move.id,80));
+        return annotation && (isDm || annotation.ownerId === clientId) && (!annotation.locked || isDm);
+      }
+      return false;
+    });
+    if (!applicable.length) return reply({ ok:false, error:"Нет объектов, которые можно переместить" });
+    rememberScene(room, scene);
+    applicable.forEach(move => {
+      const dx = Number(move.dx) || 0, dy = Number(move.dy) || 0;
+      if (move.kind === "token") {
+        const token = scene.tokens.find(entry => entry.id === cleanText(move.id,80));
+        token.x = sceneCoordinate(scene, move.x === undefined ? token.x + dx : move.x);
+        token.y = sceneCoordinate(scene, move.y === undefined ? token.y + dy : move.y);
+      } else if (move.kind === "object") {
+        const object = scene.objects.find(entry => entry.id === cleanText(move.id,80));
+        object.x = sceneCoordinate(scene, move.x === undefined ? object.x + dx : move.x);
+        object.y = sceneCoordinate(scene, move.y === undefined ? object.y + dy : move.y);
+      } else {
+        const annotation = scene.annotations.find(entry => entry.id === cleanText(move.id,80));
+        translateAnnotation(annotation, dx, dy, scene);
+      }
+    });
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, moved:applicable.length });
+  });
+
+  socket.on("scene:items-duplicate", ({ refs, offsetX = 1, offsetY = 1 } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const isDm = room.dmId === clientId;
+    const scene = activeScene(room);
+    const safeRefs = Array.isArray(refs) ? refs.slice(0,500) : [];
+    if (!safeRefs.length) return reply({ ok:false, error:"Нечего копировать" });
+    rememberScene(room, scene);
+    const created = [];
+    safeRefs.forEach(ref => {
+      const refId = cleanText(ref?.id,80);
+      if (ref?.kind === "token") {
+        const source = scene.tokens.find(entry => entry.id === refId);
+        if (!source || !isDm) return;
+        const copy = { ...source, id:id(), playerId:"", name:`${source.name.replace(/\s+— копия(?: \d+)?$/, "")} — копия`, x:sceneCoordinate(scene, source.x + Number(offsetX || 0)), y:sceneCoordinate(scene, source.y + Number(offsetY || 0)), initiative:null, locked:false };
+        scene.tokens.push(copy); created.push({ kind:"token", id:copy.id });
+      } else if (ref?.kind === "object") {
+        const source = scene.objects.find(entry => entry.id === refId);
+        if (!source || !isDm) return;
+        const copy = { ...source, id:id(), name:`${source.name.replace(/\s+— копия(?: \d+)?$/, "")} — копия`, x:sceneCoordinate(scene, source.x + Number(offsetX || 0)), y:sceneCoordinate(scene, source.y + Number(offsetY || 0)), locked:false };
+        scene.objects.push(copy); created.push({ kind:"object", id:copy.id });
+      } else if (ref?.kind === "annotation") {
+        const source = scene.annotations.find(entry => entry.id === refId);
+        if (!source || !isDm && source.ownerId !== clientId) return;
+        const copy = structuredClone(source); copy.id=id(); copy.ownerId=clientId; copy.name=`${source.name || "Рисунок"} — копия`; copy.locked=false; copy.hidden=false;
+        translateAnnotation(copy, Number(offsetX || 0), Number(offsetY || 0), scene);
+        scene.annotations.push(copy); created.push({ kind:"annotation", id:copy.id });
+      }
+    });
+    if (!created.length) {
+      const history = sceneHistoryState(room, scene.id); history.undo.pop();
+      return reply({ ok:false, error:"Объекты не найдены" });
+    }
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, created });
+  });
+
+  socket.on("scene:items-remove", ({ refs } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const scene = activeScene(room);
+    const isDm = room.dmId === clientId;
+    const safeRefs = Array.isArray(refs) ? refs.slice(0,500) : [];
+    const tokenIds = new Set(safeRefs.filter(ref => ref?.kind === "token" && isDm).map(ref => cleanText(ref.id,80)));
+    const objectIds = new Set(safeRefs.filter(ref => ref?.kind === "object" && isDm).map(ref => cleanText(ref.id,80)));
+    const annotationIds = new Set(safeRefs.filter(ref => {
+      if (ref?.kind !== "annotation") return false;
+      const annotation = scene.annotations.find(entry => entry.id === cleanText(ref.id,80));
+      return annotation && (isDm || annotation.ownerId === clientId);
+    }).map(ref => cleanText(ref.id,80)));
+    const removed = scene.tokens.filter(entry => tokenIds.has(entry.id)).length + scene.objects.filter(entry => objectIds.has(entry.id)).length + scene.annotations.filter(entry => annotationIds.has(entry.id)).length;
+    if (!removed) return reply({ ok:false, error:"Нечего удалять" });
+    rememberScene(room, scene);
+    scene.tokens = scene.tokens.filter(entry => !tokenIds.has(entry.id));
+    scene.objects = scene.objects.filter(entry => !objectIds.has(entry.id));
+    scene.annotations = scene.annotations.filter(entry => !annotationIds.has(entry.id));
+    if (tokenIds.has(scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, removed });
+  });
+
+  socket.on("scene:history-undo", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий отменяет изменения" });
+    const restored = restoreSceneFromHistory(room, "undo");
+    if (!restored) return reply({ ok:false, error:"Нечего отменять" });
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:history-redo", (_payload, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий повторяет изменения" });
+    const restored = restoreSceneFromHistory(room, "redo");
+    if (!restored) return reply({ ok:false, error:"Нечего повторять" });
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:ping", ({ x, y, color } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    const player = room?.players?.[clientId];
+    if (!room || !player) return reply({ ok:false });
+    const scene = activeScene(room);
+    scene.ping = { id:id(), x:sceneCoordinate(scene,x), y:sceneCoordinate(scene,y), color:/^#[0-9a-f]{6}$/i.test(color) ? color : "#f4c875", at:Date.now(), by:cleanText(player.name,60) };
+    setActiveScene(room, scene); emitRoom(code); reply({ ok:true });
   });
 
   socket.on("initiative:roll", ({ tokenId } = {}, reply = () => {}) => {
@@ -1257,8 +1567,8 @@ io.on("connection", (socket) => {
     const order = initiativeOrder(scene);
     if (!scene.initiative.currentTokenId || !order.some(entry => entry.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = order[0]?.id || "";
     setActiveScene(room, scene);
-    room.rollLog.push({ id:id(), player:room.players[clientId]?.name || token.name, label:`Инициатива · ${token.name}`, formula:`1к20${Number(token.initiativeBonus)>=0?"+":""}${Number(token.initiativeBonus)||0}`, dice, modifier:Number(token.initiativeBonus)||0, total:token.initiative, mode:token.initiativeAdvantage?"advantage":"normal", natural, privateToDm:Boolean(token.hidden), at:Date.now() });
-    room.rollLog = room.rollLog.slice(-30);
+    room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Инициатива · ${token.name}`, formula:`1к20${Number(token.initiativeBonus)>=0?"+":""}${Number(token.initiativeBonus)||0}`, dice, modifier:Number(token.initiativeBonus)||0, total:token.initiative, mode:token.initiativeAdvantage?"advantage":"normal", natural, visibility:"public", privateToDm:Boolean(token.hidden), at:Date.now() });
+    room.rollLog = room.rollLog.slice(-100);
     saveRooms(); emitRoom(code); reply({ ok:true, natural, total:token.initiative });
   });
 
@@ -1303,15 +1613,17 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("dice:roll", ({ formula, label, mode }, reply = () => {}) => {
+  socket.on("dice:roll", ({ formula, label, mode, visibility }, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     const player = room?.players?.[clientId];
     if (!room || !player) return reply({ ok: false, error: "Игрок не подключён" });
     const parsed = parseDiceFormula(formula, mode);
     if (!parsed.ok) return reply({ ok: false, error: parsed.error });
-    room.rollLog.push({ id: id(), player: player.name, label: cleanText(label, 60) || parsed.formula, formula: parsed.formula, dice: parsed.dice, detail: parsed.detail, modifier: parsed.modifier, total: parsed.total, mode: parsed.mode, natural: parsed.natural, at: Date.now() });
-    room.rollLog = room.rollLog.slice(-30);
+    let safeVisibility = ["private","gm"].includes(visibility) ? visibility : "public";
+    if (safeVisibility === "gm" && room.dmId !== clientId) safeVisibility = "private";
+    room.rollLog.push({ id: id(), playerId:clientId, player: player.name, label: cleanText(label, 60) || parsed.formula, formula: parsed.formula, dice: parsed.dice, detail: parsed.detail, modifier: parsed.modifier, total: parsed.total, mode: parsed.mode, natural: parsed.natural, visibility:safeVisibility, at: Date.now() });
+    room.rollLog = room.rollLog.slice(-100);
     saveRooms();
     emitRoom(code);
     reply({ ok: true, formula:parsed.formula, total: parsed.total, dice: parsed.dice, detail: parsed.detail, modifier:parsed.modifier, mode: parsed.mode, natural: parsed.natural });
@@ -1322,8 +1634,8 @@ io.on("connection", (socket) => {
     const room = rooms[code];
     const player = room?.players?.[clientId];
     if (!room || !player) return reply({ ok: false });
-    room.rollLog.push({ id: id(), player: player.name, label: cleanText(label, 80), activity: cleanText(detail, 120), total: null, at: Date.now() });
-    room.rollLog = room.rollLog.slice(-30);
+    room.rollLog.push({ id: id(), playerId:clientId, player: player.name, label: cleanText(label, 80), activity: cleanText(detail, 120), total: null, visibility:"public", at: Date.now() });
+    room.rollLog = room.rollLog.slice(-100);
     saveRooms(); emitRoom(code); reply({ ok: true });
   });
 

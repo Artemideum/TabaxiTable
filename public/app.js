@@ -429,7 +429,13 @@ socket.on("room:state", room => {
   if (!editing) renderSheet();
 });
 
-function renderAll() { renderChrome(); renderSheet(); renderRolls(); renderMap(); }
+function renderAll() {
+  renderChrome();
+  renderSheet();
+  renderRolls();
+  if (state.currentView === "map") renderMap();
+  else window.TT_VTT?.deactivate?.();
+}
 function renderChrome() {
   const room = state.room;
   $("#campaign-title").textContent = room.title;
@@ -1070,11 +1076,11 @@ function activeAmmoForAttack(sheet, attack) {
 function activeAmmoMagicBonus(sheet, attack) {
   return Math.max(0,Number(activeAmmoForAttack(sheet,attack)?.magicBonus || 0));
 }
-function performAttackRoll(attack) {
+function performAttackRoll(attack, options = {}) {
   const sheet = currentSheet();
   const fixedMode = attack?.rollMode && attack.rollMode !== "inherit" ? attack.rollMode : undefined;
   const ammoBonus = activeAmmoMagicBonus(sheet,attack);
-  roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + ammoBonus)}`, `Атака: ${attack.name}${ammoBonus ? ` · боеприпас +${ammoBonus}` : ""}`, { ...(fixedMode ? { mode:fixedMode } : {}), onResult: response => {
+  roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + ammoBonus)}`, `Атака: ${attack.name}${ammoBonus ? ` · боеприпас +${ammoBonus}` : ""}`, { ...options, ...(fixedMode ? { mode:fixedMode } : {}), onResult: response => {
     if (response.natural === 20) { state.lastCriticalAttackId = attack.id; toast("Натуральная 20! Жми ✦ для критического урона"); }
     else if (response.natural === 1) toast("Натуральная 1 — автоматический промах");
     consumeLoadoutAmmo(attack);
@@ -1182,7 +1188,7 @@ function healingPotionFormula(item) {
   if (/больш|greater/.test(name)) return "4к4+4";
   return "2к4+2";
 }
-function useQuickItem(index) {
+function useQuickItem(index, options = {}) {
   const next = structuredClone(currentSheet()), set = activeCombatSet(next), item = combatItem(next,set.quickSlots[index]);
   if (!item) return state.editMode ? assignQuickSlot(index) : toast("Этот быстрый слот пуст");
   if (state.editMode && state.selectedLoadoutItemId) return assignQuickSlot(index);
@@ -1190,7 +1196,7 @@ function useQuickItem(index) {
   item.quantity = Math.max(0,Number(item.quantity)-1);
   const formula = healingPotionFormula(item);
   saveNow(next,`${item.name}: осталось ${item.quantity}`,"Использован быстрый предмет"); renderSheet();
-  if (formula) roll(formula,`Лечение: ${item.name}`,{mode:"normal"});
+  if (formula) roll(formula,`Лечение: ${item.name}`,{ ...options, mode:"normal" });
   else toast(`${item.name} использован · осталось ${item.quantity}`);
 }
 function assignAttunement(index, itemId = state.selectedLoadoutItemId) {
@@ -2289,10 +2295,10 @@ function openAttackModal(id = null) {
   $("#attack-cancel")?.addEventListener("click", closeModal);
 }
 
-function rollAttackDamage(attack, critical = false) {
+function rollAttackDamage(attack, critical = false, options = {}) {
   const sheet = currentSheet();
   const hasSmite = Array.isArray(attack.damageParts) && attack.damageParts.some(part => part.type === "smite");
-  if (hasSmite) return openSmiteDamageModal(attack,critical);
+  if (hasSmite) return openSmiteDamageModal(attack,critical,options);
   let formula = attackDamageFormula(attack,sheet);
   if (!formula) return;
   formula = resolveDiceFormula(formula,sheet);
@@ -2301,10 +2307,10 @@ function rollAttackDamage(attack, critical = false) {
   if (critical) formula = criticalFormula(formula);
   const sourceItem = (sheet.inventoryList || []).find(item => item.id === attack.sourceItemId);
   if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,sheet)}`;
-  roll(formula, `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, { mode:"normal" });
+  roll(formula, `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, { ...options, mode:"normal" });
 }
 
-function openSmiteDamageModal(attack, critical) {
+function openSmiteDamageModal(attack, critical, options = {}) {
   const sheet = currentSheet();
   const ordinary = (sheet.spellSlots || []).filter(slot => Number(slot.total) - Number(slot.used) > 0);
   const pact = sheet.pactSlots || {};
@@ -2316,7 +2322,7 @@ function openSmiteDamageModal(attack, critical) {
     if (critical) formula = criticalFormula(formula);
     const sourceItem = (currentSheet().inventoryList || []).find(item => item.id === attack.sourceItemId);
     if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,currentSheet())}`;
-    closeModal(); roll(formula, `${critical ? "Критический урон" : "Урон"} без кары: ${attack.name}`, { mode:"normal" });
+    closeModal(); roll(formula, `${critical ? "Критический урон" : "Урон"} без кары: ${attack.name}`, { ...options, mode:"normal" });
   };
   openModal("Божественная кара", `<div class="smite-card"><div class="smite-symbol">✦</div><div><span class="eyebrow">После попадания</span><h3>${esc(attack.name)}</h3><p>Выбери ячейку. Кости кары автоматически удвоятся при критическом попадании.</p></div></div>${choices.length ? `<label>Потратить ячейку<select id="smite-slot">${choices.map(choice => `<option value="${choice.value}" data-level="${choice.level}">${choice.label}</option>`).join("")}</select></label><label class="toggle-row"><span><strong>Исчадие или нежить</strong><small>Добавляет ещё 1к8 урона излучением</small></span><input id="smite-special" type="checkbox"><i></i></label><div id="smite-preview" class="formula-preview"></div><div class="modal-actions"><button id="smite-roll" class="primary" type="button">Потратить ячейку и бросить</button><button id="smite-skip" class="secondary" type="button">Урон без кары</button></div>` : `<div class="read-only">Свободных ячеек нет. Можно бросить обычный урон без кары.</div><button id="smite-skip" class="primary" type="button">Бросить без кары</button>`}`);
   const refresh = () => {
@@ -2338,7 +2344,7 @@ function openSmiteDamageModal(attack, critical) {
     const sourceItem = (next.inventoryList || []).find(item => item.id === attack.sourceItemId);
     if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,next)}`;
     closeModal(); saveNow(next,"Ячейка потрачена","Божественная кара"); renderSheet();
-    roll(formula, `${critical ? "Критическая кара" : "Божественная кара"}: ${attack.name}`, { mode:"normal" });
+    roll(formula, `${critical ? "Критическая кара" : "Божественная кара"}: ${attack.name}`, { ...options, mode:"normal" });
   });
 }
 
@@ -2717,7 +2723,7 @@ function roll(formula, label = formula, options = {}) {
   const isD20 = /(?:^|[^\d])1[кd]20(?:$|[^\d])/i.test(String(formula));
   const usesSelectedMode = isD20 && !options.mode;
   const mode = options.mode || (isD20 ? state.rollMode : "normal");
-  socket.emit("dice:roll", { formula, label, mode }, response => {
+  socket.emit("dice:roll", { formula, label, mode, visibility:options.visibility || "public" }, response => {
     if (!response.ok) return toast(response.error);
     showRollPeek(label, response);
     options.onResult?.(response);
@@ -2782,9 +2788,78 @@ function sceneAction(event,payload = {}, successMessage = "") {
     if (successMessage) toast(successMessage);
   });
 }
+function buildVttCharacterModels() {
+  return Object.fromEntries(Object.entries(state.room?.players || {}).map(([playerId, player]) => {
+    const sheet = player?.sheet;
+    if (!sheet) return [playerId, null];
+    return [playerId, {
+      playerId,
+      name:sheet.characterName || player.name,
+      hp:Number(sheet.hpCurrent || 0),
+      hpMax:Number(sheet.hpMax || 0),
+      tempHp:Number(sheet.hpTemp || 0),
+      ac:calculateAc(sheet),
+      initiativeBonus:initiativeBonus(sheet),
+      initiativeAdvantage:Boolean(sheet.initiativeAdvantage)
+    }];
+  }).filter(([, value]) => value));
+}
+
+function buildVttCombatModel() {
+  const player = state.room?.players?.[state.clientId];
+  const sheet = player?.sheet;
+  if (!sheet) return null;
+  const loadout = ensureCombatLoadout(sheet);
+  const set = activeCombatSet(sheet);
+  const equippedIds = new Set([...Object.values(set.slots || {}), ...(set.quickSlots || [])].filter(Boolean));
+  const linked = (sheet.attacksList || []).filter(attack => attack.sourceItemId && equippedIds.has(attack.sourceItemId));
+  const unlinked = (sheet.attacksList || []).filter(attack => !attack.sourceItemId);
+  const attacks = [...linked, ...unlinked].slice(0, 10).map(attack => ({
+    id:attack.id,
+    name:attack.name || "Атака",
+    bonus:signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + activeAmmoMagicBonus(sheet,attack)),
+    damage:friendlyFormula(attack,"damage",sheet) || String(attack.damage || "—").replace(/d/gi,"к"),
+    damageType:attack.damageType || "",
+    actionCost:actionCostLabel(attack.actionCost)
+  }));
+  const quickSlots = (set.quickSlots || []).map((itemId,index) => {
+    const item = combatItem(sheet,itemId);
+    return item ? { index, id:item.id, name:item.name || `Слот ${index+1}`, quantity:Number(item.quantity || 0), icon:itemCombatIcon(item), summary:combatItemSummary(item) } : { index, id:"", name:`Слот ${index+1}`, quantity:0, icon:"◇", summary:"Пусто" };
+  });
+  const equipment = Object.entries(set.slots || {}).map(([slot,itemId]) => ({ slot, item:combatItem(sheet,itemId) })).filter(entry => entry.item).map(entry => ({ slot:entry.slot, name:entry.item.name, icon:itemCombatIcon(entry.item), quantity:Number(entry.item.quantity || 0) }));
+  return {
+    playerId:state.clientId,
+    name:sheet.characterName || player.name,
+    hp:Number(sheet.hpCurrent || 0),
+    hpMax:Number(sheet.hpMax || 0),
+    tempHp:Number(sheet.hpTemp || 0),
+    ac:calculateAc(sheet),
+    setName:set.name || "Боевой комплект",
+    attacks,
+    quickSlots,
+    equipment
+  };
+}
+
+function vttRollDice(formula, label, visibility = "public", mode) {
+  roll(formula, label || formula, { visibility, ...(mode ? { mode } : {}) });
+}
+function vttAttack(attackId, visibility = "public") {
+  const attack = currentSheet().attacksList.find(item => item.id === attackId);
+  if (attack) performAttackRoll(attack, { visibility });
+}
+function vttDamage(attackId, critical = false, visibility = "public") {
+  const attack = currentSheet().attacksList.find(item => item.id === attackId);
+  if (attack) rollAttackDamage(attack, critical, { visibility });
+}
+function vttUseQuick(index, visibility = "public") { useQuickItem(Number(index), { visibility }); }
+
 function renderMap() {
   const root = $("#map-view");
-  if (!root || !state.room) return;
+  if (!root || !state.room || state.currentView !== "map") {
+    window.TT_VTT?.deactivate?.();
+    return;
+  }
   if (window.TT_VTT?.render) {
     window.TT_VTT.render(root, {
       room: state.room,
@@ -2792,7 +2867,11 @@ function renderMap() {
       socket,
       toast,
       openModal,
-      closeModal
+      closeModal,
+      switchView,
+      combat:buildVttCombatModel(),
+      characters:buildVttCharacterModels(),
+      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick }
     });
     return;
   }
@@ -2857,22 +2936,31 @@ function openTokenEditor(token) {
 
 function renderRolls() {
   if (!state.room) return;
-  $("#roll-log").innerHTML = state.room.rollLog.length ? [...state.room.rollLog].reverse().map(item => `
-    <div class="roll ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""}"><div><strong>${esc(item.player)}</strong><br><span>${esc(item.label)}${item.activity ? ` · ${esc(item.activity)}` : ` · [${(item.dice || []).join(", ")}]${item.modifier ? ` ${signed(item.modifier)}` : ""}${item.mode === "advantage" ? " · преимущество" : item.mode === "disadvantage" ? " · помеха" : ""}`}</span></div><b>${item.total === null ? "✦" : item.total}</b></div>`).join("") : `<div class="read-only">Здесь появятся броски всей партии.</div>`;
+  const rolls = [...(state.room.rollLog || [])].sort((a,b) => Number(b.at || 0) - Number(a.at || 0));
+  $("#roll-log").innerHTML = rolls.length ? rolls.map(item => `
+    <div class="roll ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""} ${item.visibility === "private" || item.visibility === "gm" || item.privateToDm ? "private-roll" : ""}"><div><strong>${item.visibility === "private" || item.visibility === "gm" || item.privateToDm ? "🔒 " : ""}${esc(item.player)}</strong><br><span>${esc(item.label)}${item.activity ? ` · ${esc(item.activity)}` : ` · [${(item.dice || []).join(", ")}]${item.modifier ? ` ${signed(item.modifier)}` : ""}${item.mode === "advantage" ? " · преимущество" : item.mode === "disadvantage" ? " · помеха" : ""}`}</span></div><b>${item.total === null ? "✦" : item.total}</b></div>`).join("") : `<div class="read-only">Здесь появятся броски всей партии.</div>`;
 }
 function switchView(view) {
   state.currentView = ["sheet","dice","map"].includes(view) ? view : "sheet";
+  const mapActive = state.currentView === "map";
   $$('[data-view]').forEach(button => button.classList.toggle("active", button.dataset.view === state.currentView));
   $("#sheet-view").classList.toggle("hidden", state.currentView !== "sheet");
   $("#dice-view").classList.toggle("hidden", state.currentView !== "dice");
-  $("#map-view").classList.toggle("hidden", state.currentView !== "map");
-  if (state.currentView === "map") renderMap();
+  $("#map-view").classList.toggle("hidden", !mapActive);
+  $("#room").classList.toggle("map-fullscreen", mapActive);
+  document.body.classList.toggle("vtt-active", mapActive);
+  $("#roll-peek")?.classList.toggle("hidden", mapActive || state.currentView === "dice");
+  if (mapActive) renderMap();
+  else window.TT_VTT?.deactivate?.();
 }
 $$('[data-view]').forEach(button => button.addEventListener("click", () => switchView(button.dataset.view)));
 $("#roll-peek").addEventListener("click", () => switchView("dice"));
 $("#own-sheet").addEventListener("click", () => { state.selectedId = state.clientId; renderAll(); switchView("sheet"); });
 $("#copy-code").addEventListener("click", async () => { await navigator.clipboard.writeText(state.room.code); toast("Код скопирован"); });
 $("#leave").addEventListener("click", () => {
+  document.body.classList.remove("vtt-active");
+  $("#room")?.classList.remove("map-fullscreen");
+  window.TT_VTT?.deactivate?.();
   localStorage.removeItem("tabaxi-session");
   location.href = location.pathname;
 });
@@ -2882,6 +2970,8 @@ $("#game-modal").addEventListener("click", event => {
 });
 $("#game-modal").addEventListener("close", () => $("#game-modal").classList.remove("library-open", "builder-modal", "catalog-modal"));
 
+
+window.TT_APP_ACTIONS = { buildCombatModel:buildVttCombatModel, roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick };
 const hashCode = location.hash.slice(1).toUpperCase();
 if (/^[A-Z0-9]{6}$/.test(hashCode)) {
   $('[data-lobby-tab="join"]').click();
