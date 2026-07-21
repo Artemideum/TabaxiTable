@@ -682,108 +682,76 @@ body.vtt-active { overflow: hidden; }
 .vtt-table-die {
   position: absolute;
   z-index: 1300;
-  width: 86px;
-  height: 104px;
-  transform: translate(-50%,-64%);
-  perspective: 600px;
+  width: 126px;
+  height: 146px;
+  transform: translate(-50%,-68%);
   pointer-events: none;
-  filter: drop-shadow(0 18px 12px #000b);
 }
 .vtt-die-shadow {
   position: absolute;
-  left: 12px;
-  right: 12px;
-  bottom: 5px;
-  height: 18px;
+  left: 20px;
+  right: 20px;
+  bottom: 14px;
+  height: 22px;
   border-radius: 50%;
-  background: #0009;
-  filter: blur(6px);
-  animation: die-shadow 1.15s cubic-bezier(.2,.75,.25,1) both;
+  background: radial-gradient(circle at center, #000c 0, #0008 42%, transparent 78%);
+  filter: blur(7px);
+  animation: die-shadow 1.05s cubic-bezier(.2,.75,.25,1) both;
 }
-.vtt-die-solid {
+.vtt-die-model {
   position: absolute;
-  left: 14px;
-  top: 4px;
-  width: 58px;
-  height: 58px;
-  transform-style: preserve-3d;
-  animation: die-throw 1.15s cubic-bezier(.16,.8,.28,1.02) both;
+  left: 3px;
+  top: 2px;
+  width: 120px;
+  height: 120px;
+  animation: die-throw 1.05s cubic-bezier(.18,.82,.24,1.02) both;
+  filter: drop-shadow(0 12px 10px #000a);
 }
+.vtt-die-svg {
+  display: block;
+  width: 120px;
+  height: 120px;
+  overflow: visible;
+}
+.vtt-die-svg .die-face {
+  transition: fill .2s ease, stroke .2s ease;
+}
+.vtt-die-svg .die-face.is-top {
+  stroke-width: 1.9;
+}
+.vtt-die-svg .die-value {
+  fill: #170f08;
+  font: 900 16px Unbounded, sans-serif;
+  paint-order: stroke;
+  stroke: #fff4;
+  stroke-width: 1.5px;
+  letter-spacing: .02em;
+}
+.vtt-die-svg .die-gloss { mix-blend-mode: screen; }
 .vtt-table-die small {
   position: absolute;
   left: 50%;
   bottom: 0;
   transform: translateX(-50%);
-  padding: 3px 8px;
-  border: 1px solid #59442f;
+  padding: 4px 10px;
+  border: 1px solid #5f4631;
   border-radius: 999px;
   color: #f4e7d1;
-  background: #0b0908e8;
+  background: #0b0908ee;
   font-size: 8px;
   font-weight: 800;
   white-space: nowrap;
-  animation: die-caption .25s 1s both;
+  animation: die-caption .25s .92s both;
 }
-.vtt-die-solid > b {
-  position: absolute;
-  inset: 0;
-  z-index: 8;
-  display: grid;
-  place-items: center;
-  transform: translateZ(31px);
-  color: #170f08;
-  font: 900 20px Unbounded, sans-serif;
-  text-shadow: 0 1px #fff8;
-}
-.vtt-table-die.is-cube .face {
-  position: absolute;
-  inset: 0;
-  border: 2px solid color-mix(in srgb,var(--die-color) 55%,#fff);
-  border-radius: 8px;
-  background: linear-gradient(145deg,color-mix(in srgb,var(--die-color) 88%,#fff),color-mix(in srgb,var(--die-color) 55%,#24170d));
-  box-shadow: inset 0 0 18px #fff4;
-  backface-visibility: hidden;
-}
-.vtt-table-die.is-cube .front { transform: translateZ(29px); }
-.vtt-table-die.is-cube .back { transform: rotateY(180deg) translateZ(29px); }
-.vtt-table-die.is-cube .right { transform: rotateY(90deg) translateZ(29px); }
-.vtt-table-die.is-cube .left { transform: rotateY(-90deg) translateZ(29px); }
-.vtt-table-die.is-cube .top { transform: rotateX(90deg) translateZ(29px); }
-.vtt-table-die.is-cube .bottom { transform: rotateX(-90deg) translateZ(29px); }
-.vtt-table-die.is-poly .vtt-die-solid,
-.vtt-table-die.is-tetra .vtt-die-solid { transform-origin: 50% 58%; }
-.vtt-table-die .facet {
-  position: absolute;
-  left: 4px;
-  top: 1px;
-  width: 50px;
-  height: 56px;
-  clip-path: polygon(50% 0,100% 100%,0 100%);
-  border: 0;
-  background: linear-gradient(145deg,color-mix(in srgb,var(--die-color) 90%,#fff),color-mix(in srgb,var(--die-color) 46%,#1b1008));
-  transform-origin: 50% 100%;
-  opacity: .96;
-}
-.vtt-table-die .facet::after { content:""; position:absolute; inset:2px; clip-path:inherit; border:1px solid #fff5; }
-.vtt-table-die .f1 { transform: rotateY(0deg) rotateX(27deg) translateZ(10px); }
-.vtt-table-die .f2 { transform: rotateY(60deg) rotateX(27deg) translateZ(10px); filter:brightness(.9); }
-.vtt-table-die .f3 { transform: rotateY(120deg) rotateX(27deg) translateZ(10px); filter:brightness(.72); }
-.vtt-table-die .f4 { transform: rotateY(180deg) rotateX(27deg) translateZ(10px); filter:brightness(.62); }
-.vtt-table-die .f5 { transform: rotateY(240deg) rotateX(27deg) translateZ(10px); filter:brightness(.78); }
-.vtt-table-die .f6 { transform: rotateY(300deg) rotateX(27deg) translateZ(10px); filter:brightness(.94); }
-.vtt-table-die.is-tetra .f4,
-.vtt-table-die.is-tetra .f5,
-.vtt-table-die.is-tetra .f6 { display:none; }
-
 @keyframes die-throw {
-  0% { transform: translate3d(-160px,-90px,150px) rotateX(-560deg) rotateY(420deg) rotateZ(-240deg) scale(.72); opacity:0; }
-  65% { transform: translate3d(15px,-18px,35px) rotateX(65deg) rotateY(410deg) rotateZ(32deg) scale(1.08); opacity:1; }
-  82% { transform: translate3d(-5px,5px,10px) rotateX(18deg) rotateY(370deg) rotateZ(-7deg) scale(.96); }
-  100% { transform: translate3d(0,0,0) rotateX(0deg) rotateY(360deg) rotateZ(0deg) scale(1); opacity:1; }
+  0% { transform: translate3d(-150px,-110px,0) rotate(-35deg) scale(.3); opacity:0; }
+  42% { transform: translate3d(18px,-20px,0) rotate(16deg) scale(1.14); opacity:1; }
+  68% { transform: translate3d(-8px,8px,0) rotate(-7deg) scale(.96); }
+  100% { transform: translate3d(0,0,0) rotate(0deg) scale(1); opacity:1; }
 }
 @keyframes die-shadow {
   0% { transform: scale(.25); opacity:0; }
-  65% { transform: scale(.85); opacity:.45; }
+  62% { transform: scale(.92); opacity:.46; }
   100% { transform: scale(1); opacity:1; }
 }
 @keyframes die-caption { from { opacity:0; transform:translate(-50%,5px); } to { opacity:1; transform:translate(-50%,0); } }
@@ -794,6 +762,6 @@ body.vtt-active { overflow: hidden; }
 .vtt-ping i { animation: vtt-ping 1.45s ease-out 1 !important; }
 
 @media (max-width:620px) {
-  .vtt-table-die { transform: translate(-50%,-58%) scale(.82); }
+  .vtt-table-die { transform: translate(-50%,-62%) scale(.82); }
   .vtt-token-badge { max-width: 110px; font-size: 8px; }
 }

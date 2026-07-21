@@ -33,6 +33,157 @@
   const sceneKey = room => `${room.code}:${room.scene?.id || room.activeSceneId || "main"}`;
   const refKey = ref => `${ref.kind}:${ref.id}`;
   const uniqueRefs = refs => [...new Map((refs || []).filter(ref => ref?.kind && ref?.id).map(ref => [refKey(ref), { kind:ref.kind, id:ref.id }])).values()];
+  const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2;
+
+  function hashSeed(text) {
+    let hash = 2166136261;
+    for (const character of String(text || "")) {
+      hash ^= character.charCodeAt(0);
+      hash = Math.imul(hash, 16777619);
+    }
+    return hash >>> 0;
+  }
+
+  function shadeHex(hex, amount = 0) {
+    const value = String(hex || "#f4c875").trim();
+    const match = /^#?([0-9a-f]{6})$/i.exec(value);
+    if (!match) return "#f4c875";
+    const channels = match[1].match(/../g).map(part => parseInt(part, 16));
+    const blend = amount >= 0 ? 255 : 0;
+    const factor = Math.min(1, Math.abs(amount));
+    return `#${channels.map(channel => Math.round(channel + (blend - channel) * factor).toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  function rotatePoint(point, rx, ry, rz) {
+    let [x, y, z] = point;
+    const sinX = Math.sin(rx), cosX = Math.cos(rx);
+    const sinY = Math.sin(ry), cosY = Math.cos(ry);
+    const sinZ = Math.sin(rz), cosZ = Math.cos(rz);
+    const y1 = y * cosX - z * sinX;
+    const z1 = y * sinX + z * cosX;
+    y = y1; z = z1;
+    const x2 = x * cosY + z * sinY;
+    const z2 = -x * sinY + z * cosY;
+    x = x2; z = z2;
+    const x3 = x * cosZ - y * sinZ;
+    const y3 = x * sinZ + y * cosZ;
+    return [x3, y3, z];
+  }
+
+  function crossProduct(a, b, c) {
+    const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+    return [
+      ab[1] * ac[2] - ab[2] * ac[1],
+      ab[2] * ac[0] - ab[0] * ac[2],
+      ab[0] * ac[1] - ab[1] * ac[0]
+    ];
+  }
+
+  function normalizeVector(vector) {
+    const length = Math.hypot(vector[0], vector[1], vector[2]) || 1;
+    return [vector[0] / length, vector[1] / length, vector[2] / length];
+  }
+
+  function polyhedronDefinition(sides) {
+    const phi = GOLDEN_RATIO;
+    const invPhi = 1 / phi;
+    const cube = {
+      vertices:[[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1],[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1]],
+      faces:[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7],[4,5,1,0]],
+      scale:27
+    };
+    const tetra = {
+      vertices:[[1,1,1],[-1,-1,1],[-1,1,-1],[1,-1,-1]],
+      faces:[[0,1,2],[0,3,1],[0,2,3],[1,3,2]],
+      scale:29
+    };
+    const octa = {
+      vertices:[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],
+      faces:[[0,2,4],[2,1,4],[1,3,4],[3,0,4],[2,0,5],[1,2,5],[3,1,5],[0,3,5]],
+      scale:30
+    };
+    const bipyramid10 = (() => {
+      const ring = Array.from({ length:5 }, (_, index) => {
+        const angle = Math.PI * 2 * index / 5 - Math.PI / 2;
+        return [Math.cos(angle), Math.sin(angle), 0];
+      });
+      return {
+        vertices:[[0,0,1.35],[0,0,-1.35],...ring],
+        faces:[[0,2,3],[0,3,4],[0,4,5],[0,5,6],[0,6,2],[1,3,2],[1,4,3],[1,5,4],[1,6,5],[1,2,6]],
+        scale:29
+      };
+    })();
+    const dodeca = {
+      vertices:[
+        [1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1],[-1,1,1],[-1,1,-1],[-1,-1,1],[-1,-1,-1],
+        [0,invPhi,phi],[0,invPhi,-phi],[0,-invPhi,phi],[0,-invPhi,-phi],[invPhi,phi,0],[invPhi,-phi,0],[-invPhi,phi,0],[-invPhi,-phi,0],[phi,0,invPhi],[phi,0,-invPhi],[-phi,0,invPhi],[-phi,0,-invPhi]
+      ],
+      faces:[[0,8,10,2,16],[0,12,14,4,8],[0,16,17,1,12],[1,17,3,11,9],[1,9,5,14,12],[2,10,6,15,13],[2,13,3,17,16],[3,13,15,7,11],[4,14,5,19,18],[4,18,6,10,8],[5,9,11,7,19],[6,18,19,7,15]],
+      scale:24
+    };
+    const icosa = {
+      vertices:[[-1,phi,0],[1,phi,0],[-1,-phi,0],[1,-phi,0],[0,-1,phi],[0,1,phi],[0,-1,-phi],[0,1,-phi],[phi,0,-1],[phi,0,1],[-phi,0,-1],[-phi,0,1]],
+      faces:[[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]],
+      scale:28
+    };
+    if (sides === 4) return tetra;
+    if (sides === 6) return cube;
+    if (sides === 8) return octa;
+    if (sides === 10 || sides === 100) return bipyramid10;
+    if (sides === 12) return dodeca;
+    return icosa;
+  }
+
+  function renderDieSvg(sides, value, color, seed) {
+    const poly = polyhedronDefinition(sides);
+    const hash = hashSeed(`${seed}:${sides}:${value}`);
+    const rx = 0.55 + ((hash & 255) / 255) * 0.8;
+    const ry = 0.7 + (((hash >> 8) & 255) / 255) * 1.6;
+    const rz = 0.15 + (((hash >> 16) & 255) / 255) * 0.6;
+    const rotated = poly.vertices.map(vertex => rotatePoint(vertex, rx, ry, rz));
+    const dist = 6;
+    const scale = poly.scale || 28;
+    const centerX = 60;
+    const centerY = 54;
+    const projected = rotated.map(([x, y, z]) => {
+      const perspective = dist / (dist - z);
+      return { x:centerX + x * perspective * scale, y:centerY - y * perspective * scale, z, perspective };
+    });
+
+    const visibleFaces = poly.faces.map(face => {
+      const points3d = face.map(index => rotated[index]);
+      let normal = crossProduct(points3d[0], points3d[1], points3d[2]);
+      const centroid3d = points3d.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]], [0,0,0]).map(channel => channel / face.length);
+      if (normal[0] * centroid3d[0] + normal[1] * centroid3d[1] + normal[2] * centroid3d[2] < 0) normal = normal.map(value => value * -1);
+      normal = normalizeVector(normal);
+      const centroid2d = face.reduce((sum, index) => ({ x:sum.x + projected[index].x, y:sum.y + projected[index].y }), { x:0, y:0 });
+      centroid2d.x /= face.length;
+      centroid2d.y /= face.length;
+      return {
+        face,
+        normal,
+        avgZ:face.reduce((sum, index) => sum + rotated[index][2], 0) / face.length,
+        centroid2d,
+        points:face.map(index => projected[index])
+      };
+    }).filter(entry => entry.normal[2] > -0.12).sort((a, b) => a.avgZ - b.avgZ);
+
+    const topFace = [...visibleFaces].sort((a, b) => (b.avgZ + b.normal[2] * 0.6) - (a.avgZ + a.normal[2] * 0.6))[0] || null;
+    const polygons = visibleFaces.map(entry => {
+      const brightness = clamp(0.28 + (entry.normal[2] + 1) * 0.36 + (entry.avgZ + 1) * 0.05, 0.18, 0.92);
+      const fill = shadeHex(color, brightness - 0.55);
+      const stroke = shadeHex(color, brightness > 0.62 ? -0.55 : -0.38);
+      const className = topFace === entry ? "die-face is-top" : "die-face";
+      const points = entry.points.map(point => `${roundTenth(point.x)},${roundTenth(point.y)}`).join(" ");
+      return `<polygon class="${className}" points="${points}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
+    }).join("");
+    const labelX = roundTenth(topFace?.centroid2d.x ?? centerX);
+    const labelY = roundTenth((topFace?.centroid2d.y ?? centerY) + 1);
+    const label = `<text class="die-value" x="${labelX}" y="${labelY}" text-anchor="middle" dominant-baseline="central">${esc(value)}</text>`;
+    const gloss = `<ellipse class="die-gloss" cx="38" cy="22" rx="18" ry="9" fill="#ffffff20" transform="rotate(-18 38 22)"/>`;
+    return `<svg class="vtt-die-svg" viewBox="0 0 120 120" aria-hidden="true">${polygons}${gloss}${label}</svg>`;
+  }
 
   function getCamera(room) {
     const key = sceneKey(room);
@@ -290,10 +441,9 @@
     if (!roll || Date.now() - Number(roll.at || 0) > 12000) return "";
     const point = metrics.toWorld(roll.x, roll.y);
     const sides = [4,6,8,10,12,20,100].includes(Number(roll.sides)) ? Number(roll.sides) : 20;
-    const shapeClass = sides === 6 ? "is-cube" : sides === 4 ? "is-tetra" : "is-poly";
-    return `<div class="vtt-table-die ${shapeClass} die-d${sides}" style="left:${point.x}px;top:${point.y}px;--die-color:${esc(roll.color || "#f4c875")}" data-roll-id="${esc(roll.id)}">
+    return `<div class="vtt-table-die die-d${sides}" style="left:${point.x}px;top:${point.y}px;--die-color:${esc(roll.color || "#f4c875")}" data-roll-id="${esc(roll.id)}">
       <div class="vtt-die-shadow"></div>
-      <div class="vtt-die-solid">${sides === 6 ? `<span class="face front"></span><span class="face back"></span><span class="face right"></span><span class="face left"></span><span class="face top"></span><span class="face bottom"></span>` : `<span class="facet f1"></span><span class="facet f2"></span><span class="facet f3"></span><span class="facet f4"></span><span class="facet f5"></span><span class="facet f6"></span>`}<b>${Number(roll.value)}</b></div>
+      <div class="vtt-die-model">${renderDieSvg(sides, Number(roll.value), roll.color || "#f4c875", roll.id || `${roll.at}:${roll.value}`)}</div>
       <small>к${sides} · ${esc(roll.by || "Игрок")}</small>
     </div>`;
   }
