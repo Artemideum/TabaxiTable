@@ -78,6 +78,9 @@ test("комната, лист, броски, история и резервна
     assert.ok(itemCatalogScript.length > 200000);
     const itemSystemScript = await fetch(`http://127.0.0.1:${PORT}/item-system.js`).then(response => response.text());
     assert.match(itemSystemScript, /TT_ITEM_SYSTEM/);
+    const appScript = await fetch(`http://127.0.0.1:${PORT}/app.js`).then(response => response.text());
+    assert.match(appScript, /data-builder-3d6-ability/);
+    assert.match(appScript, /rolled3d6Assignments/);
     const vttScript = await fetch(`http://127.0.0.1:${PORT}/vtt.js`).then(response => response.text());
     assert.match(vttScript, /TT_VTT/);
     assert.match(vttScript, /scene:asset-place/);
@@ -89,6 +92,7 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /scene:tokens-batch-update/);
     assert.match(vttScript, /data-vtt-character-formula/);
     assert.match(vttScript, /data-vtt-character-page/);
+    assert.match(vttScript, /data-vtt-character-checks-page/);
     assert.match(vttScript, /measurementFeet/);
     assert.match(vttScript, /KeyP:"ping"/);
     assert.match(vttScript, /data-vtt-view="sheet"/);
@@ -119,6 +123,9 @@ test("комната, лист, броски, история и резервна
     assert.match(dicePhysics, /WebGLRenderingContext/);
     assert.ok(dicePhysics.includes('return `${terms.join("+")}@${forced.join(",")}`;'));
     assert.match(dicePhysics, /playOne\(roll, attempt = 0\)/);
+    assert.match(dicePhysics, /destroySlotBox/);
+    assert.match(dicePhysics, /forceContextLoss/);
+    assert.match(dicePhysics, /visibilitychange/);
     const diceVendor = await fetch(`http://127.0.0.1:${PORT}/vendor/dice-box-threejs.es.js`).then(response => response.text());
     assert.ok(diceVendor.length > 500000);
 

@@ -3,8 +3,8 @@
 
   const DISPLAY_MS = 9000;
   const FALLBACK_MS = 4500;
-  const MAX_SLOTS = 6;
-  const PREWARM_SLOTS = 3;
+  const MAX_SLOTS = 4;
+  const PREWARM_SLOTS = 2;
   const PLAYED_MEMORY_MS = 60000;
   const PREWARM_START_MS = 700;
 
@@ -13,6 +13,7 @@
   let active = false;
   let slotSequence = 0;
   let warming = false;
+  let lastRecoveryAt = 0;
   const slots = [];
   const playedRolls = new Map();
 
@@ -119,6 +120,42 @@
     return modulePromise;
   }
 
+
+  function slotContext(slot) {
+    try { return slot?.box?.renderer?.getContext?.() || null; } catch { return null; }
+  }
+
+  function slotHealthy(slot) {
+    if (!slot?.box || !slot.host?.isConnected) return false;
+    const canvas = slot.host.querySelector("canvas");
+    const context = slotContext(slot);
+    return Boolean(canvas && context && !context.isContextLost?.());
+  }
+
+  function destroySlotBox(slot, forceContextLoss = true) {
+    if (!slot || slot.destroying) return;
+    slot.destroying = true;
+    clearTimeout(slot.clearTimer);
+    slot.clearTimer = null;
+    const box = slot.box;
+    try { box && (box.running = false, box.rolling = false); } catch {}
+    try { box?.clearDice?.(); } catch {}
+    try { box?.renderer?.dispose?.(); } catch {}
+    if (forceContextLoss) {
+      try { box?.renderer?.forceContextLoss?.(); } catch {}
+      try { slotContext(slot)?.getExtension?.("WEBGL_lose_context")?.loseContext?.(); } catch {}
+    }
+    slot.host.replaceChildren();
+    slot.box = null;
+    slot.initPromise = null;
+    slot.configuredColor = null;
+    slot.busy = false;
+    slot.rolling = false;
+    slot.rollId = null;
+    slot.startedAt = 0;
+    queueMicrotask(() => { slot.destroying = false; });
+  }
+
   function createSlot() {
     const root = ensureLayer();
     const slotsRoot = root.querySelector(".vtt-physical-dice-slots");
@@ -139,14 +176,16 @@
       startedAt:0,
       clearTimer:null,
       resultEl:null,
-      configuredColor:null
+      configuredColor:null,
+      destroying:false
     };
     slots.push(slot);
     return slot;
   }
 
   async function initializeSlot(slot, initialColor = "#d3ad6e") {
-    if (slot.box) return slot.box;
+    if (slot.box && slotHealthy(slot)) return slot.box;
+    if (slot.box && !slotHealthy(slot)) destroySlotBox(slot);
     if (slot.initPromise) return slot.initPromise;
     const color = safeColor(initialColor);
     slot.initPromise = (async () => {
@@ -173,13 +212,10 @@
       const canvas = slot.host.querySelector("canvas");
       canvas?.addEventListener("webglcontextlost", event => {
         event.preventDefault();
-        try { slot.box?.clearDice?.(); } catch {}
-        slot.box = null;
-        slot.initPromise = null;
-        slot.configuredColor = null;
-        slot.busy = false;
-        slot.rolling = false;
+        if (slot.destroying) return;
+        destroySlotBox(slot,false);
         slot.host.hidden = true;
+        setTimeout(() => { void recover([color]); }, 120);
       }, { once:true });
       return box;
     })().catch(error => {
@@ -192,11 +228,24 @@
   async function configureSlot(slot, color) {
     const desired = safeColor(color);
     const box = await initializeSlot(slot,desired);
+    if (!slotHealthy(slot)) throw new Error("WebGL context unavailable");
     if (slot.configuredColor !== desired) {
-      await box.updateConfig({ theme_customColorset:colorsetFor(desired), theme_material:"plastic" });
+      await promiseWithTimeout(box.updateConfig({ theme_customColorset:colorsetFor(desired), theme_material:"plastic" }), 6000, "dice colors");
       slot.configuredColor = desired;
     }
     return box;
+  }
+
+  async function recover(colors = []) {
+    const now = Date.now();
+    if (now - lastRecoveryAt < 350) return;
+    lastRecoveryAt = now;
+    unavailable = false;
+    slots.filter(slot => !slot.busy && slot.box && !slotHealthy(slot)).forEach(slot => destroySlotBox(slot));
+    if (!slots.some(slot => slotHealthy(slot))) {
+      slots.forEach(slot => { if (!slot.busy) destroySlotBox(slot); });
+    }
+    await prewarm(colors);
   }
 
   async function prewarm(colors = []) {
@@ -312,20 +361,24 @@
       scheduleRelease(slot,DISPLAY_MS);
     } catch (error) {
       console.error("Не удалось воспроизвести физический бросок", error);
-      try { slot.box?.clearDice?.(); } catch {}
-      slot.box = null;
-      slot.initPromise = null;
-      slot.configuredColor = null;
       if (slot.rollId !== roll.id) return;
+      destroySlotBox(slot);
+      slot.host.hidden = false;
+      slot.busy = true;
+      slot.rollId = roll.id;
       slot.rolling = false;
-      if (attempt < 1 && !unavailable) {
-        releaseSlot(slot);
-        setTimeout(() => { void playOne(roll,attempt + 1); }, 320);
+      if (attempt < 2 && !unavailable) {
+        slot.host.hidden = true;
+        slot.busy = false;
+        slot.rollId = null;
+        setTimeout(() => { void playOne(roll,attempt + 1); }, 220 + attempt * 260);
         return;
       }
+      slot.busy = true;
+      slot.rollId = roll.id;
       showResult(slot,roll,true);
       scheduleRelease(slot,FALLBACK_MS);
-      setTimeout(() => { void prewarm([roll.color]); }, 250);
+      setTimeout(() => { void recover([roll.color]); }, 250);
     }
   }
 
@@ -341,7 +394,7 @@
   function activate(colors = []) {
     active = true;
     ensureLayer().hidden = false;
-    void prewarm(colors);
+    void recover(colors);
   }
 
   function deactivate() {
@@ -356,6 +409,13 @@
     slots.forEach(releaseSlot);
   }
 
-  window.TT_DICE_PHYSICS = { play, activate, deactivate, clear, prewarm, displayMs:DISPLAY_MS };
+  window.TT_DICE_PHYSICS = { play, activate, deactivate, clear, prewarm, recover, displayMs:DISPLAY_MS };
   setTimeout(() => { void loadModule().catch(() => {}); },PREWARM_START_MS);
+  window.addEventListener("pageshow", () => { if (active) void recover(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && active) void recover(); });
+  setInterval(() => {
+    if (!active) return;
+    const broken = slots.some(slot => slot.box && !slotHealthy(slot));
+    if (broken || !slots.some(slot => slotHealthy(slot))) void recover();
+  }, 12000);
 })();

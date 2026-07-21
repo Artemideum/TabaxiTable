@@ -853,7 +853,12 @@ body.vtt-active { overflow: hidden; }
 .vtt-character-tabs { flex:0 0 auto; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:4px; border:1px solid #3d3025; border-radius:11px; background:#0b0908; }
 .vtt-character-tabs button { min-height:32px; padding:5px 4px; border-color:transparent; background:transparent; font-size:8px; }
 .vtt-character-tabs button.active { color:#171009; border-color:#b98a4c; background:linear-gradient(135deg,#a3743d,#e0bb78); }
-.vtt-character-page { min-height:0; flex:1 1 auto; display:grid; align-content:start; gap:8px; overflow-y:auto; padding-right:3px; scrollbar-gutter:stable; }
+.vtt-character-page { min-height:0; flex:1 1 auto; display:grid; align-content:start; gap:8px; overflow-y:auto; padding-right:5px; scrollbar-gutter:stable; overscroll-behavior:contain; }
+.vtt-character-page::-webkit-scrollbar { width:8px; }
+.vtt-character-page::-webkit-scrollbar-thumb { border:2px solid #100d0b; border-radius:999px; background:#624a31; }
+.vtt-character-check-tabs { position:sticky; top:0; z-index:3; display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; padding:4px; border:1px solid #443226; border-radius:10px; background:#0b0908f2; backdrop-filter:blur(10px); }
+.vtt-character-check-tabs button { min-height:31px; padding:5px 4px; border-color:transparent; background:transparent; font-size:8.5px; }
+.vtt-character-check-tabs button.active { color:#171009; border-color:#b98a4c; background:linear-gradient(135deg,#a3743d,#e0bb78); font-weight:900; }
 .vtt-character-vitals { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:6px; }
 .vtt-character-vitals article { min-width:0; padding:8px; border:1px solid #3c3025; border-radius:10px; background:#11100d; }
 .vtt-character-vitals small,.vtt-character-vitals strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -934,24 +939,24 @@ body.vtt-active { overflow: hidden; }
 .vtt-character-abilities button b { color:var(--vtt-gold); font-size:9px; }
 .vtt-character-checks > button {
   display:grid;
-  grid-template-columns:16px minmax(0,1fr) auto;
-  gap:6px;
+  grid-template-columns:18px minmax(0,1fr) auto;
+  gap:7px;
   align-items:center;
-  min-height:28px;
-  padding:4px 7px;
+  min-height:34px;
+  padding:6px 9px;
   border:1px solid transparent;
   border-radius:7px;
   color:#a89a88;
   background:#15110e;
   text-align:left;
 }
-.vtt-character-checks.skills > button { grid-template-columns:16px minmax(0,1fr) 30px auto; }
+.vtt-character-checks.skills > button { grid-template-columns:18px minmax(0,1fr) 34px auto; }
 .vtt-character-checks > button:hover:not(:disabled) { border-color:#684a32; color:#f1dfc8; background:#1d150f; }
 .vtt-character-checks > button:disabled { opacity:.8; }
 .vtt-character-checks button i { color:#615348; font-style:normal; text-align:center; }
-.vtt-character-checks button em { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:9px; font-style:normal; }
-.vtt-character-checks button small { color:#6d6052; font-size:7px; text-align:right; }
-.vtt-character-checks button b { color:#d7c5aa; font-size:9px; }
+.vtt-character-checks button em { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; line-height:1.25; font-style:normal; }
+.vtt-character-checks button small { color:#857563; font-size:8px; text-align:right; }
+.vtt-character-checks button b { color:#e0ceb3; font-size:10.5px; }
 .vtt-character-checks > button.proficient i,
 .vtt-character-checks > button.proficient b { color:#d3ad6e; }
 .vtt-character-checks > button.expertise i,
@@ -980,4 +985,11 @@ body.vtt-active { overflow: hidden; }
   .vtt-floating-panel,.vtt-panel-right { left:54px; right:54px; width:auto; }
   .vtt-character-attacks article { grid-template-columns:minmax(0,1fr) auto; }
   .vtt-character-attacks .damage { grid-column:2; }
+}
+
+@media (max-height:760px) {
+  .vtt-character-hero { grid-template-columns:40px minmax(0,1fr); padding:6px; }
+  .vtt-character-hero > img,.vtt-character-hero > span { width:40px; height:40px; }
+  .vtt-character-sheet { gap:7px; }
+  .vtt-character-tabs button { min-height:29px; }
 }

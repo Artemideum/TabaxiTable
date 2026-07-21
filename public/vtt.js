@@ -23,6 +23,7 @@
     strokeWidth: 3,
     characterPlayerId: null,
     characterPage: ["overview","combat","checks"].includes(savedUi.characterPage) ? savedUi.characterPage : "overview",
+    characterChecksPage: ["saves","skills-a","skills-b"].includes(savedUi.characterChecksPage) ? savedUi.characterChecksPage : "saves",
     diceFormula: "3d6+1"
   };
   let assetFilter = "all";
@@ -36,7 +37,7 @@
   const roundTenth = value => Math.round((Number(value) || 0) * 10) / 10;
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[character]);
   const bonusText = value => `${Number(value) >= 0 ? "+" : ""}${Number(value) || 0}`;
-  const saveUiState = () => { try { localStorage.setItem(UI_STORAGE_KEY,JSON.stringify({ rightPanel:ui.rightPanel, characterPage:ui.characterPage })); } catch {} };
+  const saveUiState = () => { try { localStorage.setItem(UI_STORAGE_KEY,JSON.stringify({ rightPanel:ui.rightPanel, characterPage:ui.characterPage, characterChecksPage:ui.characterChecksPage })); } catch {} };
   const sceneKey = room => `${room.code}:${room.scene?.id || room.activeSceneId || "main"}`;
   const refKey = ref => `${ref.kind}:${ref.id}`;
   const uniqueRefs = refs => [...new Map((refs || []).filter(ref => ref?.kind && ref?.id).map(ref => [refKey(ref), { kind:ref.kind, id:ref.id }])).values()];
@@ -490,8 +491,10 @@
     const canRoll = character.playerId === clientId;
     const rollButton = (formula,label,content,className="") => `<button type="button" class="${className}" data-vtt-character-formula="${esc(formula)}" data-vtt-character-label="${esc(label)}" ${canRoll ? "" : "disabled"}>${content}</button>`;
     const abilities = (character.abilities || []).map(entry => rollButton(entry.formula,`Проверка: ${entry.name}`,`<small>${esc(String(entry.key).toUpperCase())}</small><strong>${Number(entry.value)}</strong><b>${bonusText(entry.modifier)}</b>`,`vtt-character-ability`)).join("");
-    const saves = (character.saves || []).map(entry => rollButton(entry.formula,`Спасбросок: ${entry.name}`,`<i>${entry.proficient ? "◆" : "·"}</i><em>${esc(entry.name)}</em><b>${bonusText(entry.bonus)}</b>`,entry.proficient ? "proficient" : "")).join("");
-    const skills = (character.skills || []).map(entry => rollButton(entry.formula,`Навык: ${entry.name}`,`<i>${entry.expertise ? "✦" : entry.proficient ? "◆" : "·"}</i><em>${esc(entry.name)}</em><small>${esc(String(entry.ability || "").toUpperCase())}</small><b>${bonusText(entry.bonus)}</b>`,entry.expertise ? "expertise" : entry.proficient ? "proficient" : "")).join("");
+    const saveEntries = character.saves || [];
+    const skillEntries = character.skills || [];
+    const saveMarkup = saveEntries.map(entry => rollButton(entry.formula,`Спасбросок: ${entry.name}`,`<i>${entry.proficient ? "◆" : "·"}</i><em>${esc(entry.name)}</em><b>${bonusText(entry.bonus)}</b>`,entry.proficient ? "proficient" : "")).join("");
+    const skillMarkup = entries => entries.map(entry => rollButton(entry.formula,`Навык: ${entry.name}`,`<i>${entry.expertise ? "✦" : entry.proficient ? "◆" : "·"}</i><em>${esc(entry.name)}</em><small>${esc(String(entry.ability || "").toUpperCase())}</small><b>${bonusText(entry.bonus)}</b>`,entry.expertise ? "expertise" : entry.proficient ? "proficient" : "")).join("");
     const attacks = (character.attacks || []).map(attack => `<article><div><strong>${esc(attack.name)}</strong><small>${esc(attack.damageType || "Атака")}</small></div>${rollButton(attack.attackFormula,`Атака: ${attack.name}`,esc(attack.attackFormula),"vtt-formula-button")}${attack.damageFormula ? rollButton(attack.damageFormula,`Урон: ${attack.name}`,esc(attack.damageFormula),"vtt-formula-button damage") : ""}</article>`).join("");
     const equipment = (character.equipment || []).map(item => `<article><span>${esc(item.icon || "◇")}</span><div><small>${esc(item.slotLabel)}</small><strong>${esc(item.name)}</strong></div>${Number(item.quantity) > 1 ? `<b>${Number(item.quantity)}</b>` : ""}</article>`).join("");
     const quickItems = (character.quickItems || []).map(item => `<article><span>${esc(item.icon || "◇")}</span><div><small>Быстрый слот ${Number(item.index)+1}</small><strong>${esc(item.name)}</strong></div>${Number(item.quantity) > 0 ? `<b>${Number(item.quantity)}</b>` : ""}</article>`).join("");
@@ -499,7 +502,13 @@
     const tabs = `<nav class="vtt-character-tabs" aria-label="Разделы быстрого листа"><button type="button" data-vtt-character-page="overview" class="${page === "overview" ? "active" : ""}">Обзор</button><button type="button" data-vtt-character-page="combat" class="${page === "combat" ? "active" : ""}">Бой</button><button type="button" data-vtt-character-page="checks" class="${page === "checks" ? "active" : ""}">Проверки</button></nav>`;
     const overview = `<div class="vtt-character-vitals"><article><small>HP</small><strong>${Number(character.hp)}/${Number(character.hpMax)}${Number(character.tempHp) ? ` +${Number(character.tempHp)}` : ""}</strong></article><article><small>КД</small><strong>${Number(character.ac)}</strong></article><article><small>Скорость</small><strong>${Number(character.speed)} фт.</strong></article><article><small>Инициатива</small><strong>${bonusText(character.initiativeBonus)}</strong></article><article><small>Мастерство</small><strong>${bonusText(character.proficiency)}</strong></article><article><small>Пассивка</small><strong>${Number(character.passivePerception)}</strong></article></div><div class="vtt-character-abilities">${abilities}</div>`;
     const combat = `${attacks ? `<section class="vtt-character-section"><h4>Атаки и формулы</h4><div class="vtt-character-attacks">${attacks}</div></section>` : `<div class="vtt-empty-side">В активном комплекте нет атак.</div>`}${(equipment || quickItems) ? `<section class="vtt-character-section"><h4>${esc(character.combatSetName || "Боевой комплект")}</h4><div class="vtt-character-equipment">${equipment}${quickItems}</div></section>` : ""}`;
-    const checks = `<section class="vtt-character-section"><h4>Спасброски</h4><div class="vtt-character-checks">${saves}</div></section><section class="vtt-character-section"><h4>Навыки</h4><div class="vtt-character-checks skills">${skills}</div></section>`;
+    const checksPage = ["saves","skills-a","skills-b"].includes(ui.characterChecksPage) ? ui.characterChecksPage : "saves";
+    const skillSplit = Math.ceil(skillEntries.length / 2);
+    const checkTabs = `<nav class="vtt-character-check-tabs" aria-label="Страницы проверок"><button type="button" data-vtt-character-checks-page="saves" class="${checksPage === "saves" ? "active" : ""}">Спасы</button><button type="button" data-vtt-character-checks-page="skills-a" class="${checksPage === "skills-a" ? "active" : ""}">Навыки 1</button><button type="button" data-vtt-character-checks-page="skills-b" class="${checksPage === "skills-b" ? "active" : ""}">Навыки 2</button></nav>`;
+    const checksBody = checksPage === "saves"
+      ? `<section class="vtt-character-section"><h4>Спасброски</h4><div class="vtt-character-checks">${saveMarkup}</div></section>`
+      : `<section class="vtt-character-section"><h4>Навыки ${checksPage === "skills-a" ? `1–${skillSplit}` : `${skillSplit + 1}–${skillEntries.length}`}</h4><div class="vtt-character-checks skills">${skillMarkup(checksPage === "skills-a" ? skillEntries.slice(0,skillSplit) : skillEntries.slice(skillSplit))}</div></section>`;
+    const checks = `${checkTabs}${checksBody}`;
     const pageContent = page === "combat" ? combat : page === "checks" ? checks : overview;
     return `<div class="vtt-character-sheet">
       <div class="vtt-panel-head"><div><span class="eyebrow">Быстрый просмотр</span><h3>Лист персонажа</h3></div><b>${Number(character.level || 1)} ур.</b></div>
@@ -584,6 +593,11 @@
     }, { signal }));
     root.querySelectorAll("[data-vtt-character-page]").forEach(button => button.addEventListener("click", () => {
       ui.characterPage = button.dataset.vttCharacterPage;
+      saveUiState();
+      render(root,ctx);
+    }, { signal }));
+    root.querySelectorAll("[data-vtt-character-checks-page]").forEach(button => button.addEventListener("click", () => {
+      ui.characterChecksPage = button.dataset.vttCharacterChecksPage;
       saveUiState();
       render(root,ctx);
     }, { signal }));

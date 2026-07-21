@@ -1376,6 +1376,7 @@ function openCharacterBuilderV2(quickStart = false) {
   let currentStep = "identity";
   let autoStats = quickStart || !s.classKey;
   let rolled3d6 = null;
+  let rolled3d6Assignments = null;
 
   $("#game-modal").classList.add("library-open", "builder-modal");
   openModal(quickStart ? "Быстрое создание" : "Настройка персонажа", `
@@ -1446,30 +1447,34 @@ function openCharacterBuilderV2(quickStart = false) {
     });
   });
 
+  const defaultRollAssignments = () => Object.fromEntries(Object.keys(abilities).map((key,index) => [key,index]));
+
+  const classRollAssignments = () => {
+    const { classKey } = currentKeys();
+    const abilityKeys = Object.keys(abilities);
+    const sortedIndexes = rolled3d6.map((entry,index) => ({ index, total:Number(entry.total) || 0 })).sort((a,b) => b.total - a.total || a.index - b.index);
+    const priority = rules.statPriorities[classKey] || abilityKeys;
+    return Object.fromEntries(priority.map((key,index) => [key,sortedIndexes[index]?.index ?? index]));
+  };
+
   const applyRolledStats = (distributeByClass = false) => {
     if (!Array.isArray(rolled3d6) || rolled3d6.length !== 6) return;
-    const { classKey, raceKey, level } = currentKeys();
-    const build = rules.abilityBuild(classKey, raceKey, level);
-    const abilityKeys = Object.keys(abilities);
-    const orderedRolls = distributeByClass
-      ? [...rolled3d6].sort((a,b) => b.total - a.total)
-      : [...rolled3d6];
-    const assignments = {};
-    if (distributeByClass) {
-      const priority = rules.statPriorities[classKey] || abilityKeys;
-      priority.forEach((key,index) => { assignments[key] = orderedRolls[index]; });
-    } else abilityKeys.forEach((key,index) => { assignments[key] = orderedRolls[index]; });
+    const { raceKey, level } = currentKeys();
+    const build = rules.abilityBuild(currentKeys().classKey, raceKey, level);
+    if (!rolled3d6Assignments) rolled3d6Assignments = defaultRollAssignments();
+    if (distributeByClass) rolled3d6Assignments = classRollAssignments();
     statInputs().forEach(input => {
       const key = input.dataset.builderStat;
-      const roll = assignments[key] || { total:10, dice:[] };
+      const rollIndex = Number(rolled3d6Assignments[key]);
+      const roll = rolled3d6[rollIndex] || { total:10, dice:[] };
       const raceBonus = Number(build.bonuses[key] || 0);
       const levelBonus = Number(build.levelBonuses[key] || 0);
       const bonus = raceBonus + levelBonus;
-      input.value = Math.max(1,Math.min(30,roll.total + bonus));
-      input.dataset.base = roll.total;
+      input.value = Math.max(1,Math.min(30,Number(roll.total || 10) + bonus));
+      input.dataset.base = Number(roll.total || 10);
       input.dataset.bonus = bonus;
       const additions = [raceBonus ? `+${raceBonus} раса` : "", levelBonus ? `+${levelBonus} уровни` : ""].filter(Boolean).join(" · ");
-      $(`[data-builder-stat-note="${key}"]`).textContent = `${roll.total} [${roll.dice.join(", ")}]${additions ? ` · ${additions}` : ""}`;
+      $(`[data-builder-stat-note="${key}"]`).textContent = `${Number(roll.total || 10)} [${(roll.dice || []).join(", ")}]${additions ? ` · ${additions}` : ""}`;
     });
     autoStats = false;
     refreshStatsSummary();
@@ -1478,9 +1483,24 @@ function openCharacterBuilderV2(quickStart = false) {
   const render3d6Results = () => {
     const root = $("#builder-3d6-results");
     if (!root || !Array.isArray(rolled3d6)) return;
+    if (!rolled3d6Assignments) rolled3d6Assignments = defaultRollAssignments();
+    const assignedIndexes = Object.values(rolled3d6Assignments).map(Number);
     root.classList.remove("hidden");
-    root.innerHTML = `<div><span class="eyebrow">Результаты 3d6</span><strong>${rolled3d6.map(entry => entry.total).join(" · ")}</strong><small>${rolled3d6.map(entry => `[${entry.dice.join("+")}]`).join("  ")}</small></div><button id="builder-distribute-3d6" class="secondary" type="button">Распределить броски под класс</button>`;
-    $("#builder-distribute-3d6").addEventListener("click", () => applyRolledStats(true));
+    root.innerHTML = `<div class="builder-3d6-head"><div><span class="eyebrow">Результаты 3d6</span><strong>${rolled3d6.map(entry => entry.total).join(" · ")}</strong><small>Каждое значение используется один раз. Выбери, куда поставить высокий или низкий результат.</small></div><button id="builder-distribute-3d6" class="secondary" type="button">Распределить под класс</button></div><div class="builder-3d6-pool">${rolled3d6.map((entry,index) => `<span class="${assignedIndexes.includes(index) ? "assigned" : ""}"><b>${Number(entry.total)}</b><small>${entry.dice.join("+")}</small></span>`).join("")}</div><div class="builder-3d6-assignments">${Object.entries(abilities).map(([key,name]) => `<label><span>${esc(name)}</span><select data-builder-3d6-ability="${key}">${rolled3d6.map((entry,index) => `<option value="${index}" ${Number(rolled3d6Assignments[key]) === index ? "selected" : ""}>${Number(entry.total)} · ${entry.dice.join("+")}</option>`).join("")}</select></label>`).join("")}</div>`;
+    $("#builder-distribute-3d6").addEventListener("click", () => {
+      applyRolledStats(true);
+      render3d6Results();
+    });
+    $$('[data-builder-3d6-ability]').forEach(select => select.addEventListener("change", () => {
+      const key = select.dataset.builder3d6Ability;
+      const nextIndex = Number(select.value);
+      const previousIndex = Number(rolled3d6Assignments[key]);
+      const occupiedKey = Object.keys(rolled3d6Assignments).find(otherKey => otherKey !== key && Number(rolled3d6Assignments[otherKey]) === nextIndex);
+      rolled3d6Assignments[key] = nextIndex;
+      if (occupiedKey) rolled3d6Assignments[occupiedKey] = previousIndex;
+      applyRolledStats(false);
+      render3d6Results();
+    }));
   };
 
   const refreshSubclasses = () => {
@@ -1631,6 +1651,7 @@ function openCharacterBuilderV2(quickStart = false) {
     button.textContent = oldText;
     if (results.some(result => !result)) return toast("Не удалось бросить 3d6. Проверь соединение и попробуй ещё раз");
     rolled3d6 = results;
+    rolled3d6Assignments = defaultRollAssignments();
     applyRolledStats(false);
     render3d6Results();
     toast(`3d6 × 6 → ${rolled3d6.map(entry => entry.total).join(", ")}`);
