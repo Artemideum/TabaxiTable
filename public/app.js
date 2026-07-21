@@ -2785,28 +2785,18 @@ function sceneAction(event,payload = {}, successMessage = "") {
 function renderMap() {
   const root = $("#map-view");
   if (!root || !state.room) return;
-  const scene = mapScene(), grid = scene.grid || {}, isDm = state.room.dmId === state.clientId;
-  const tokens = (scene.tokens || []).filter(token => isDm || !token.hidden);
-  if (!tokens.some(token=>token.id===state.mapSelectedTokenId)) state.mapSelectedTokenId = "";
-  const selected = tokens.find(token=>token.id===state.mapSelectedTokenId);
-  const ownToken = tokens.find(token=>token.playerId===state.clientId);
-  const order = mapInitiativeOrder(scene);
-  const currentTurn = order.find(token=>token.id===scene.initiative?.currentTokenId);
-  const stageWidth = Number(grid.columns || 24) * Number(grid.cellSize || 52);
-  const stageHeight = Number(grid.rows || 16) * Number(grid.cellSize || 52);
-  root.innerHTML = `<div class="map-shell">
-    <header class="map-header"><div><span class="eyebrow">Общий боевой стол</span><h2>${esc(scene.name || "Главная сцена")}</h2><p>${currentTurn ? `Раунд ${Number(scene.initiative.round||1)} · ход: ${esc(currentTurn.name)}` : "Сетка, токены персонажей и единая инициатива партии."}</p></div><div class="map-header-actions">${ownToken ? `<button id="map-roll-initiative" class="primary" type="button">Бросить инициативу</button>` : ""}${isDm ? `<button id="map-add-party" class="secondary" type="button">Добавить партию</button><button id="map-add-npc" class="secondary" type="button">+ NPC</button><button id="map-settings" class="secondary" type="button">Сцена</button>` : ""}</div></header>
-    <div class="map-layout">
-      <section class="map-board-panel"><div class="map-board-scroll"><div id="map-stage" class="map-stage ${grid.visible===false?"grid-hidden":""}" style="width:${stageWidth}px;height:${stageHeight}px;--grid-size:${Number(grid.cellSize||52)}px;background-color:${esc(scene.backgroundColor||"#17120e")}">${tokens.map(token=>`<button type="button" class="map-token ${token.hidden?"token-hidden":""} ${token.locked?"token-locked":""} ${token.id===state.mapSelectedTokenId?"selected":""} ${token.id===scene.initiative?.currentTokenId?"current-turn":""}" data-map-token="${esc(token.id)}" data-map-movable="${mapTokenCanMove(token) && !token.locked || isDm ? "1":"0"}" style="--token-x:${Number(token.x||0)};--token-y:${Number(token.y||0)};--token-size:${Number(token.size||1)};--token-color:${esc(token.color||"#9f7842")}" title="${esc(token.name)}${token.vision?` · зрение ${Number(token.vision)} фт.`:""}">${token.imageUrl?`<img src="${esc(token.imageUrl)}" alt="">`:`<span>${esc((token.name||"?")[0]?.toUpperCase()||"?")}</span>`}<strong>${esc(token.name)}</strong>${token.initiative!==null&&token.initiative!==undefined?`<b>${Number(token.initiative)}</b>`:""}</button>`).join("")}${tokens.length?"":`<div class="map-empty"><span>◇</span><strong>На сцене пока никого</strong><p>${isDm?"Добавь токены партии или создай противника.":"Ведущий ещё не добавил токены."}</p></div>`}</div></div><footer class="map-board-footer"><span>${Number(grid.columns)} × ${Number(grid.rows)} клеток</span><span>Клетка: 5 футов</span><span>${grid.snap===false?"Свободное движение":"Привязка к сетке"}</span></footer></section>
-      <aside class="map-side">
-        <section class="initiative-panel"><div class="panel-heading"><div><span class="eyebrow">Порядок боя</span><h3>Инициатива</h3></div>${scene.initiative?.active?`<b>Раунд ${Number(scene.initiative.round||1)}</b>`:""}</div><div class="initiative-list">${order.length?order.map((token,index)=>`<article class="initiative-entry ${token.id===scene.initiative?.currentTokenId?"active":""}"><button type="button" data-map-focus-token="${esc(token.id)}"><small>${index+1}</small><span><strong>${esc(token.name)}</strong><em>${token.playerId?"персонаж":"NPC"}</em></span></button>${isDm?`<input data-map-initiative="${esc(token.id)}" type="number" value="${Number(token.initiative)}" aria-label="Инициатива ${esc(token.name)}">`:`<b>${Number(token.initiative)}</b>`}</article>`).join(""):`<div class="map-side-empty">Броски инициативы появятся здесь.</div>`}</div>${isDm?`<div class="initiative-actions"><button id="map-next-turn" class="primary" type="button" ${order.length?"":"disabled"}>Следующий ход</button><button id="map-clear-initiative" class="secondary" type="button" ${order.length?"":"disabled"}>Сбросить</button></div>`:""}</section>
-        <section class="token-inspector"><div class="panel-heading"><div><span class="eyebrow">Выбранный объект</span><h3>${esc(selected?.name||"Токен")}</h3></div>${selected?`<span class="token-color-dot" style="background:${esc(selected.color||"#9f7842")}"></span>`:""}</div>${selected?`<div class="token-inspector-stats"><span><small>Позиция</small><strong>${Number(selected.x)+1}:${Number(selected.y)+1}</strong></span><span><small>Размер</small><strong>${Number(selected.size||1)}</strong></span><span><small>Зрение</small><strong>${Number(selected.vision||0)} фт.</strong></span></div><div class="token-inspector-actions">${isDm || selected.playerId===state.clientId?`<button id="map-edit-token" class="secondary" type="button">Настроить</button>`:""}<button id="map-roll-selected" class="secondary" type="button" ${isDm||selected.playerId===state.clientId?"":"disabled"}>Инициатива</button>${isDm?`<button id="map-remove-token" class="danger-action" type="button">Удалить</button>`:""}</div>`:`<div class="map-side-empty">Нажми токен на поле или участника инициативы.</div>`}</section>
-      </aside>
-    </div>
-  </div>`;
-  const stage = $("#map-stage",root);
-  if (scene.backgroundUrl) stage.style.backgroundImage = `linear-gradient(#09070533,#09070533), url("${String(scene.backgroundUrl).replace(/["\\]/g,"\\$&")}")`;
-  bindMapControls();
+  if (window.TT_VTT?.render) {
+    window.TT_VTT.render(root, {
+      room: state.room,
+      clientId: state.clientId,
+      socket,
+      toast,
+      openModal,
+      closeModal
+    });
+    return;
+  }
+  root.innerHTML = `<div class="read-only">Модуль виртуального стола не загрузился. Обнови страницу с очисткой кеша.</div>`;
 }
 function bindMapControls() {
   const root = $("#map-view"), scene = mapScene(), isDm = state.room?.dmId === state.clientId;

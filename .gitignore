@@ -6,3 +6,5 @@ npm-debug.log*
 upload/
 .openai/
 .env
+
+data/assets/

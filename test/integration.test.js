@@ -65,6 +65,8 @@ test("комната, лист, броски, история и резервна
     const index = await fetch(`http://127.0.0.1:${PORT}/`).then(response => response.text());
     assert.match(index, /TabaxiTable/);
     assert.match(index, /roll-peek[^>]*>[\s\S]*?<small>/);
+    assert.match(index, /vtt\.js/);
+    assert.match(index, /vtt\.css/);
     const catalog = await fetch(`http://127.0.0.1:${PORT}/spells-5e.json`).then(response => response.json());
     assert.equal(catalog.length, 120);
     const itemCatalogScript = await fetch(`http://127.0.0.1:${PORT}/items-5e.js`).then(response => response.text());
@@ -72,13 +74,22 @@ test("комната, лист, броски, история и резервна
     assert.ok(itemCatalogScript.length > 200000);
     const itemSystemScript = await fetch(`http://127.0.0.1:${PORT}/item-system.js`).then(response => response.text());
     assert.match(itemSystemScript, /TT_ITEM_SYSTEM/);
+    const vttScript = await fetch(`http://127.0.0.1:${PORT}/vtt.js`).then(response => response.text());
+    assert.match(vttScript, /TT_VTT/);
+    assert.match(vttScript, /scene:asset-place/);
+    const vttStyle = await fetch(`http://127.0.0.1:${PORT}/vtt.css`).then(response => response.text());
+    assert.match(vttStyle, /vtt-viewport/);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 8);
     assert.equal(created.room.scene.grid.columns, 24);
+    assert.equal(created.room.scene.schemaVersion, 2);
     assert.equal(created.room.scene.tokens.length, 0);
+    assert.equal(created.room.scenes.length, 1);
+    assert.equal(created.room.scenes[0].active, true);
+    assert.deepEqual(created.room.assets, []);
     assert.equal(created.room.players["test-dm"].sheet.autoProficiency, true);
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
@@ -234,6 +245,79 @@ test("комната, лист, броски, история и резервна
     assert.ok((await hiddenRollForDm).rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"));
     assert.equal((await hiddenRollForPlayer).rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"), false);
 
+    const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const assetState = waitFor(dm, "room:state", room => room.assets.some(asset => asset.name === "Красный гоблин"));
+    const uploadedAsset = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
+      method:"POST",
+      headers:{ "content-type":"application/json", "x-client-id":"test-dm" },
+      body:JSON.stringify({ name:"Красный гоблин", fileName:"goblin.png", category:"token", dataUrl:tinyPng, width:1, height:1 })
+    }).then(response => response.json());
+    assert.equal(uploadedAsset.ok, true);
+    assert.match(uploadedAsset.asset.url, new RegExp(`/assets/${created.code}/`));
+    const assetRoom = await assetState;
+    assert.equal(assetRoom.assets[0].usageCount, 0);
+    const assetFile = await fetch(`http://127.0.0.1:${PORT}${uploadedAsset.asset.url}`);
+    assert.equal(assetFile.status, 200);
+    assert.equal(assetFile.headers.get("content-type"), "image/png");
+
+    const placedState = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.assetId === uploadedAsset.asset.id));
+    const placed = await emit(dm, "scene:asset-place", { assetId:uploadedAsset.asset.id, x:-2, y:4, count:3, initiativeBonus:2 });
+    assert.equal(placed.ok, true);
+    assert.equal(placed.createdIds.length, 3);
+    const placedRoom = await placedState;
+    assert.equal(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).length, 3);
+    assert.deepEqual(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.name), ["Красный гоблин 1","Красный гоблин 2","Красный гоблин 3"]);
+    assert.equal(placedRoom.assets.find(asset => asset.id === uploadedAsset.asset.id).usageCount, 3);
+
+    const blockedDelete = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets/${uploadedAsset.asset.id}`, { method:"DELETE", headers:{ "x-client-id":"test-dm" } });
+    assert.equal(blockedDelete.status, 409);
+    assert.equal((await blockedDelete.json()).usageCount, 3);
+
+    const forbiddenUpload = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
+      method:"POST", headers:{ "content-type":"application/json", "x-client-id":"test-player" },
+      body:JSON.stringify({ name:"Чужая карта", category:"map", dataUrl:tinyPng })
+    });
+    assert.equal(forbiddenUpload.status, 403);
+
+    const mapAsset = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
+      method:"POST", headers:{ "content-type":"application/json", "x-client-id":"test-dm" },
+      body:JSON.stringify({ name:"Карта лаборатории", fileName:"map.png", category:"map", dataUrl:tinyPng, width:100, height:60, defaultSize:20 })
+    }).then(response => response.json());
+    assert.equal(mapAsset.ok, true);
+    const mapPlacedState = waitFor(dm, "room:state", room => room.scene.objects.some(object => object.assetId === mapAsset.asset.id));
+    const mapPlaced = await emit(dm, "scene:asset-place", { assetId:mapAsset.asset.id, x:-10, y:-6 });
+    assert.equal(mapPlaced.ok, true);
+    const mapRoom = await mapPlacedState;
+    const mapObject = mapRoom.scene.objects.find(object => object.assetId === mapAsset.asset.id);
+    assert.equal(mapObject.type, "map");
+    assert.equal(mapObject.locked, true);
+    assert.equal((await emit(dm, "scene:object-move", { objectId:mapObject.id, x:3, y:4 })).ok, false);
+    assert.equal((await emit(dm, "scene:object-update", { objectId:mapObject.id, name:"Лаборатория снизу", width:24, height:14, rotation:15, opacity:.8, z:-50, hidden:false, locked:false })).ok, true);
+    const movedMapState = waitFor(dm, "room:state", room => room.scene.objects.some(object => object.id === mapObject.id && object.x === 3 && object.y === 4));
+    assert.equal((await emit(dm, "scene:object-move", { objectId:mapObject.id, x:3, y:4 })).ok, true);
+    const movedMapRoom = await movedMapState;
+    assert.equal(movedMapRoom.scene.objects.find(object => object.id === mapObject.id).rotation, 15);
+    const duplicatedObject = await emit(dm, "scene:object-duplicate", { objectId:mapObject.id });
+    assert.equal(duplicatedObject.ok, true);
+    assert.ok(duplicatedObject.objectId);
+
+    const sceneCreatedState = waitFor(dm, "room:state", room => room.scenes.some(scene => scene.name === "Тайная лаборатория"));
+    const sceneCreated = await emit(dm, "scene:create", { name:"Тайная лаборатория", activate:false });
+    assert.equal(sceneCreated.ok, true);
+    await sceneCreatedState;
+    const activatedForPlayer = waitFor(player, "room:state", room => room.scene.name === "Тайная лаборатория");
+    assert.equal((await emit(dm, "scene:activate", { sceneId:sceneCreated.scene.id })).ok, true);
+    const laboratoryRoom = await activatedForPlayer;
+    assert.equal(laboratoryRoom.scenes.length, 1);
+    assert.equal(laboratoryRoom.assets.length, 0);
+    assert.equal(laboratoryRoom.scene.tokens.length, 0);
+
+    const copied = await emit(dm, "scene:duplicate", { sceneId:sceneCreated.scene.id, name:"Лаборатория — копия", activate:false });
+    assert.equal(copied.ok, true);
+    assert.equal(copied.scene.name, "Лаборатория — копия");
+    const removedCopy = await emit(dm, "scene:remove", { sceneId:copied.scene.id });
+    assert.equal(removedCopy.ok, true);
+
     const backup = await emit(dm, "room:backup", {});
     assert.equal(backup.ok, true);
     assert.equal("sheetHistory" in backup.backup.players["test-player"], false);
@@ -253,6 +337,12 @@ test("комната, лист, броски, история и резервна
     assert.equal(resumed.room.players["test-player"].sheet.characterName, "Шёпот");
     assert.equal(resumed.room.players["test-player"].sheet.coins.gp, 458);
     assert.equal(resumed.room.players["test-player"].sheet.spellsList[0].name, "Брызги кислоты");
+
+    await new Promise(resolve => setTimeout(resolve, 250));
+    const persistedRooms = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "rooms.json"), "utf8"));
+    assert.ok(persistedRooms[created.code].scenes.length >= 2);
+    assert.equal(persistedRooms[created.code].assets[0].name, "Красный гоблин");
+    assert.ok(fs.existsSync(path.join(DATA_DIR, "assets", created.code, persistedRooms[created.code].assets[0].filename)));
   } finally {
     dm.disconnect();
     player.disconnect();
