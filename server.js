@@ -75,7 +75,7 @@ function sheetInitiativeBonus(sheet) {
 
 const COMBAT_SLOT_KEYS = ["head", "neck", "cloak", "body", "mainHand", "offHand", "belt", "feet", "ammo"];
 const COMBAT_SET_IDS = ["a", "b", "c"];
-const COMBAT_CONDITIONS = ["Ослеплён", "Очарован", "Оглушён", "Отравлен", "Испуган", "Схвачен", "Недееспособен", "Невидим", "Парализован", "Окаменел", "Сбит с ног", "Опутан", "Без сознания", "Истощён", "Мёртв"];
+const COMBAT_CONDITIONS = ["Скрыт", "Ослеплён", "Очарован", "Оглушён", "Отравлен", "Испуган", "Схвачен", "Недееспособен", "Невидим", "Парализован", "Окаменел", "Сбит с ног", "Опутан", "Без сознания", "Истощён", "Мёртв"];
 
 function emptyCombatSet(setId, index = 0) {
   return {
@@ -855,6 +855,8 @@ function normalizeSheet(sheet, playerName) {
       damageType: cleanText(rawItem?.damageType, 40),
       ability: cleanText(rawItem?.ability, 20),
       useFormula: cleanText(rawItem?.useFormula, 100),
+      useCondition: COMBAT_CONDITIONS.includes(cleanText(rawItem?.useCondition,40)) ? cleanText(rawItem?.useCondition,40) : "",
+      useConcentration: Boolean(rawItem?.useConcentration),
       rarity: cleanText(rawItem?.rarity, 40),
       source: cleanText(rawItem?.source, 80),
       costUnit: cleanText(rawItem?.costUnit, 8),
@@ -1812,7 +1814,9 @@ io.on("connection", (socket) => {
     if (!safeAmount) return reply({ ok:false, error:"Укажи количество" });
     const isDm = room.dmId === clientId;
     const ownsTarget = token.playerId === clientId;
-    if (!isDm && !ownsTarget) {
+    const currentToken = scene.tokens.find(entry => entry.id === scene.initiative?.currentTokenId);
+    const canApplyNpcDamage = safeKind === "damage" && !token.playerId && (!scene.initiative?.active || currentToken?.playerId === clientId);
+    if (!isDm && !ownsTarget && !canApplyNpcDamage) {
       const request = { id:id(), requesterId:clientId, tokenId:token.id, kind:safeKind, amount:safeAmount, label:cleanText(label,120), status:"pending", at:Date.now() };
       room.combatRequests.push(request);
       room.combatRequests = room.combatRequests.slice(-100);

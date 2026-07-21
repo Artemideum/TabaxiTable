@@ -47,7 +47,7 @@ const skills = [
   ["performance", "Выступление", "cha"], ["persuasion", "Убеждение", "cha"], ["religion", "Религия", "int"],
   ["sleight", "Ловкость рук", "dex"], ["stealth", "Скрытность", "dex"], ["survival", "Выживание", "wis"]
 ];
-const conditionNames = ["Ослеплён", "Очарован", "Оглушён", "Отравлен", "Испуган", "Схвачен", "Недееспособен", "Невидим", "Парализован", "Окаменел", "Сбит с ног", "Опутан", "Без сознания", "Истощён"];
+const conditionNames = ["Скрыт", "Ослеплён", "Очарован", "Оглушён", "Отравлен", "Испуган", "Схвачен", "Недееспособен", "Невидим", "Парализован", "Окаменел", "Сбит с ног", "Опутан", "Без сознания", "Истощён"];
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>'"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]);
@@ -1191,16 +1191,52 @@ function healingPotionFormula(item) {
   if (/больш|greater/.test(name)) return "4к4+4";
   return "2к4+2";
 }
-function useQuickItem(index, options = {}) {
-  const next = structuredClone(currentSheet()), set = activeCombatSet(next), item = combatItem(next,set.quickSlots[index]);
-  if (!item) return state.editMode ? assignQuickSlot(index) : toast("Этот быстрый слот пуст");
+function quickItemCondition(item) {
+  if (conditionNames.includes(item.useCondition)) return item.useCondition;
+  const text = `${item.name || ""} ${item.description || ""}`.toLowerCase();
+  const rules = [
+    [/невидим|invisibility/,"Невидим"], [/скрыт|stealth/,"Скрыт"], [/отрав|poison/,"Отравлен"],
+    [/испуг|frighten|fear/,"Испуган"], [/оглуш|stun/,"Оглушён"], [/парализ|paraly/,"Парализован"],
+    [/опут|restrain|web/,"Опутан"], [/ослеп|blind/,"Ослеплён"], [/очаров|charm/,"Очарован"],
+    [/окамен|petrif/,"Окаменел"], [/сбит с ног|prone/,"Сбит с ног"]
+  ];
+  return rules.find(([pattern]) => pattern.test(text))?.[1] || "";
+}
+function ownVttTokenId() {
+  return (state.room?.scene?.tokens || []).find(token => token.playerId === state.clientId)?.id || "";
+}
+async function useQuickItem(index, options = {}) {
+  const sheet = currentSheet(), set = activeCombatSet(sheet), source = combatItem(sheet,set.quickSlots[index]);
+  if (!source) return state.editMode ? assignQuickSlot(index) : toast("Этот быстрый слот пуст");
   if (state.editMode && state.selectedLoadoutItemId) return assignQuickSlot(index);
-  if (Number(item.quantity || 0) <= 0) return toast(`${item.name}: запас закончился`);
+  if (Number(source.quantity || 0) <= 0) return toast(`${source.name}: запас закончился`);
+  const formula = healingPotionFormula(source);
+  const condition = quickItemCondition(source);
+  const text = `${source.name || ""} ${source.description || ""}`.toLowerCase();
+  const isScroll = source.catalogCategory === "scroll" || /свиток|scroll/.test(text);
+  const targetId = options.targetId || ownVttTokenId();
+  let outcome = { ok:true };
+  if (formula) {
+    const result = await roll(formula,`Лечение: ${source.name}`,{ ...options, mode:"normal", silent:true });
+    if (!result?.ok) return result;
+    if (targetId) outcome = await vttApplyCombat(targetId,"healing",Number(result.total)||0,`Использован ${source.name}`,options.visibility || "public");
+  } else if (condition && targetId) {
+    outcome = await vttToggleCondition(targetId,condition,true);
+    if (outcome?.ok && (source.useConcentration || /концентрац|concentration/.test(text))) await vttSetConcentration(targetId,source.name);
+  } else if (isScroll && targetId && source.useConcentration) {
+    const spellName = String(source.name || "Свиток").replace(/^Свиток[:\s-]*/i,"").trim() || source.name;
+    outcome = await vttSetConcentration(targetId,spellName);
+  } else if (source.useFormula) {
+    outcome = await roll(resolveDiceFormula(source.useFormula,sheet),`Использован: ${source.name}`,{ ...options, mode:"normal" });
+  }
+  if (outcome?.ok === false) return outcome;
+  const next = structuredClone(currentSheet()), nextSet = activeCombatSet(next), item = combatItem(next,nextSet.quickSlots[index]);
+  if (!item || Number(item.quantity || 0) <= 0) return toast(`${source.name}: предмет уже закончился`);
   item.quantity = Math.max(0,Number(item.quantity)-1);
-  const formula = healingPotionFormula(item);
-  saveNow(next,`${item.name}: осталось ${item.quantity}`,"Использован быстрый предмет"); renderSheet();
-  if (formula) roll(formula,`Лечение: ${item.name}`,{ ...options, mode:"normal" });
-  else toast(`${item.name} использован · осталось ${item.quantity}`);
+  saveNow(next,`${item.name}: осталось ${item.quantity}`,"Использован быстрый предмет");
+  renderSheet();
+  if (!formula && !condition && !isScroll && !source.useFormula) toast(`${item.name} использован · осталось ${item.quantity}`);
+  return { ok:true, quantity:item.quantity };
 }
 function assignAttunement(index, itemId = state.selectedLoadoutItemId) {
   if (!state.editMode) return;
@@ -2423,12 +2459,13 @@ function openItemModal(id = null) {
     ${item.type ? `<div class="read-only">${item.type === "weapon" ? `Оружие · ${esc(item.damage || "")} ${esc(item.damageType || "")}${item.magicBonus ? ` · +${Number(item.magicBonus)}` : ""}` : item.type === "armor" ? `Броня · КД ${Number(item.baseAc || 0) + Number(item.magicBonus || 0)} · ${esc(item.armorType || "")}` : item.magical ? `Магический предмет${item.rarity ? ` · ${esc(item.rarity)}` : ""}${item.requiresAttunement ? " · требует настройки" : ""}` : "Обычное снаряжение"}${item.variantLabel ? `<br><small>Основа: ${esc(item.variantLabel)}</small>` : ""}${item.originalName && item.originalName !== item.name ? `<br><small>${esc(item.originalName)}</small>` : ""}</div>` : ""}
     <div class="two-col"><label>Количество<input id="item-quantity" type="number" min="0" value="${Number(item.quantity)}"></label><label>Вес одного, фнт.<input id="item-weight" type="number" min="0" step="0.1" value="${Number(item.weight)}"></label></div>
     <div class="two-col"><label>Роль в бою<select id="item-combat-kind"><option value="auto" ${!item.combatKind || item.combatKind === "auto" ? "selected" : ""}>Определить автоматически</option><option value="weapon" ${item.combatKind === "weapon" ? "selected" : ""}>Оружие</option><option value="armor" ${item.combatKind === "armor" ? "selected" : ""}>Броня или защита</option><option value="ammo" ${item.combatKind === "ammo" ? "selected" : ""}>Боеприпасы</option><option value="consumable" ${item.combatKind === "consumable" ? "selected" : ""}>Расходник</option><option value="magic" ${item.combatKind === "magic" ? "selected" : ""}>Магический предмет</option><option value="gear" ${item.combatKind === "gear" ? "selected" : ""}>Прочее</option></select></label><label>Бросок при использовании<input id="item-use-formula" value="${esc(item.useFormula || "")}" placeholder="Например, 2к4+2"></label></div>
+    <div class="two-col"><label>Состояние при использовании<select id="item-use-condition"><option value="">Не менять</option>${conditionNames.map(name => `<option value="${esc(name)}" ${item.useCondition === name ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label class="toggle-row compact"><span><strong>Концентрация</strong><small>Предмет запускает поддерживаемый эффект</small></span><input id="item-use-concentration" type="checkbox" ${item.useConcentration ? "checked" : ""}><i></i></label></div>
     <div class="item-toggle-grid"><label class="toggle-row"><span><strong>В активном комплекте</strong><small>TabaxiTable подберёт подходящий слот</small></span><input id="item-equipped" type="checkbox" ${item.equipped ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магическая настройка</strong><small>${item.requiresAttunement ? "Этому предмету нужна настройка" : "Стандартный лимит — три предмета"}</small></span><input id="item-attuned" type="checkbox" ${item.attuned ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Магический предмет</strong><small>Показывать золотую метку</small></span><input id="item-magical" type="checkbox" ${item.magical ? "checked" : ""}><i></i></label></div>
     <label>Описание<textarea id="item-description">${esc(item.description)}</textarea></label>
     <div class="modal-actions"><button id="item-save" class="primary">Сохранить</button>${id ? `<button id="item-delete" class="secondary">Удалить</button>` : ""}</div>`);
   $("#item-save").addEventListener("click", () => {
     const next = structuredClone(currentSheet());
-    const value = { ...item, id: item.id, name: $("#item-name").value.trim(), quantity: Math.max(0, Number($("#item-quantity").value || 0)), weight: Math.max(0, Number($("#item-weight").value || 0)), equipped: $("#item-equipped").checked, attuned: $("#item-attuned").checked, magical: $("#item-magical").checked, combatKind:$("#item-combat-kind").value, useFormula:$("#item-use-formula").value.trim(), description: $("#item-description").value.trim() };
+    const value = { ...item, id: item.id, name: $("#item-name").value.trim(), quantity: Math.max(0, Number($("#item-quantity").value || 0)), weight: Math.max(0, Number($("#item-weight").value || 0)), equipped: $("#item-equipped").checked, attuned: $("#item-attuned").checked, magical: $("#item-magical").checked, combatKind:$("#item-combat-kind").value, useFormula:$("#item-use-formula").value.trim(), useCondition:$("#item-use-condition").value, useConcentration:$("#item-use-concentration").checked, description: $("#item-description").value.trim() };
     const index = next.inventoryList.findIndex(entry => entry.id === item.id);
     if (index >= 0) next.inventoryList[index] = value; else next.inventoryList.push(value);
     const loadout = ensureCombatLoadout(next), set = activeCombatSet(next);
@@ -2969,7 +3006,7 @@ function vttDamage(attackId, critical = false, visibility = "public", targetId =
     Promise.resolve(apply).then(result => { if (cardId) socket.emit("combat:card-damage", { cardId, total:Number(response.total)||0, applied:Boolean(result?.ok && !result?.pending) }); });
   }});
 }
-function vttUseQuick(index, visibility = "public") { useQuickItem(Number(index), { visibility }); }
+function vttUseQuick(index, visibility = "public", targetId = "") { return useQuickItem(Number(index), { visibility, targetId }); }
 function vttRollCheck(kind, key, visibility = "public", mode = "normal") {
   const sheet = currentSheet();
   if (kind === "skill") {
@@ -2984,8 +3021,8 @@ function vttRollCheck(kind, key, visibility = "public", mode = "normal") {
   if (!abilities[key]) return;
   return roll(`1к20${signed(modifier(sheet.stats[key]))}`, `Проверка: ${abilities[key]}`, { visibility, mode });
 }
-function vttToggleCondition(tokenId, condition, active) { socket.emit("combat:condition", { tokenId, condition, active }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить состояние"); }); }
-function vttSetConcentration(tokenId, name) { socket.emit("combat:concentration", { tokenId, name }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию"); }); }
+function vttToggleCondition(tokenId, condition, active) { return new Promise(resolve => socket.emit("combat:condition", { tokenId, condition, active }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить состояние"); resolve(response || { ok:false }); })); }
+function vttSetConcentration(tokenId, name) { return new Promise(resolve => socket.emit("combat:concentration", { tokenId, name }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию"); resolve(response || { ok:false }); })); }
 function vttDeathSave(tokenId, visibility = "public") { socket.emit("combat:death-save", { tokenId, visibility }, response => { if (!response?.ok) toast(response?.error || "Не удалось бросить спасбросок"); else showRollPeek("Спасбросок от смерти", { ...response, total:response.natural, dice:[response.natural], detail:[{ count:1,sides:20,sign:1,rolls:[response.natural],subtotal:response.natural }], modifier:0, mode:"normal" }); }); }
 function vttEndTurn(tokenId) { socket.emit("combat:end-turn", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить ход"); }); }
 function vttSpendAction(tokenId, cost, label, force = false) {

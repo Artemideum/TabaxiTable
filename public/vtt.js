@@ -235,11 +235,21 @@
     const hpPercent = state.hpMax ? clamp(state.hp / state.hpMax * 100, 0, 100) : 0;
     const initiativeValue = token.initiative !== null && token.initiative !== undefined ? Number(token.initiative) : Number(token.initiativeBonus || 0);
     const initiativeLabel = token.initiative !== null && token.initiative !== undefined ? String(initiativeValue) : `${initiativeValue >= 0 ? "+" : ""}${initiativeValue}`;
-    const conditionBadges = state.conditions.slice(0,4).map(condition => `<i title="${esc(condition)}">${esc(condition[0])}</i>`).join("");
+    const conditionVisuals = {
+      "Скрыт": ["stealth","◒"], "Скрытность": ["stealth","◒"], "Невидим": ["invisible","◌"],
+      "Отравлен": ["poisoned","☠"], "Испуган": ["frightened","!"], "Оглушён": ["stunned","✦"],
+      "Парализован": ["paralyzed","❄"], "Сбит с ног": ["prone","↘"], "Опутан": ["restrained","⌁"],
+      "Ослеплён": ["blinded","◉"], "Очарован": ["charmed","♥"], "Захвачен": ["grappled","⊗"],
+      "Недееспособен": ["incapacitated","×"], "Окаменел": ["petrified","◆"], "Без сознания": ["unconscious","☾"],
+      "Мёртв": ["dead","✝"]
+    };
+    const conditionEntries = state.conditions.map(condition => ({ condition, visual:conditionVisuals[condition] || ["custom","•"] }));
+    const conditionClasses = [...new Set(conditionEntries.map(entry => `condition-${entry.visual[0]}`))].join(" ");
+    const conditionBadges = conditionEntries.slice(0,6).map(entry => `<i class="condition-${entry.visual[0]}" title="${esc(entry.condition)}"><span>${esc(entry.visual[1])}</span><em>${esc(entry.condition)}</em></i>`).join("");
     const dead = state.conditions.includes("Мёртв");
     const healthLabel = ownDetails ? `${state.hp}/${state.hpMax}${state.tempHp ? ` +${state.tempHp}` : ""}` : hpPercent <= 0 ? "0%" : hpPercent < 25 ? "тяжело" : hpPercent < 60 ? "ранен" : "в строю";
     const title = ownDetails ? `${token.name} · HP ${healthLabel} · КД ${state.ac}` : `${token.name} · ${healthLabel}`;
-    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selectionHas(selection, "token", token.id) ? "is-selected" : ""} ${token.id === currentId ? "is-current" : ""} ${token.id === targetId ? "is-target" : ""} ${state.hp <= 0 ? "is-down" : ""} ${state.stable ? "is-stable" : ""} ${dead ? "is-dead" : ""}"
+    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selectionHas(selection, "token", token.id) ? "is-selected" : ""} ${token.id === currentId ? "is-current" : ""} ${token.id === targetId ? "is-target" : ""} ${state.hp <= 0 ? "is-down" : ""} ${state.stable ? "is-stable" : ""} ${dead ? "is-dead" : ""} ${conditionClasses}"
       data-vtt-token="${esc(token.id)}" data-vtt-movable="${movable && (!token.locked || isDm) ? "1" : "0"}"
       style="left:${position.left}px;top:${position.top}px;width:${size * metrics.cell}px;height:${size * metrics.cell}px;--rotation:${Number(token.rotation) || 0}deg;--opacity:${Number(token.opacity) || 1};--z:${Number(token.z) || 100};--color:${esc(token.color || "#9f7842")}"
       title="${esc(title)}">
@@ -1126,7 +1136,7 @@
     if (slot.kind === "quick") {
       const paid = await spend(slot.actionCost || "action",hotbarItemLabel(slot,combat));
       if (!paid?.ok) return;
-      ctx.actions?.useQuick?.(Number(slot.id),ui.rollVisibility);
+      ctx.actions?.useQuick?.(Number(slot.id),ui.rollVisibility,getTargetId(room));
       return;
     }
     if (["skill","save","ability"].includes(slot.kind)) return ctx.actions?.rollCheck?.(slot.kind,slot.key,ui.rollVisibility,ui.checkMode);
