@@ -168,6 +168,7 @@ function defaultScene(name = "Главная сцена") {
     objects: [],
     annotations: [],
     ping: null,
+    diceRoll: null,
     combatSettings: { actionPolicy: "soft" },
     initiative: { active: false, round: 1, currentTokenId: "", turnState:null, resources:{} },
     createdAt: Date.now(),
@@ -226,6 +227,8 @@ function normalizeScene(source, players = {}) {
       initiativeBonus: Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : raw?.initiativeBonus) || 0)),
       initiativeAdvantage: Boolean(player ? sheet.initiativeAdvantage : raw?.initiativeAdvantage),
       initiative,
+      badge: cleanText(raw?.badge, 32),
+      badgeColor: /^#[0-9a-f]{6}$/i.test(raw?.badgeColor) ? raw.badgeColor : "#f4c875",
       hpMax: Math.max(1, Math.min(1000000, Number(player ? sheet.hpMax : raw?.hpMax) || 1)),
       hp: Math.max(0, Math.min(1000000, Number(player ? sheet.hpCurrent : raw?.hp) || 0)),
       tempHp: Math.max(0, Math.min(1000000, Number(player ? sheet.hpTemp : raw?.tempHp) || 0)),
@@ -296,6 +299,15 @@ function normalizeScene(source, players = {}) {
     color: /^#[0-9a-f]{6}$/i.test(pingSource.color) ? pingSource.color : "#f4c875",
     at: Number(pingSource.at) || Date.now(), by: cleanText(pingSource.by, 60)
   } : null;
+  const diceSource = incoming.diceRoll && typeof incoming.diceRoll === "object" ? incoming.diceRoll : null;
+  const diceRoll = diceSource && Date.now() - Number(diceSource.at || 0) < 15000 ? {
+    id: cleanText(diceSource.id, 80) || id(),
+    x: normalizeCoordinate(diceSource.x), y: normalizeCoordinate(diceSource.y),
+    sides: [4,6,8,10,12,20,100].includes(Number(diceSource.sides)) ? Number(diceSource.sides) : 20,
+    value: Math.max(1, Math.min(Number(diceSource.sides) || 20, Number(diceSource.value) || 1)),
+    color: /^#[0-9a-f]{6}$/i.test(diceSource.color) ? diceSource.color : "#f4c875",
+    at: Number(diceSource.at) || Date.now(), by: cleanText(diceSource.by, 60)
+  } : null;
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
@@ -310,6 +322,7 @@ function normalizeScene(source, players = {}) {
     objects,
     annotations,
     ping,
+    diceRoll,
     combatSettings: {
       actionPolicy: ["free","soft","strict"].includes(incoming.combatSettings?.actionPolicy) ? incoming.combatSettings.actionPolicy : "soft"
     },
@@ -1579,6 +1592,8 @@ io.on("connection", (socket) => {
     const isDm = room.dmId === clientId;
     if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Нет доступа к токену" });
     rememberScene(room, scene);
+    if (payload.badge !== undefined) token.badge = cleanText(payload.badge, 32);
+    if (/^#[0-9a-f]{6}$/i.test(payload.badgeColor)) token.badgeColor = payload.badgeColor;
     if (!token.playerId) {
       token.name = cleanText(payload.name ?? token.name,60) || token.name;
       token.imageUrl = cleanText(payload.imageUrl ?? token.imageUrl,1000);
@@ -1598,6 +1613,56 @@ io.on("connection", (socket) => {
     if (isDm) { token.hidden = Boolean(payload.hidden); token.locked = Boolean(payload.locked); }
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:token-hp", ({ tokenId, hp, hpMax, tempHp } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Можно менять только HP своего персонажа" });
+    rememberScene(room, scene);
+    if (token.playerId && room.players?.[token.playerId]?.sheet) {
+      const sheet = room.players[token.playerId].sheet;
+      if (hpMax !== undefined) sheet.hpMax = Math.max(1, Math.min(1000000, Number(hpMax) || 1));
+      if (hp !== undefined) sheet.hpCurrent = Math.max(0, Math.min(Number(sheet.hpMax) || 1, Number(hp) || 0));
+      if (tempHp !== undefined) sheet.hpTemp = Math.max(0, Math.min(1000000, Number(tempHp) || 0));
+      room.players[token.playerId].sheet = normalizeSheet(sheet, room.players[token.playerId].name);
+      token.hpMax = room.players[token.playerId].sheet.hpMax;
+      token.hp = room.players[token.playerId].sheet.hpCurrent;
+      token.tempHp = room.players[token.playerId].sheet.hpTemp;
+    } else {
+      if (hpMax !== undefined) token.hpMax = Math.max(1, Math.min(1000000, Number(hpMax) || 1));
+      if (hp !== undefined) token.hp = Math.max(0, Math.min(Number(token.hpMax) || 1, Number(hp) || 0));
+      if (tempHp !== undefined) token.tempHp = Math.max(0, Math.min(1000000, Number(tempHp) || 0));
+    }
+    setActiveScene(room, scene);
+    saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:dice-roll", ({ x, y, sides } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    const player = room?.players?.[clientId];
+    if (!room || !player) return reply({ ok:false, error:"Игрок не подключён" });
+    const scene = activeScene(room);
+    const safeSides = [4,6,8,10,12,20,100].includes(Number(sides)) ? Number(sides) : 20;
+    const value = crypto.randomInt(1, safeSides + 1);
+    const ownToken = scene.tokens.find(token => token.playerId === clientId);
+    scene.diceRoll = {
+      id:id(),
+      x:sceneCoordinate(scene,x), y:sceneCoordinate(scene,y),
+      sides:safeSides, value,
+      color:/^#[0-9a-f]{6}$/i.test(ownToken?.color) ? ownToken.color : "#f4c875",
+      by:cleanText(player.name,60), at:Date.now()
+    };
+    room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:`Бросок к${safeSides} на столе`, dice:[value], modifier:0, total:value, natural:safeSides===20 ? value : null, mode:"normal", at:Date.now() });
+    room.rollLog = room.rollLog.slice(-100);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code);
+    reply({ ok:true, value, sides:safeSides, rollId:scene.diceRoll.id });
   });
 
   socket.on("scene:token-remove", ({ tokenId } = {}, reply = () => {}) => {
