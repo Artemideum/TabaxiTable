@@ -146,7 +146,7 @@ function normalizeCombatLoadout(source, inventory, itemIdAliases = new Map()) {
 
 function defaultScene(name = "Главная сцена") {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     id: id(),
     name: cleanText(name, 60) || "Главная сцена",
     published: true,
@@ -168,6 +168,7 @@ function defaultScene(name = "Главная сцена") {
     objects: [],
     annotations: [],
     ping: null,
+    combatSettings: { actionPolicy: "soft" },
     initiative: { active: false, round: 1, currentTokenId: "", turnState:null, resources:{} },
     createdAt: Date.now(),
     updatedAt: Date.now()
@@ -298,7 +299,7 @@ function normalizeScene(source, players = {}) {
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     id: cleanText(incoming.id, 80) || base.id,
     name: cleanText(incoming.name, 60) || base.name,
     published: incoming.published !== false,
@@ -309,6 +310,9 @@ function normalizeScene(source, players = {}) {
     objects,
     annotations,
     ping,
+    combatSettings: {
+      actionPolicy: ["free","soft","strict"].includes(incoming.combatSettings?.actionPolicy) ? incoming.combatSettings.actionPolicy : "soft"
+    },
     initiative: {
       active: Boolean(initiativeSource.active) && tokens.some(token => token.initiative !== null),
       round: Math.max(1, Math.min(999, Number(initiativeSource.round) || 1)),
@@ -382,6 +386,24 @@ function ensureRoomVtt(room) {
     kind:["damage","healing","temp"].includes(raw?.kind) ? raw.kind : "damage", amount:Math.max(0,Math.min(1000000,Number(raw?.amount)||0)),
     label:cleanText(raw?.label,120), status:["pending","accepted","rejected"].includes(raw?.status) ? raw.status : "pending", at:Number(raw?.at)||Date.now()
   })).filter(request => request.requesterId && request.tokenId && request.amount > 0);
+  room.combatCards = (Array.isArray(room.combatCards) ? room.combatCards : []).slice(-100).map(raw => ({
+    id:cleanText(raw?.id,80) || id(),
+    playerId:cleanText(raw?.playerId,80),
+    player:cleanText(raw?.player,60),
+    attackId:cleanText(raw?.attackId,80),
+    attackName:cleanText(raw?.attackName,100) || "Атака",
+    targetId:cleanText(raw?.targetId,80),
+    targetName:cleanText(raw?.targetName,80),
+    total:Math.max(-1000,Math.min(10000,Number(raw?.total)||0)),
+    natural:Math.max(0,Math.min(20,Number(raw?.natural)||0)),
+    hit:raw?.hit === null || raw?.hit === undefined ? null : Boolean(raw.hit),
+    critical:Boolean(raw?.critical), fumble:Boolean(raw?.fumble),
+    targetAc:Math.max(0,Math.min(1000,Number(raw?.targetAc)||0)),
+    damageTotal:raw?.damageTotal === null || raw?.damageTotal === undefined ? null : Math.max(0,Math.min(1000000,Number(raw.damageTotal)||0)),
+    damageApplied:Boolean(raw?.damageApplied),
+    visibility:["private","gm"].includes(raw?.visibility) ? raw.visibility : "public",
+    at:Math.max(0,Number(raw?.at)||Date.now())
+  })).filter(card => card.playerId && card.attackId);
   room.scene = room.scenes.find(scene => scene.id === room.activeSceneId) || room.scenes[0];
 }
 
@@ -646,8 +668,10 @@ function initiativeOrder(scene) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 8,
+    schemaVersion: 9,
     characterName: playerName,
+    vttUiMode: "veteran",
+    vttHotbar: Array(10).fill(null),
     classKey: "",
     subclassKey: "",
     raceKey: "",
@@ -928,7 +952,23 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 8;
+  normalized.schemaVersion = 9;
+  normalized.vttUiMode = incoming.vttUiMode === "assistant" ? "assistant" : "veteran";
+  normalized.vttHotbar = Array.from({ length:10 }, (_, index) => {
+    const raw = Array.isArray(incoming.vttHotbar) ? incoming.vttHotbar[index] : null;
+    if (!raw || typeof raw !== "object") return null;
+    const kind = ["attack","quick","skill","save","ability","formula","action"].includes(raw.kind) ? raw.kind : "";
+    if (!kind) return null;
+    return {
+      kind,
+      id:cleanText(raw.id,80),
+      key:cleanText(raw.key,40),
+      label:cleanText(raw.label,60),
+      formula:cleanText(raw.formula,100),
+      icon:cleanText(raw.icon,8),
+      actionCost:["action","bonus","reaction","free"].includes(raw.actionCost) ? raw.actionCost : "free"
+    };
+  });
   normalized.passivePerceptionBonus = Math.max(-100, Math.min(100, Number(incoming.passivePerceptionBonus) || 0));
   normalized.stable = Boolean(incoming.stable);
   normalized.xp = Math.max(0, Math.min(999999999, Number(incoming.xp) || 0));
@@ -989,6 +1029,11 @@ function publicRoom(room, viewerId = "") {
       return true;
     }).slice(-100),
     combatRequests: room.combatRequests.filter(request => request.status === "pending" && (isDm || request.requesterId === viewerId)),
+    combatCards: room.combatCards.filter(card => {
+      if (card.visibility === "gm") return isDm;
+      if (card.visibility === "private") return isDm || card.playerId === viewerId;
+      return true;
+    }).map(card => isDm ? card : ({ ...card, targetAc:0 })).slice(-100),
     scene,
     activeSceneId: room.activeSceneId,
     scenes: sceneSummaries(room, viewerId),
@@ -1876,7 +1921,7 @@ io.on("connection", (socket) => {
     reply({ ok:true, hit, critical, fumble, ...(room.dmId === clientId ? { targetAc:ac } : {}) });
   });
 
-  socket.on("combat:spend-action", ({ tokenId, cost, label } = {}, reply = () => {}) => {
+  socket.on("combat:spend-action", ({ tokenId, cost, label, force } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     if (!room) return reply({ ok:false, error:"Комната не найдена" });
@@ -1887,6 +1932,13 @@ io.on("connection", (socket) => {
     if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Можно расходовать действия только своего персонажа" });
     const safeCost = ["action","attack","bonus","reaction","free"].includes(cost) ? cost : "action";
     const safeLabel = cleanText(label,100) || safeCost;
+    const actionPolicy = ["free","soft","strict"].includes(scene.combatSettings?.actionPolicy) ? scene.combatSettings.actionPolicy : "soft";
+
+    if (actionPolicy === "free") {
+      appendActivity(room,clientId,"Действие",`${token.name}: ${safeLabel}`);
+      saveRooms(); emitRoom(code);
+      return reply({ ok:true, freeMode:true, actionPolicy, turnState:scene.initiative.turnState, resources:ensureInitiativeResources(room,scene,token) });
+    }
 
     // Вне инициативы действие разрешено, но не создаёт скрытый счётчик хода.
     if (!scene.initiative.active) {
@@ -1901,35 +1953,95 @@ io.on("connection", (socket) => {
     // Реакция принадлежит персонажу, а не текущему ходу, поэтому не должна
     // перезаписывать turnState активного участника.
     if (safeCost === "reaction") {
-      if (!resources.reactionAvailable) return reply({ ok:false, error:"Реакция уже потрачена" });
-      resources.reactionAvailable = false;
+      if (!resources.reactionAvailable) {
+        if (actionPolicy === "strict") return reply({ ok:false, error:"Реакция уже потрачена" });
+        if (!force) return reply({ ok:false, needsConfirm:true, error:"Реакция уже потрачена. Выполнить всё равно?" });
+      } else resources.reactionAvailable = false;
       if (isCurrent && scene.initiative.turnState?.tokenId === token.id) scene.initiative.turnState.reactionAvailable = false;
       appendActivity(room,clientId,"Реакция",`${token.name}: ${safeLabel}`);
       setActiveScene(room,scene); saveRooms(); emitRoom(code);
       return reply({ ok:true, turnState:scene.initiative.turnState, resources });
     }
 
-    if (!isCurrent) return reply({ ok:false, error:"Сейчас не ход этого персонажа" });
+    if (!isCurrent) {
+      if (actionPolicy === "strict") return reply({ ok:false, error:"Сейчас не ход этого персонажа" });
+      if (!force) return reply({ ok:false, needsConfirm:true, error:"Сейчас не ход этого персонажа. Выполнить всё равно?" });
+      appendActivity(room,clientId,"Действие вне хода",`${token.name}: ${safeLabel}`);
+      saveRooms(); emitRoom(code);
+      return reply({ ok:true, override:true, actionPolicy, turnState:scene.initiative.turnState, resources });
+    }
     if (!scene.initiative.turnState || scene.initiative.turnState.tokenId !== token.id) beginTurn(room,scene,token);
     const state = scene.initiative.turnState;
 
     if (safeCost === "attack") {
       if (state.attacksRemaining > 0) state.attacksRemaining -= 1;
       else {
-        if (state.actions < 1) return reply({ ok:false, error:"Действие уже потрачено" });
-        state.actions -= 1;
+        if (state.actions < 1) {
+          if (actionPolicy === "strict") return reply({ ok:false, error:"Действие уже потрачено" });
+          if (!force) return reply({ ok:false, needsConfirm:true, error:"Действие уже потрачено. Выполнить всё равно?" });
+        } else state.actions -= 1;
         state.attacksRemaining = Math.max(0,state.attacksPerAction - 1);
       }
     } else if (safeCost === "action") {
-      if (state.actions < 1) return reply({ ok:false, error:"Действие уже потрачено" });
-      state.actions -= 1;
+      if (state.actions < 1) {
+        if (actionPolicy === "strict") return reply({ ok:false, error:"Действие уже потрачено" });
+        if (!force) return reply({ ok:false, needsConfirm:true, error:"Действие уже потрачено. Выполнить всё равно?" });
+      } else state.actions -= 1;
     } else if (safeCost === "bonus") {
-      if (state.bonusActions < 1) return reply({ ok:false, error:"Бонусное действие уже потрачено" });
-      state.bonusActions -= 1;
+      if (state.bonusActions < 1) {
+        if (actionPolicy === "strict") return reply({ ok:false, error:"Бонусное действие уже потрачено" });
+        if (!force) return reply({ ok:false, needsConfirm:true, error:"Бонусное действие уже потрачено. Выполнить всё равно?" });
+      } else state.bonusActions -= 1;
     }
 
     appendActivity(room,clientId,safeCost === "bonus" ? "Бонусное действие" : safeCost === "free" ? "Свободное действие" : "Действие",`${token.name}: ${safeLabel}`);
     setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true, turnState:state, resources });
+  });
+
+  socket.on("combat:settings", ({ actionPolicy } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет режим боя" });
+    const scene = activeScene(room);
+    scene.combatSettings ||= {};
+    scene.combatSettings.actionPolicy = ["free","soft","strict"].includes(actionPolicy) ? actionPolicy : "soft";
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true, actionPolicy:scene.combatSettings.actionPolicy });
+  });
+
+  socket.on("combat:card-create", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    const player = room?.players?.[clientId];
+    if (!room || !player) return reply({ ok:false, error:"Игрок не подключён" });
+    const scene = activeScene(room);
+    const target = scene.tokens.find(token => token.id === cleanText(payload.targetId,80));
+    let visibility = ["private","gm"].includes(payload.visibility) ? payload.visibility : "public";
+    if (visibility === "gm" && room.dmId !== clientId) visibility = "private";
+    const card = {
+      id:id(), playerId:clientId, player:cleanText(player.name,60),
+      attackId:cleanText(payload.attackId,80), attackName:cleanText(payload.attackName,100) || "Атака",
+      targetId:target?.id || "", targetName:target?.name || cleanText(payload.targetName,80),
+      total:Math.max(-1000,Math.min(10000,Number(payload.total)||0)), natural:Math.max(0,Math.min(20,Number(payload.natural)||0)),
+      hit:payload.hit === null || payload.hit === undefined ? null : Boolean(payload.hit),
+      critical:Boolean(payload.critical), fumble:Boolean(payload.fumble),
+      targetAc:target ? tokenCombatState(room,target).ac : Math.max(0,Math.min(1000,Number(payload.targetAc)||0)),
+      damageTotal:null, damageApplied:false, visibility, at:Date.now()
+    };
+    if (!card.attackId) return reply({ ok:false, error:"Атака не найдена" });
+    room.combatCards.push(card); room.combatCards = room.combatCards.slice(-100);
+    saveRooms(); emitRoom(code); reply({ ok:true, cardId:card.id });
+  });
+
+  socket.on("combat:card-damage", ({ cardId, total, applied } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const card = room.combatCards.find(entry => entry.id === cleanText(cardId,80));
+    if (!card) return reply({ ok:false, error:"Карточка атаки не найдена" });
+    if (room.dmId !== clientId && card.playerId !== clientId) return reply({ ok:false, error:"Нет доступа к карточке" });
+    card.damageTotal = Math.max(0,Math.min(1000000,Number(total)||0));
+    card.damageApplied = Boolean(applied);
+    saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
   socket.on("combat:action-surge", ({ tokenId } = {}, reply = () => {}) => {
@@ -2040,7 +2152,7 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("dice:roll", ({ formula, label, mode, visibility }, reply = () => {}) => {
+  socket.on("dice:roll", ({ formula, label, mode, visibility, silent }, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     const player = room?.players?.[clientId];
@@ -2049,10 +2161,12 @@ io.on("connection", (socket) => {
     if (!parsed.ok) return reply({ ok: false, error: parsed.error });
     let safeVisibility = ["private","gm"].includes(visibility) ? visibility : "public";
     if (safeVisibility === "gm" && room.dmId !== clientId) safeVisibility = "private";
-    room.rollLog.push({ id: id(), playerId:clientId, player: player.name, label: cleanText(label, 60) || parsed.formula, formula: parsed.formula, dice: parsed.dice, detail: parsed.detail, modifier: parsed.modifier, total: parsed.total, mode: parsed.mode, natural: parsed.natural, visibility:safeVisibility, at: Date.now() });
-    room.rollLog = room.rollLog.slice(-100);
-    saveRooms();
-    emitRoom(code);
+    if (!silent) {
+      room.rollLog.push({ id: id(), playerId:clientId, player: player.name, label: cleanText(label, 60) || parsed.formula, formula: parsed.formula, dice: parsed.dice, detail: parsed.detail, modifier: parsed.modifier, total: parsed.total, mode: parsed.mode, natural: parsed.natural, visibility:safeVisibility, at: Date.now() });
+      room.rollLog = room.rollLog.slice(-100);
+      saveRooms();
+      emitRoom(code);
+    }
     reply({ ok: true, formula:parsed.formula, total: parsed.total, dice: parsed.dice, detail: parsed.detail, modifier:parsed.modifier, mode: parsed.mode, natural: parsed.natural });
   });
 

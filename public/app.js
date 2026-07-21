@@ -2726,7 +2726,7 @@ function roll(formula, label = formula, options = {}) {
   const isD20 = /(?:^|[^\d])1[кd]20(?:$|[^\d])/i.test(String(formula));
   const usesSelectedMode = isD20 && !options.mode;
   const mode = options.mode || (isD20 ? state.rollMode : "normal");
-  return new Promise(resolve => socket.emit("dice:roll", { formula, label, mode, visibility:options.visibility || "public" }, response => {
+  return new Promise(resolve => socket.emit("dice:roll", { formula, label, mode, visibility:options.visibility || "public", silent:Boolean(options.silent) }, response => {
     if (!response.ok) { toast(response.error); resolve(response); return; }
     showRollPeek(label, response);
     options.onResult?.(response);
@@ -2871,9 +2871,20 @@ function buildVttCombatModel() {
     ...(rogueLevel >= 5 ? [{ key:"uncanny-dodge",name:"Невероятное уклонение",detail:"вдвое уменьшить урон" }] : []),
     ...(monkLevel >= 3 ? [{ key:"deflect-missiles",name:"Отражение снарядов",detail:"реакция" }] : [])
   ];
+  const savedHotbar = Array.isArray(sheet.vttHotbar) ? sheet.vttHotbar.slice(0,10) : [];
+  const autoHotbar = [
+    ...attacks.slice(0,4).map(attack => ({ kind:"attack", id:attack.id, label:attack.name, icon:"⚔", actionCost:attack.actionCostKey || "action" })),
+    ...quickSlots.filter(item => item.id).slice(0,2).map(item => ({ kind:"quick", id:String(item.index), label:item.name, icon:item.icon || "◈", actionCost:"action" })),
+    ...skillChecks.filter(item => ["stealth","perception"].includes(item.key)).map(item => ({ kind:"skill", key:item.key, label:item.name, icon:"◆", actionCost:"free" })),
+    ...saves.filter(item => item.key === "dex").map(item => ({ kind:"save", key:item.key, label:`Спас: ${item.name}`, icon:"◉", actionCost:"free" }))
+  ].slice(0,10);
+  const hotbar = Array.from({ length:10 }, (_, index) => savedHotbar[index] || autoHotbar[index] || null);
   return {
     playerId:state.clientId,
     name:sheet.characterName || player.name,
+    uiMode:sheet.vttUiMode === "assistant" ? "assistant" : "veteran",
+    hotbar,
+    hotbarLibrary:{ attacks, quickSlots:quickSlots.filter(item => item.id), skills:skillChecks, saves, abilityChecks },
     hp:Number(sheet.hpCurrent || 0),
     hpMax:Number(sheet.hpMax || 0),
     tempHp:Number(sheet.hpTemp || 0),
@@ -2922,12 +2933,18 @@ function vttAttack(attackId, visibility = "public", targetId = "", mode = "") {
   if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
   const target = vttTokenState(targetId);
   const publicTarget = target ? { name:target.name, token:target.token } : null;
-  return performAttackRoll(attack, { visibility, ...(mode ? { mode } : {}), target:publicTarget }).then(response => {
-    if (!response?.ok || !target) return { ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:"", targetName:"", hit:null, critical:response?.natural === 20, fumble:response?.natural === 1 };
+  return performAttackRoll(attack, { visibility, silent:true, ...(mode ? { mode } : {}), target:publicTarget }).then(response => {
+    if (!response?.ok) return response;
+    const finish = verdict => new Promise(resolve => socket.emit("combat:card-create", {
+      attackId:attack.id, attackName:attack.name || "Атака", targetId:target?.token?.id || "", targetName:target?.name || "",
+      total:response.total, natural:response.natural, hit:verdict?.hit ?? null, critical:Boolean(verdict?.critical ?? response.natural === 20),
+      fumble:Boolean(verdict?.fumble ?? response.natural === 1), targetAc:Number(verdict?.targetAc || 0), visibility
+    }, cardResponse => resolve({ ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:target?.token?.id || "", targetName:target?.name || "", targetAc:Number(verdict?.targetAc || 0), hit:verdict?.hit ?? null, critical:Boolean(verdict?.critical ?? response.natural === 20), fumble:Boolean(verdict?.fumble ?? response.natural === 1), cardId:cardResponse?.cardId || "" })));
+    if (!target) return finish(null);
     return new Promise(resolve => socket.emit("combat:resolve-hit", { targetId:target.token.id, total:response.total, natural:response.natural }, verdict => {
       if (!verdict?.ok) { toast(verdict?.error || "Не удалось определить попадание"); return resolve({ ...response, ok:false, error:verdict?.error }); }
       toast(verdict.hit ? (verdict.critical ? "Критическое попадание!" : "Попадание") : verdict.fumble ? "Автоматический промах" : "Промах");
-      resolve({ ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:target.token.id, targetName:target.name, targetAc:verdict.targetAc || 0, hit:Boolean(verdict.hit), critical:Boolean(verdict.critical), fumble:Boolean(verdict.fumble) });
+      finish(verdict).then(resolve);
     }));
   });
 }
@@ -2944,11 +2961,12 @@ function vttApplyCombat(tokenId, kind, amount, label = "Бой", visibility = "p
     resolve(response || { ok:false });
   }));
 }
-function vttDamage(attackId, critical = false, visibility = "public", targetId = "") {
+function vttDamage(attackId, critical = false, visibility = "public", targetId = "", cardId = "") {
   const attack = currentSheet().attacksList.find(item => item.id === attackId);
   if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
-  return rollAttackDamage(attack, critical, { visibility, onResult:response => {
-    if (targetId && Number(response.total) > 0) vttApplyCombat(targetId, "damage", Number(response.total), `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, visibility);
+  return rollAttackDamage(attack, critical, { visibility, silent:true, onResult:response => {
+    const apply = targetId && Number(response.total) > 0 ? vttApplyCombat(targetId, "damage", Number(response.total), `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, visibility) : Promise.resolve({ ok:true, pending:false });
+    Promise.resolve(apply).then(result => { if (cardId) socket.emit("combat:card-damage", { cardId, total:Number(response.total)||0, applied:Boolean(result?.ok && !result?.pending) }); });
   }});
 }
 function vttUseQuick(index, visibility = "public") { useQuickItem(Number(index), { visibility }); }
@@ -2970,10 +2988,30 @@ function vttToggleCondition(tokenId, condition, active) { socket.emit("combat:co
 function vttSetConcentration(tokenId, name) { socket.emit("combat:concentration", { tokenId, name }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию"); }); }
 function vttDeathSave(tokenId, visibility = "public") { socket.emit("combat:death-save", { tokenId, visibility }, response => { if (!response?.ok) toast(response?.error || "Не удалось бросить спасбросок"); else showRollPeek("Спасбросок от смерти", { ...response, total:response.natural, dice:[response.natural], detail:[{ count:1,sides:20,sign:1,rolls:[response.natural],subtotal:response.natural }], modifier:0, mode:"normal" }); }); }
 function vttEndTurn(tokenId) { socket.emit("combat:end-turn", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить ход"); }); }
-function vttSpendAction(tokenId, cost, label) { return new Promise(resolve => socket.emit("combat:spend-action", { tokenId, cost, label }, response => { if (!response?.ok) toast(response?.error || "Действие недоступно"); resolve(response || { ok:false }); })); }
+function vttSpendAction(tokenId, cost, label, force = false) {
+  return new Promise(resolve => socket.emit("combat:spend-action", { tokenId, cost, label, force }, response => {
+    if (response?.needsConfirm && !force) {
+      if (confirm(response.error || "Ресурс хода уже потрачен. Выполнить всё равно?")) return vttSpendAction(tokenId,cost,label,true).then(resolve);
+      return resolve({ ok:false, cancelled:true });
+    }
+    if (!response?.ok) toast(response?.error || "Действие недоступно");
+    resolve(response || { ok:false });
+  }));
+}
 function vttActionSurge(tokenId) { return new Promise(resolve => socket.emit("combat:action-surge", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Всплеск действий недоступен"); resolve(response || { ok:false }); })); }
 function vttEndBattle() { return new Promise(resolve => socket.emit("combat:end-battle", {}, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить бой"); else toast("Бой завершён"); resolve(response || { ok:false }); })); }
 function vttResolveCombatRequest(requestId, accept) { socket.emit("combat:request-resolve", { requestId, accept }, response => { if (!response?.ok) toast(response?.error || "Не удалось обработать запрос"); }); }
+function vttSavePreferences(patch = {}) {
+  const sheet = structuredClone(currentSheet());
+  if (patch.uiMode) sheet.vttUiMode = patch.uiMode === "assistant" ? "assistant" : "veteran";
+  if (Array.isArray(patch.hotbar)) sheet.vttHotbar = patch.hotbar.slice(0,10);
+  state.room.players[state.clientId].sheet = sheet;
+  return new Promise(resolve => socket.emit("sheet:update", { sheet, reason:"Настройки виртуального стола" }, response => {
+    if (!response?.ok) toast(response?.error || "Не удалось сохранить панель действий");
+    resolve(response || { ok:false });
+  }));
+}
+function vttSetActionPolicy(actionPolicy) { return new Promise(resolve => socket.emit("combat:settings", { actionPolicy }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить режим действий"); resolve(response || { ok:false }); })); }
 
 function renderMap() {
   const root = $("#map-view");
@@ -2992,7 +3030,7 @@ function renderMap() {
       switchView,
       combat:buildVttCombatModel(),
       characters:buildVttCharacterModels(),
-      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick, rollCheck:vttRollCheck, applyCombat:vttApplyCombat, toggleCondition:vttToggleCondition, setConcentration:vttSetConcentration, deathSave:vttDeathSave, endTurn:vttEndTurn, spendAction:vttSpendAction, actionSurge:vttActionSurge, endBattle:vttEndBattle, resolveRequest:vttResolveCombatRequest }
+      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick, rollCheck:vttRollCheck, applyCombat:vttApplyCombat, toggleCondition:vttToggleCondition, setConcentration:vttSetConcentration, deathSave:vttDeathSave, endTurn:vttEndTurn, spendAction:vttSpendAction, actionSurge:vttActionSurge, endBattle:vttEndBattle, resolveRequest:vttResolveCombatRequest, savePreferences:vttSavePreferences, setActionPolicy:vttSetActionPolicy }
     });
     return;
   }
