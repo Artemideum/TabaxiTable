@@ -94,6 +94,10 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /data-vtt-rolls-tab/);
     assert.match(vttScript, /data-vtt-result-damage/);
     assert.match(vttScript, /vtt-target-select/);
+    assert.match(vttScript, /vtt-token-menu/);
+    assert.match(vttScript, /data-vtt-spend-action/);
+    assert.match(vttScript, /vtt-end-battle/);
+    assert.match(vttScript, /Атак доступно/);
     assert.match(vttScript, /ui\.leftPanel === panel \? null : panel/);
     const vttStyle = await fetch(`http://127.0.0.1:${PORT}/vtt.css`).then(response => response.text());
     assert.match(vttStyle, /vtt-viewport/);
@@ -107,6 +111,8 @@ test("комната, лист, броски, история и резервна
     assert.match(vttStyle, /vtt-check-list/);
     assert.match(vttStyle, /vtt-attack-result/);
     assert.match(vttStyle, /vtt-token-life-state/);
+    assert.match(vttStyle, /vtt-menu-result/);
+    assert.match(vttStyle, /vtt-init-economy/);
     assert.doesNotMatch(vttStyle, /\.vtt-ping i::before/);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
@@ -117,6 +123,8 @@ test("комната, лист, броски, история и резервна
     assert.equal(created.room.scene.schemaVersion, 5);
     assert.deepEqual(created.room.scene.annotations, []);
     assert.equal(created.room.scene.tokens.length, 0);
+    assert.equal(created.room.scene.initiative.turnState, null);
+    assert.deepEqual(created.room.scene.initiative.resources, {});
     assert.equal(created.room.scenes.length, 1);
     assert.equal(created.room.scenes[0].active, true);
     assert.deepEqual(created.room.assets, []);
@@ -218,6 +226,16 @@ test("комната, лист, броски, история и резервна
     assert.equal(restored.ok, true);
     assert.equal(restored.sheet.characterName, "Шёпот");
 
+    const combatSheet = structuredClone(restored.sheet);
+    combatSheet.classes = [{ key:"fighter", name:"Воин", subclass:"Чемпион", level:5, hitDie:10 }];
+    combatSheet.classKey = "fighter";
+    combatSheet.className = "Воин";
+    combatSheet.level = 5;
+    combatSheet.levelProgression = Array.from({ length:5 }, (_,index) => ({ level:index+1, classKey:"fighter", classLevel:index+1 }));
+    const fighterReady = waitFor(dm, "room:state", room => room.players["test-player"]?.sheet?.classes?.[0]?.key === "fighter" && room.players["test-player"].sheet.level === 5);
+    assert.equal((await emit(player, "sheet:update", { sheet:combatSheet, reason:"Проверка экономики хода" })).ok, true);
+    await fighterReady;
+
     const ownTokenForDm = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.playerId === "test-player"));
     const ownTokenPlaced = await emit(player, "scene:token-add", { playerId:"test-player" });
     assert.equal(ownTokenPlaced.ok, true);
@@ -280,6 +298,36 @@ test("комната, лист, броски, история и резервна
     const initiativeRoom = await initiativeUpdate;
     assert.equal(initiativeRoom.scene.initiative.active, true);
     assert.equal(initiativeRoom.scene.initiative.currentTokenId, playerToken.id);
+    assert.equal(initiativeRoom.scene.initiative.turnState.tokenId, playerToken.id);
+    assert.equal(initiativeRoom.scene.initiative.turnState.actions, 1);
+    assert.equal(initiativeRoom.scene.initiative.turnState.bonusActions, 1);
+    assert.equal(initiativeRoom.scene.initiative.turnState.attacksPerAction, 2);
+    assert.equal(initiativeRoom.scene.initiative.resources[playerToken.id].actionSurge, 1);
+
+    const firstAttack = await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"attack", label:"Первая атака" });
+    assert.equal(firstAttack.ok, true);
+    assert.equal(firstAttack.turnState.actions, 0);
+    assert.equal(firstAttack.turnState.attacksRemaining, 1);
+    const secondAttack = await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"attack", label:"Дополнительная атака" });
+    assert.equal(secondAttack.ok, true);
+    assert.equal(secondAttack.turnState.attacksRemaining, 0);
+    assert.equal((await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"attack", label:"Лишняя атака" })).ok, false);
+    const surge = await emit(player, "combat:action-surge", { tokenId:playerToken.id });
+    assert.equal(surge.ok, true);
+    assert.equal(surge.turnState.actions, 1);
+    assert.equal(surge.resources.actionSurge, 0);
+    assert.equal((await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"bonus", label:"Второе дыхание" })).ok, true);
+    assert.equal((await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"bonus", label:"Ещё бонус" })).ok, false);
+
+    const dmToken = partyRoom.scene.tokens.find(token => token.playerId === "test-dm");
+    assert.ok(dmToken);
+    assert.equal((await emit(dm, "initiative:set", { tokenId:dmToken.id, value:30 })).ok, true);
+    assert.equal((await emit(dm, "initiative:next", {})).ok, true);
+    const reactionWhileWaiting = await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"reaction", label:"Провоцированная атака" });
+    assert.equal(reactionWhileWaiting.ok, true);
+    assert.equal(reactionWhileWaiting.turnState.tokenId, dmToken.id);
+    assert.equal(reactionWhileWaiting.resources.reactionAvailable, false);
+    assert.equal((await emit(player, "combat:spend-action", { tokenId:playerToken.id, cost:"action", label:"Не в свой ход" })).ok, false);
 
     const hiddenForDm = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.name === "Скрытый гоблин"));
     const hiddenForPlayer = waitFor(player, "room:state", room => room.scene.name === "Подземелье" && !room.scene.tokens.some(token => token.name === "Скрытый гоблин"));
@@ -323,6 +371,16 @@ test("комната, лист, броски, история и резервна
     const npcReadyState = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === combatNpc.id && token.hpMax === 10 && token.hp === 10));
     assert.equal((await emit(dm, "scene:token-update", { tokenId:combatNpc.id, hpMax:10, hp:10, ac:13 })).ok, true);
     await npcReadyState;
+    const hitForPlayer = await emit(player, "combat:resolve-hit", { targetId:combatNpc.id, total:13, natural:10 });
+    assert.equal(hitForPlayer.ok, true);
+    assert.equal(hitForPlayer.hit, true);
+    assert.equal("targetAc" in hitForPlayer, false);
+    const hitForDm = await emit(dm, "combat:resolve-hit", { targetId:combatNpc.id, total:12, natural:10 });
+    assert.equal(hitForDm.ok, true);
+    assert.equal(hitForDm.hit, false);
+    assert.equal(hitForDm.targetAc, 13);
+    const playerNpcView = await emit(player, "room:join", { code:created.code, name:"Плут", clientId:"test-player" });
+    assert.equal("ac" in playerNpcView.room.scene.tokens.find(token => token.id === combatNpc.id), false);
     const requestForDm = waitFor(dm, "room:state", room => room.combatRequests.some(request => request.tokenId === combatNpc.id && request.amount === 4));
     const requestedDamage = await emit(player, "combat:apply", { tokenId:combatNpc.id, kind:"damage", amount:4, label:"Урон длинного лука" });
     assert.equal(requestedDamage.ok, true);
@@ -342,6 +400,12 @@ test("комната, лист, броски, история и резервна
     assert.equal(concentrationDamage.ok, true);
     assert.equal(concentrationDamage.result.applied, 2);
     assert.equal(concentrationDamage.result.concentrationDc, 10);
+    assert.equal((await emit(player, "combat:end-battle", {})).ok, false);
+    const endedBattleState = waitFor(player, "room:state", room => room.scene.initiative.active === false && room.scene.tokens.every(token => token.initiative === null));
+    assert.equal((await emit(dm, "combat:end-battle", {})).ok, true);
+    const endedBattleRoom = await endedBattleState;
+    assert.equal(endedBattleRoom.scene.initiative.turnState, null);
+    assert.deepEqual(endedBattleRoom.scene.initiative.resources, {});
     assert.equal((await concentrationDamageState).scene.tokens.find(token => token.id === combatNpc.id).hp, 4);
 
     const blockedDelete = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets/${uploadedAsset.asset.id}`, { method:"DELETE", headers:{ "x-client-id":"test-dm" } });

@@ -168,7 +168,7 @@ function defaultScene(name = "Главная сцена") {
     objects: [],
     annotations: [],
     ping: null,
-    initiative: { active: false, round: 1, currentTokenId: "" },
+    initiative: { active: false, round: 1, currentTokenId: "", turnState:null, resources:{} },
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -312,7 +312,20 @@ function normalizeScene(source, players = {}) {
     initiative: {
       active: Boolean(initiativeSource.active) && tokens.some(token => token.initiative !== null),
       round: Math.max(1, Math.min(999, Number(initiativeSource.round) || 1)),
-      currentTokenId: tokenIds.has(cleanText(initiativeSource.currentTokenId, 80)) ? cleanText(initiativeSource.currentTokenId, 80) : ""
+      currentTokenId: tokenIds.has(cleanText(initiativeSource.currentTokenId, 80)) ? cleanText(initiativeSource.currentTokenId, 80) : "",
+      turnState: initiativeSource.turnState && tokenIds.has(cleanText(initiativeSource.turnState.tokenId,80)) ? {
+        tokenId:cleanText(initiativeSource.turnState.tokenId,80),
+        actions:Math.max(0,Math.min(5,Number(initiativeSource.turnState.actions)||0)),
+        bonusActions:Math.max(0,Math.min(3,Number(initiativeSource.turnState.bonusActions)||0)),
+        reactionAvailable:initiativeSource.turnState.reactionAvailable !== false,
+        attacksRemaining:Math.max(0,Math.min(10,Number(initiativeSource.turnState.attacksRemaining)||0)),
+        attacksPerAction:Math.max(1,Math.min(10,Number(initiativeSource.turnState.attacksPerAction)||1)),
+        startedAt:Math.max(0,Number(initiativeSource.turnState.startedAt)||Date.now())
+      } : null,
+      resources: Object.fromEntries(Object.entries(initiativeSource.resources && typeof initiativeSource.resources === "object" ? initiativeSource.resources : {}).filter(([tokenId])=>tokenIds.has(tokenId)).map(([tokenId,value])=>[tokenId,{
+        reactionAvailable:value?.reactionAvailable !== false,
+        actionSurge:Math.max(0,Math.min(2,Number(value?.actionSurge)||0))
+      }]))
     },
     createdAt: Math.max(0, Number(incoming.createdAt) || Date.now()),
     updatedAt: Math.max(0, Number(incoming.updatedAt) || Date.now())
@@ -567,15 +580,64 @@ function appendActivity(room, playerId, label, detail, visibility = "public") {
   room.rollLog = room.rollLog.slice(-100);
 }
 
-function advanceInitiative(scene) {
+function sheetClassLevel(sheet, key) {
+  const classes = Array.isArray(sheet?.classes) ? sheet.classes : [];
+  const found = classes.find(entry => cleanText(entry?.key,30) === key);
+  if (found) return Math.max(0,Number(found.level)||0);
+  return cleanText(sheet?.classKey,30) === key ? Math.max(0,Number(sheet?.level)||0) : 0;
+}
+
+function attacksPerActionForSheet(sheet) {
+  const fighter = sheetClassLevel(sheet,"fighter");
+  if (fighter >= 20) return 4;
+  if (fighter >= 11) return 3;
+  if (fighter >= 5) return 2;
+  if (["barbarian","monk","paladin","ranger"].some(key => sheetClassLevel(sheet,key) >= 5)) return 2;
+  const bard = (Array.isArray(sheet?.classes) ? sheet.classes : []).find(entry => cleanText(entry?.key,30) === "bard");
+  if (Number(bard?.level) >= 6 && /доблест|меч/i.test(cleanText(bard?.subclass,80))) return 2;
+  return 1;
+}
+
+function actionSurgeMaxForSheet(sheet) {
+  const level = sheetClassLevel(sheet,"fighter");
+  return level >= 17 ? 2 : level >= 2 ? 1 : 0;
+}
+
+function ensureInitiativeResources(room, scene, token) {
+  scene.initiative.resources ||= {};
+  const sheet = token?.playerId ? room.players?.[token.playerId]?.sheet : null;
+  const maxSurge = sheet ? actionSurgeMaxForSheet(sheet) : 0;
+  const saved = scene.initiative.resources[token.id] || {};
+  scene.initiative.resources[token.id] = {
+    reactionAvailable:saved.reactionAvailable !== false,
+    actionSurge:Math.max(0,Math.min(maxSurge,Number.isFinite(Number(saved.actionSurge)) ? Number(saved.actionSurge) : maxSurge))
+  };
+  return scene.initiative.resources[token.id];
+}
+
+function beginTurn(room, scene, token) {
+  if (!token) {
+    scene.initiative.currentTokenId = "";
+    scene.initiative.turnState = null;
+    return null;
+  }
+  const sheet = token.playerId ? room.players?.[token.playerId]?.sheet : null;
+  const attacksPerAction = sheet ? attacksPerActionForSheet(sheet) : 1;
+  const resources = ensureInitiativeResources(room,scene,token);
+  resources.reactionAvailable = true;
+  scene.initiative.currentTokenId = token.id;
+  scene.initiative.turnState = { tokenId:token.id, actions:1, bonusActions:1, reactionAvailable:true, attacksRemaining:0, attacksPerAction, startedAt:Date.now() };
+  return token;
+}
+
+function advanceInitiative(room, scene) {
   const order = initiativeOrder(scene);
   if (!order.length) return null;
   const currentIndex = order.findIndex(token => token.id === scene.initiative.currentTokenId);
   const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % order.length;
   if (currentIndex >= 0 && nextIndex === 0) scene.initiative.round = Math.min(999,scene.initiative.round + 1);
   scene.initiative.active = true;
-  scene.initiative.currentTokenId = order[nextIndex].id;
-  return order[nextIndex];
+  return beginTurn(room,scene,order[nextIndex]);
 }
 
 function initiativeOrder(scene) {
@@ -901,10 +963,17 @@ function publicRoom(room, viewerId = "") {
   const scene = activeScene(room);
   const isDm = viewerId === room.dmId;
   if (!isDm) {
-    scene.tokens = scene.tokens.filter(token => !token.hidden);
+    scene.tokens = scene.tokens.filter(token => !token.hidden).map(token => {
+      if (token.playerId) return token;
+      const { ac: _secretAc, ...publicToken } = token;
+      return publicToken;
+    });
     scene.objects = scene.objects.filter(object => !object.hidden);
     scene.annotations = scene.annotations.filter(annotation => !annotation.hidden);
-    if (!scene.tokens.some(token => token.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
+    const visibleTokenIds = new Set(scene.tokens.map(token => token.id));
+    if (!visibleTokenIds.has(scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
+    if (!visibleTokenIds.has(scene.initiative.turnState?.tokenId)) scene.initiative.turnState = null;
+    scene.initiative.resources = Object.fromEntries(Object.entries(scene.initiative.resources || {}).filter(([tokenId]) => visibleTokenIds.has(tokenId)));
     scene.initiative.active = scene.tokens.some(token => token.initiative !== null);
   }
   return {
@@ -1791,6 +1860,110 @@ io.on("connection", (socket) => {
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, natural, state:next });
   });
 
+  socket.on("combat:resolve-hit", ({ targetId, total, natural } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || !room.players?.[clientId]) return reply({ ok:false, error:"Игрок не подключён" });
+    const scene = activeScene(room);
+    const target = scene.tokens.find(token => token.id === cleanText(targetId,80));
+    if (!target || target.hidden && room.dmId !== clientId) return reply({ ok:false, error:"Цель не найдена" });
+    const rollTotal = Math.max(-1000,Math.min(10000,Number(total)||0));
+    const die = Math.max(1,Math.min(20,Number(natural)||1));
+    const ac = tokenCombatState(room,target).ac;
+    const critical = die === 20;
+    const fumble = die === 1;
+    const hit = critical || !fumble && rollTotal >= ac;
+    reply({ ok:true, hit, critical, fumble, ...(room.dmId === clientId ? { targetAc:ac } : {}) });
+  });
+
+  socket.on("combat:spend-action", ({ tokenId, cost, label } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Можно расходовать действия только своего персонажа" });
+    const safeCost = ["action","attack","bonus","reaction","free"].includes(cost) ? cost : "action";
+    const safeLabel = cleanText(label,100) || safeCost;
+
+    // Вне инициативы действие разрешено, но не создаёт скрытый счётчик хода.
+    if (!scene.initiative.active) {
+      appendActivity(room,clientId,"Действие",`${token.name}: ${safeLabel}`);
+      saveRooms(); emitRoom(code);
+      return reply({ ok:true, freeMode:true, turnState:null, resources:ensureInitiativeResources(room,scene,token) });
+    }
+
+    const isCurrent = scene.initiative.currentTokenId === token.id;
+    const resources = ensureInitiativeResources(room,scene,token);
+
+    // Реакция принадлежит персонажу, а не текущему ходу, поэтому не должна
+    // перезаписывать turnState активного участника.
+    if (safeCost === "reaction") {
+      if (!resources.reactionAvailable) return reply({ ok:false, error:"Реакция уже потрачена" });
+      resources.reactionAvailable = false;
+      if (isCurrent && scene.initiative.turnState?.tokenId === token.id) scene.initiative.turnState.reactionAvailable = false;
+      appendActivity(room,clientId,"Реакция",`${token.name}: ${safeLabel}`);
+      setActiveScene(room,scene); saveRooms(); emitRoom(code);
+      return reply({ ok:true, turnState:scene.initiative.turnState, resources });
+    }
+
+    if (!isCurrent) return reply({ ok:false, error:"Сейчас не ход этого персонажа" });
+    if (!scene.initiative.turnState || scene.initiative.turnState.tokenId !== token.id) beginTurn(room,scene,token);
+    const state = scene.initiative.turnState;
+
+    if (safeCost === "attack") {
+      if (state.attacksRemaining > 0) state.attacksRemaining -= 1;
+      else {
+        if (state.actions < 1) return reply({ ok:false, error:"Действие уже потрачено" });
+        state.actions -= 1;
+        state.attacksRemaining = Math.max(0,state.attacksPerAction - 1);
+      }
+    } else if (safeCost === "action") {
+      if (state.actions < 1) return reply({ ok:false, error:"Действие уже потрачено" });
+      state.actions -= 1;
+    } else if (safeCost === "bonus") {
+      if (state.bonusActions < 1) return reply({ ok:false, error:"Бонусное действие уже потрачено" });
+      state.bonusActions -= 1;
+    }
+
+    appendActivity(room,clientId,safeCost === "bonus" ? "Бонусное действие" : safeCost === "free" ? "Свободное действие" : "Действие",`${token.name}: ${safeLabel}`);
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true, turnState:state, resources });
+  });
+
+  socket.on("combat:action-surge", ({ tokenId } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false, error:"Комната не найдена" });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Нет доступа к персонажу" });
+    if (!scene.initiative.active) return reply({ ok:false, error:"Сначала запусти инициативу" });
+    if (scene.initiative.currentTokenId !== token.id) return reply({ ok:false, error:"Всплеск действий используется в свой ход" });
+    const resources = ensureInitiativeResources(room,scene,token);
+    if (resources.actionSurge < 1) return reply({ ok:false, error:"Всплески действий закончились" });
+    if (!scene.initiative.turnState || scene.initiative.turnState.tokenId !== token.id) beginTurn(room,scene,token);
+    resources.actionSurge -= 1;
+    scene.initiative.turnState.actions = Math.min(5,scene.initiative.turnState.actions + 1);
+    appendActivity(room,clientId,"Всплеск действий",`${token.name} получает дополнительное действие`);
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true, turnState:scene.initiative.turnState, resources });
+  });
+
+  socket.on("combat:end-battle", (_payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий завершает бой" });
+    const scene = activeScene(room);
+    scene.tokens.forEach(token => { token.initiative = null; });
+    scene.initiative = { active:false, round:1, currentTokenId:"", turnState:null, resources:{} };
+    room.combatRequests = room.combatRequests.filter(request => request.status !== "pending");
+    appendActivity(room,clientId,"Бой завершён",scene.name);
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
   socket.on("combat:end-turn", ({ tokenId } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
@@ -1801,7 +1974,7 @@ io.on("connection", (socket) => {
     const isDm = room.dmId === clientId;
     if (!isDm && current.playerId !== clientId) return reply({ ok:false, error:"Сейчас не твой ход" });
     if (tokenId && cleanText(tokenId,80) !== current.id) return reply({ ok:false, error:"Активный токен изменился" });
-    const next = advanceInitiative(scene);
+    const next = advanceInitiative(room,scene);
     appendActivity(room, clientId, "Ход завершён", `${current.name} → ${next?.name || "—"}`);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, currentTokenId:next?.id || "" });
   });
@@ -1820,7 +1993,8 @@ io.on("connection", (socket) => {
     token.initiative = natural + Number(token.initiativeBonus || 0);
     scene.initiative.active = true;
     const order = initiativeOrder(scene);
-    if (!scene.initiative.currentTokenId || !order.some(entry => entry.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = order[0]?.id || "";
+    if (!scene.initiative.currentTokenId || !order.some(entry => entry.id === scene.initiative.currentTokenId)) beginTurn(room,scene,order[0]);
+    else if (!scene.initiative.turnState || scene.initiative.turnState.tokenId !== scene.initiative.currentTokenId) beginTurn(room,scene,order.find(entry=>entry.id===scene.initiative.currentTokenId));
     setActiveScene(room, scene);
     room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Инициатива · ${token.name}`, formula:`1к20${Number(token.initiativeBonus)>=0?"+":""}${Number(token.initiativeBonus)||0}`, dice, modifier:Number(token.initiativeBonus)||0, total:token.initiative, mode:token.initiativeAdvantage?"advantage":"normal", natural, visibility:"public", privateToDm:Boolean(token.hidden), at:Date.now() });
     room.rollLog = room.rollLog.slice(-100);
@@ -1837,7 +2011,9 @@ io.on("connection", (socket) => {
     token.initiative = value === null || value === "" ? null : Math.max(-100,Math.min(200,Number(value)||0));
     scene.initiative.active = scene.tokens.some(entry => entry.initiative !== null);
     const order = initiativeOrder(scene);
-    if (!order.some(entry => entry.id === scene.initiative.currentTokenId)) scene.initiative.currentTokenId = order[0]?.id || "";
+    if (!order.length) beginTurn(room,scene,null);
+    else if (!order.some(entry => entry.id === scene.initiative.currentTokenId)) beginTurn(room,scene,order[0]);
+    else if (!scene.initiative.turnState || scene.initiative.turnState.tokenId !== scene.initiative.currentTokenId) beginTurn(room,scene,order.find(entry=>entry.id===scene.initiative.currentTokenId));
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
@@ -1848,7 +2024,7 @@ io.on("connection", (socket) => {
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий переключает ход" });
     const scene = activeScene(room), order = initiativeOrder(scene);
     if (!order.length) return reply({ ok:false, error:"Инициатива ещё не брошена" });
-    advanceInitiative(scene);
+    advanceInitiative(room,scene);
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
@@ -1859,7 +2035,7 @@ io.on("connection", (socket) => {
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий очищает инициативу" });
     const scene = activeScene(room);
     scene.tokens.forEach(token => { token.initiative = null; });
-    scene.initiative = { active:false, round:1, currentTokenId:"" };
+    scene.initiative = { active:false, round:1, currentTokenId:"", turnState:null, resources:{} };
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });

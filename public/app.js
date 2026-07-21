@@ -2829,7 +2829,8 @@ function buildVttCombatModel() {
     bonus:signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + activeAmmoMagicBonus(sheet,attack)),
     damage:friendlyFormula(attack,"damage",sheet) || String(attack.damage || "—").replace(/d/gi,"к"),
     damageType:attack.damageType || "",
-    actionCost:actionCostLabel(attack.actionCost)
+    actionCost:actionCostLabel(attack.actionCost),
+    actionCostKey:["action","bonus","reaction","free"].includes(attack.actionCost) ? attack.actionCost : "action"
   }));
   const quickSlots = (set.quickSlots || []).map((itemId,index) => {
     const item = combatItem(sheet,itemId);
@@ -2839,6 +2840,37 @@ function buildVttCombatModel() {
   const abilityChecks = Object.entries(abilities).map(([key,name]) => ({ key, name, short:key.toUpperCase(), bonus:modifier(sheet.stats[key]) }));
   const saves = Object.entries(abilities).map(([key,name]) => ({ key, name, short:key.toUpperCase(), bonus:modifier(sheet.stats[key]) + ((sheet.saveProficiencies || []).includes(key) ? effectiveProficiency(sheet) : 0), proficient:(sheet.saveProficiencies || []).includes(key) }));
   const skillChecks = skills.map(([key,name,ability]) => ({ key, name, ability, short:ability.toUpperCase(), bonus:getSkillBonus(sheet,key), proficient:(sheet.skillProficiencies || []).includes(key), expertise:(sheet.expertise || []).includes(key) }));
+  const fighterLevel = classLevel(sheet,"fighter");
+  const rogueLevel = classLevel(sheet,"rogue");
+  const monkLevel = classLevel(sheet,"monk");
+  const barbarianLevel = classLevel(sheet,"barbarian");
+  const bardLevel = classLevel(sheet,"bard");
+  const clericLevel = classLevel(sheet,"cleric");
+  const druidLevel = classLevel(sheet,"druid");
+  const paladinLevel = classLevel(sheet,"paladin");
+  const sorcererLevel = classLevel(sheet,"sorcerer");
+  const classSummary = classEntries(sheet).map(entry => `${entry.name || rules.classes[entry.key]?.name || entry.key} ${Number(entry.level || 1)}`).join(" / ");
+  const classActionOptions = [
+    ...(druidLevel >= 2 ? [{ key:"wild-shape",name:"Дикий облик",detail:"классовое действие" }] : []),
+    ...(clericLevel >= 2 ? [{ key:"channel-divinity",name:"Божественный канал",detail:"классовое действие" }] : []),
+    ...(paladinLevel >= 1 ? [{ key:"lay-on-hands",name:"Наложение рук",detail:"классовое действие" }] : []),
+    ...(paladinLevel >= 3 ? [{ key:"paladin-channel-divinity",name:"Божественный канал",detail:"классовое действие" }] : [])
+  ];
+  const bonusOptions = [
+    ...(rogueLevel >= 2 ? [{ key:"cunning-dash",name:"Рывок",detail:"Хитрое действие" },{ key:"cunning-disengage",name:"Отход",detail:"Хитрое действие" },{ key:"cunning-hide",name:"Скрыться",detail:"Хитрое действие" }] : []),
+    ...(monkLevel >= 1 ? [{ key:"martial-arts",name:"Боевые искусства",detail:"один безоружный удар" }] : []),
+    ...(monkLevel >= 2 ? [{ key:"patient-defense",name:"Терпеливая оборона",detail:"тратит Ци" },{ key:"step-of-wind",name:"Шаг ветра",detail:"тратит Ци" },{ key:"flurry",name:"Шквал ударов",detail:"тратит Ци" }] : []),
+    ...(barbarianLevel >= 1 ? [{ key:"rage",name:"Ярость",detail:"бонусное действие" }] : []),
+    ...(fighterLevel >= 1 ? [{ key:"second-wind",name:"Второе дыхание",detail:"бонусное действие" }] : []),
+    ...(bardLevel >= 1 ? [{ key:"bardic-inspiration",name:"Бардовское вдохновение",detail:"бонусное действие" }] : []),
+    ...(sorcererLevel >= 2 ? [{ key:"font-of-magic",name:"Источник магии",detail:"обмен ячеек и очков" }] : [])
+  ];
+  const reactionOptions = [
+    { key:"opportunity",name:"Провоцированная атака",detail:"реакция" },
+    { key:"ready-reaction",name:"Подготовленное действие",detail:"реакция" },
+    ...(rogueLevel >= 5 ? [{ key:"uncanny-dodge",name:"Невероятное уклонение",detail:"вдвое уменьшить урон" }] : []),
+    ...(monkLevel >= 3 ? [{ key:"deflect-missiles",name:"Отражение снарядов",detail:"реакция" }] : [])
+  ];
   return {
     playerId:state.clientId,
     name:sheet.characterName || player.name,
@@ -2856,7 +2888,23 @@ function buildVttCombatModel() {
     equipment,
     abilityChecks,
     saves,
-    skills:skillChecks
+    skills:skillChecks,
+    classSummary,
+    attacksPerAction:attacksPerAction(sheet),
+    actionSurgeMax:fighterLevel >= 17 ? 2 : fighterLevel >= 2 ? 1 : 0,
+    actionOptions:[
+      { key:"dash",name:"Рывок",detail:"удвоить перемещение" },
+      { key:"disengage",name:"Отход",detail:"не провоцировать атаки" },
+      { key:"dodge",name:"Уклонение",detail:"помеха атакам по вам" },
+      { key:"help",name:"Помощь",detail:"дать преимущество союзнику" },
+      { key:"hide",name:"Скрыться",detail:"проверка Скрытности" },
+      { key:"ready",name:"Подготовить",detail:"действие по условию" },
+      { key:"search",name:"Поиск",detail:"проверка Внимательности" },
+      { key:"use-object",name:"Использовать предмет",detail:"обычное действие" },
+      ...classActionOptions
+    ],
+    bonusOptions,
+    reactionOptions
   };
 }
 
@@ -2873,11 +2921,14 @@ function vttAttack(attackId, visibility = "public", targetId = "", mode = "") {
   const attack = currentSheet().attacksList.find(item => item.id === attackId);
   if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
   const target = vttTokenState(targetId);
-  return performAttackRoll(attack, { visibility, ...(mode ? { mode } : {}), target }).then(response => {
-    if (!response?.ok) return response;
-    const hit = target ? response.natural === 20 || response.natural !== 1 && Number(response.total) >= Number(target.ac) : null;
-    if (target) toast(`${hit ? "Попадание" : "Промах"}: ${target.name} · ${response.total} против КД ${target.ac}`);
-    return { ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:target?.token?.id || "", targetName:target?.name || "", targetAc:target?.ac || 0, hit, critical:response.natural === 20, fumble:response.natural === 1 };
+  const publicTarget = target ? { name:target.name, token:target.token } : null;
+  return performAttackRoll(attack, { visibility, ...(mode ? { mode } : {}), target:publicTarget }).then(response => {
+    if (!response?.ok || !target) return { ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:"", targetName:"", hit:null, critical:response?.natural === 20, fumble:response?.natural === 1 };
+    return new Promise(resolve => socket.emit("combat:resolve-hit", { targetId:target.token.id, total:response.total, natural:response.natural }, verdict => {
+      if (!verdict?.ok) { toast(verdict?.error || "Не удалось определить попадание"); return resolve({ ...response, ok:false, error:verdict?.error }); }
+      toast(verdict.hit ? (verdict.critical ? "Критическое попадание!" : "Попадание") : verdict.fumble ? "Автоматический промах" : "Промах");
+      resolve({ ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:target.token.id, targetName:target.name, targetAc:verdict.targetAc || 0, hit:Boolean(verdict.hit), critical:Boolean(verdict.critical), fumble:Boolean(verdict.fumble) });
+    }));
   });
 }
 function vttApplyCombat(tokenId, kind, amount, label = "Бой", visibility = "public") {
@@ -2919,6 +2970,9 @@ function vttToggleCondition(tokenId, condition, active) { socket.emit("combat:co
 function vttSetConcentration(tokenId, name) { socket.emit("combat:concentration", { tokenId, name }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию"); }); }
 function vttDeathSave(tokenId, visibility = "public") { socket.emit("combat:death-save", { tokenId, visibility }, response => { if (!response?.ok) toast(response?.error || "Не удалось бросить спасбросок"); else showRollPeek("Спасбросок от смерти", { ...response, total:response.natural, dice:[response.natural], detail:[{ count:1,sides:20,sign:1,rolls:[response.natural],subtotal:response.natural }], modifier:0, mode:"normal" }); }); }
 function vttEndTurn(tokenId) { socket.emit("combat:end-turn", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить ход"); }); }
+function vttSpendAction(tokenId, cost, label) { return new Promise(resolve => socket.emit("combat:spend-action", { tokenId, cost, label }, response => { if (!response?.ok) toast(response?.error || "Действие недоступно"); resolve(response || { ok:false }); })); }
+function vttActionSurge(tokenId) { return new Promise(resolve => socket.emit("combat:action-surge", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Всплеск действий недоступен"); resolve(response || { ok:false }); })); }
+function vttEndBattle() { return new Promise(resolve => socket.emit("combat:end-battle", {}, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить бой"); else toast("Бой завершён"); resolve(response || { ok:false }); })); }
 function vttResolveCombatRequest(requestId, accept) { socket.emit("combat:request-resolve", { requestId, accept }, response => { if (!response?.ok) toast(response?.error || "Не удалось обработать запрос"); }); }
 
 function renderMap() {
@@ -2938,7 +2992,7 @@ function renderMap() {
       switchView,
       combat:buildVttCombatModel(),
       characters:buildVttCharacterModels(),
-      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick, rollCheck:vttRollCheck, applyCombat:vttApplyCombat, toggleCondition:vttToggleCondition, setConcentration:vttSetConcentration, deathSave:vttDeathSave, endTurn:vttEndTurn, resolveRequest:vttResolveCombatRequest }
+      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick, rollCheck:vttRollCheck, applyCombat:vttApplyCombat, toggleCondition:vttToggleCondition, setConcentration:vttSetConcentration, deathSave:vttDeathSave, endTurn:vttEndTurn, spendAction:vttSpendAction, actionSurge:vttActionSurge, endBattle:vttEndBattle, resolveRequest:vttResolveCombatRequest }
     });
     return;
   }
