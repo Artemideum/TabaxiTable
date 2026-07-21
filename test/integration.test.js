@@ -88,6 +88,10 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /scene:dice-roll/);
     assert.match(vttScript, /scene:tokens-batch-update/);
     assert.match(vttScript, /data-vtt-character-formula/);
+    assert.match(vttScript, /data-vtt-character-page/);
+    assert.match(vttScript, /measurementFeet/);
+    assert.match(vttScript, /KeyP:"ping"/);
+    assert.match(vttScript, /data-vtt-view="sheet"/);
     assert.match(vttScript, /vtt-dice-formula-form/);
     assert.match(vttScript, /data-vtt-die-add/);
     assert.match(vttScript, /scene:token-hp/);
@@ -113,6 +117,8 @@ test("комната, лист, броски, история и резервна
     assert.match(dicePhysics, /dice-box-threejs\.es\.js/);
     assert.match(dicePhysics, /terms\.push\("1d100","1d10"\)/);
     assert.match(dicePhysics, /WebGLRenderingContext/);
+    assert.ok(dicePhysics.includes('return `${terms.join("+")}@${forced.join(",")}`;'));
+    assert.match(dicePhysics, /playOne\(roll, attempt = 0\)/);
     const diceVendor = await fetch(`http://127.0.0.1:${PORT}/vendor/dice-box-threejs.es.js`).then(response => response.text());
     assert.ok(diceVendor.length > 500000);
 
@@ -452,6 +458,8 @@ test("комната, лист, броски, история и резервна
     assert.equal(formulaRoll.sets[0].values.length, 3);
     assert.equal(formulaRoll.modifier, 1);
     assert.equal(formulaRoll.total, formulaRoll.sets[0].values.reduce((sum,value)=>sum+value,1));
+    assert.equal(formulaRoll.roll.id, formulaRoll.rollId);
+    assert.equal(formulaRoll.roll.formula, "3к6 +1");
     await formulaRollState;
     const unsupportedPhysical = await emit(player, "scene:dice-roll", { formula:"2d137+1" });
     assert.equal(unsupportedPhysical.ok, false);

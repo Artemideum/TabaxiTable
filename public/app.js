@@ -1375,6 +1375,7 @@ function openCharacterBuilderV2(quickStart = false) {
   const guessedBackground = s.backgroundKey || Object.entries(rules.backgrounds).find(([,value]) => value.name.toLowerCase() === String(s.background).toLowerCase())?.[0] || "criminal";
   let currentStep = "identity";
   let autoStats = quickStart || !s.classKey;
+  let rolled3d6 = null;
 
   $("#game-modal").classList.add("library-open", "builder-modal");
   openModal(quickStart ? "Быстрое создание" : "Настройка персонажа", `
@@ -1397,8 +1398,9 @@ function openCharacterBuilderV2(quickStart = false) {
         <div id="builder-concept" class="builder-concept"></div>
       </section>
       <section class="builder-page hidden" data-builder-page="abilities">
-        <div class="builder-section-head"><div><span class="eyebrow">Автоматический расчёт</span><h3>Характеристики без бухгалтерии</h3></div><button id="builder-recommended" class="secondary" type="button">Распределить под класс</button></div>
-        <p class="builder-help">Используется стандартный массив 15, 14, 13, 12, 10, 8, а затем применяются бонусы выбранной расы. При желании любое число можно изменить.</p>
+        <div class="builder-section-head"><div><span class="eyebrow">Автоматический расчёт</span><h3>Характеристики без бухгалтерии</h3></div><div class="builder-ability-actions"><button id="builder-roll-3d6-v2" class="secondary" type="button">🎲 3d6 × 6</button><button id="builder-recommended" class="secondary" type="button">Стандартный массив под класс</button></div></div>
+        <p class="builder-help">Используй стандартный массив либо брось шесть наборов по 3d6. Расовые и уровневые бонусы применятся поверх базовых значений.</p>
+        <div id="builder-3d6-results" class="builder-3d6-results hidden"></div>
         <div class="ability-builder ability-builder-v2">${Object.entries(abilities).map(([key,name]) => `<label><span>${name}</span><input data-builder-stat="${key}" type="number" min="1" max="30" value="${Number(s.stats[key] || 10)}"><small data-builder-stat-note="${key}">—</small></label>`).join("")}</div>
         <div id="builder-stat-summary" class="builder-stat-summary"></div>
       </section>
@@ -1433,6 +1435,52 @@ function openCharacterBuilderV2(quickStart = false) {
     });
     autoStats = true;
     refreshStatsSummary();
+  };
+
+
+  const roll3d6Set = () => new Promise(resolve => {
+    socket.emit("dice:roll", { formula:"3к6", label:"Характеристика 3d6", mode:"normal", visibility:"private", silent:true }, response => {
+      if (!response?.ok) return resolve(null);
+      const dice = Array.isArray(response.dice) ? response.dice.map(Number) : [];
+      resolve({ total:Number(response.total) || dice.reduce((sum,value) => sum + value,0), dice });
+    });
+  });
+
+  const applyRolledStats = (distributeByClass = false) => {
+    if (!Array.isArray(rolled3d6) || rolled3d6.length !== 6) return;
+    const { classKey, raceKey, level } = currentKeys();
+    const build = rules.abilityBuild(classKey, raceKey, level);
+    const abilityKeys = Object.keys(abilities);
+    const orderedRolls = distributeByClass
+      ? [...rolled3d6].sort((a,b) => b.total - a.total)
+      : [...rolled3d6];
+    const assignments = {};
+    if (distributeByClass) {
+      const priority = rules.statPriorities[classKey] || abilityKeys;
+      priority.forEach((key,index) => { assignments[key] = orderedRolls[index]; });
+    } else abilityKeys.forEach((key,index) => { assignments[key] = orderedRolls[index]; });
+    statInputs().forEach(input => {
+      const key = input.dataset.builderStat;
+      const roll = assignments[key] || { total:10, dice:[] };
+      const raceBonus = Number(build.bonuses[key] || 0);
+      const levelBonus = Number(build.levelBonuses[key] || 0);
+      const bonus = raceBonus + levelBonus;
+      input.value = Math.max(1,Math.min(30,roll.total + bonus));
+      input.dataset.base = roll.total;
+      input.dataset.bonus = bonus;
+      const additions = [raceBonus ? `+${raceBonus} раса` : "", levelBonus ? `+${levelBonus} уровни` : ""].filter(Boolean).join(" · ");
+      $(`[data-builder-stat-note="${key}"]`).textContent = `${roll.total} [${roll.dice.join(", ")}]${additions ? ` · ${additions}` : ""}`;
+    });
+    autoStats = false;
+    refreshStatsSummary();
+  };
+
+  const render3d6Results = () => {
+    const root = $("#builder-3d6-results");
+    if (!root || !Array.isArray(rolled3d6)) return;
+    root.classList.remove("hidden");
+    root.innerHTML = `<div><span class="eyebrow">Результаты 3d6</span><strong>${rolled3d6.map(entry => entry.total).join(" · ")}</strong><small>${rolled3d6.map(entry => `[${entry.dice.join("+")}]`).join("  ")}</small></div><button id="builder-distribute-3d6" class="secondary" type="button">Распределить броски под класс</button>`;
+    $("#builder-distribute-3d6").addEventListener("click", () => applyRolledStats(true));
   };
 
   const refreshSubclasses = () => {
@@ -1573,6 +1621,20 @@ function openCharacterBuilderV2(quickStart = false) {
   $("#builder-name").addEventListener("input", refreshReview);
   statInputs().forEach(input => input.addEventListener("input", () => { autoStats = false; input.dataset.base = Number(input.value || 10) - Number(input.dataset.bonus || 0); refreshStatsSummary(); }));
   $("#builder-recommended").addEventListener("click", applyRecommendedStats);
+  $("#builder-roll-3d6-v2").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    const oldText = button.textContent;
+    button.textContent = "Бросаю…";
+    const results = await Promise.all(Array.from({ length:6 }, () => roll3d6Set()));
+    button.disabled = false;
+    button.textContent = oldText;
+    if (results.some(result => !result)) return toast("Не удалось бросить 3d6. Проверь соединение и попробуй ещё раз");
+    rolled3d6 = results;
+    applyRolledStats(false);
+    render3d6Results();
+    toast(`3d6 × 6 → ${rolled3d6.map(entry => entry.total).join(", ")}`);
+  });
   $("#builder-instant").addEventListener("click", () => finish(true));
   $("#builder-next").addEventListener("click", () => showStep(currentStep === "identity" ? "abilities" : "details"));
   $("#builder-back").addEventListener("click", () => showStep(currentStep === "details" ? "abilities" : "identity"));
@@ -2883,6 +2945,7 @@ function rollPhysicalDice(selection = window.TT_DICE_TRAY?.selection?.(), modifi
   const visibility = window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public";
   socket.emit("scene:dice-roll", { x:0, y:0, dice, modifier:Number(modifier) || 0, visibility }, response => {
     if (!response?.ok) return toast(response?.error || "Не удалось бросить кубики");
+    if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
     showRollPeek(`${visibility === "private" ? "🔒 " : ""}${response.formula || "Бросок на столе"}`, response);
   });
 }
@@ -2892,6 +2955,7 @@ function rollPhysicalFormula(formula) {
   const visibility = window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public";
   socket.emit("scene:dice-roll", { x:0, y:0, formula:value, visibility }, response => {
     if (!response?.ok) return toast(response?.error || "Не удалось бросить формулу");
+    if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
     showRollPeek(`${visibility === "private" ? "🔒 " : ""}${response.formula || value}`, response);
   });
 }
@@ -2991,7 +3055,10 @@ function buildVttCharacterModels() {
 function vttRollFormula(formula, label = formula, visibility = "public") {
   return new Promise(resolve => socket.emit("scene:dice-roll", { x:0, y:0, formula, visibility }, response => {
     if (!response?.ok) toast(response?.error || "Не удалось бросить кубики");
-    else showRollPeek(`${visibility === "private" ? "🔒 " : ""}${label}`,response);
+    else {
+      if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
+      showRollPeek(`${visibility === "private" ? "🔒 " : ""}${label}`,response);
+    }
     resolve(response || { ok:false });
   }));
 }

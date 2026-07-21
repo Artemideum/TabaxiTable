@@ -1817,7 +1817,7 @@ io.on("connection", (socket) => {
     room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:`${safeVisibility === "private" ? "Закрытый" : "Бросок"} на столе · ${formula}`, formula, dice:allValues, detail, modifier:flat, total, natural, mode:"normal", visibility:safeVisibility, at:Date.now() });
     room.rollLog = room.rollLog.slice(-100);
     setActiveScene(room, scene); saveRooms(); emitRoom(code);
-    reply({ ok:true, sets, modifier:flat, total, formula, detail, rollId:physicalRoll.id, visibility:safeVisibility, by:player.name, natural });
+    reply({ ok:true, sets, modifier:flat, total, formula, detail, rollId:physicalRoll.id, visibility:safeVisibility, by:player.name, natural, roll:physicalRoll });
   });
 
   socket.on("scene:token-remove", ({ tokenId } = {}, reply = () => {}) => {

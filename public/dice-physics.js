@@ -91,9 +91,7 @@
       forced.push(...values);
     });
     if (!terms.length) return "1d20@1";
-    const modifier = Number(roll?.modifier) || 0;
-    const flat = modifier ? `${modifier > 0 ? "+" : ""}${modifier}` : "";
-    return `${terms.join("+")}${flat}@${forced.join(",")}`;
+    return `${terms.join("+")}@${forced.join(",")}`;
   }
 
   function colorsetFor(color) {
@@ -113,7 +111,7 @@
     if (unavailable) return Promise.reject(new Error("3D-кубики недоступны"));
     if (!modulePromise) {
       modulePromise = import("/vendor/dice-box-threejs.es.js").catch(error => {
-        unavailable = true;
+        modulePromise = null;
         console.error("Не удалось загрузить физические кубики", error);
         throw error;
       });
@@ -152,7 +150,7 @@
     if (slot.initPromise) return slot.initPromise;
     const color = safeColor(initialColor);
     slot.initPromise = (async () => {
-      if (!window.WebGLRenderingContext) throw new Error("WebGL не поддерживается");
+      if (!window.WebGLRenderingContext) { unavailable = true; throw new Error("WebGL не поддерживается"); }
       slot.host.innerHTML = "";
       const module = await loadModule();
       const DiceBox = module.default;
@@ -291,9 +289,9 @@
     for (const [rollId,at] of playedRolls) if (now-at > PLAYED_MEMORY_MS) playedRolls.delete(rollId);
   }
 
-  async function playOne(roll) {
-    if (!roll?.id || playedRolls.has(roll.id)) return;
-    rememberPlayed(roll.id);
+  async function playOne(roll, attempt = 0) {
+    if (!roll?.id || attempt === 0 && playedRolls.has(roll.id)) return;
+    if (attempt === 0) rememberPlayed(roll.id);
     const root = ensureLayer();
     root.hidden = false;
     root.classList.add("is-active");
@@ -320,6 +318,11 @@
       slot.configuredColor = null;
       if (slot.rollId !== roll.id) return;
       slot.rolling = false;
+      if (attempt < 1 && !unavailable) {
+        releaseSlot(slot);
+        setTimeout(() => { void playOne(roll,attempt + 1); }, 320);
+        return;
+      }
       showResult(slot,roll,true);
       scheduleRelease(slot,FALLBACK_MS);
       setTimeout(() => { void prewarm([roll.color]); }, 250);
