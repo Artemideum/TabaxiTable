@@ -356,6 +356,11 @@ $("#join-form").addEventListener("submit", event => {
   const data = Object.fromEntries(new FormData(event.currentTarget));
   socket.emit("room:join", { ...data, clientId: state.clientId }, enterResponse);
 });
+function openQuickGuide(firstVisit = false) {
+  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.0" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группу рамкой и менять её параметры одним действием.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
+  $("#quick-guide-close")?.addEventListener("click", () => { localStorage.setItem("tt-2-tour","1"); closeModal(); });
+}
+
 function enterResponse(response) {
   state.resuming = false;
   if (!response.ok) {
@@ -373,6 +378,7 @@ function enterResponse(response) {
   $("#room").classList.remove("hidden");
   restorePendingDraft(response.code, response.clientId);
   renderAll();
+  if (!localStorage.getItem("tt-2-tour")) setTimeout(() => openQuickGuide(true), 250);
 }
 
 function draftKey(code = state.room?.code, clientId = state.clientId) { return `tabaxi-draft:${code}:${clientId}`; }
@@ -418,12 +424,20 @@ socket.on("connect", () => {
 });
 socket.on("disconnect", () => { if (state.room) $("#save-state").textContent = "Нет связи · черновик сохранён"; });
 
+function roomDiceColors(room = state.room) {
+  const own = room?.players?.[state.clientId]?.sheet?.diceColor || "#d3ad6e";
+  return [own, ...Object.values(room?.players || {}).map(player => player?.sheet?.diceColor).filter(Boolean), own];
+}
+
 socket.on("room:state", room => {
   if (!state.room || room.code !== state.room.code) return;
   state.room = room;
   if (!room.players[state.selectedId]) state.selectedId = state.clientId;
+  window.TT_DICE_PHYSICS?.prewarm?.(roomDiceColors(room));
+  window.TT_DICE_PHYSICS?.play(room.scene?.diceRolls?.length ? room.scene.diceRolls : room.scene?.diceRoll);
   renderChrome();
   renderRolls();
+  renderDiceTray();
   if (state.currentView === "map") renderMap();
   const editing = $("#sheet-view").contains(document.activeElement);
   if (!editing) renderSheet();
@@ -433,8 +447,12 @@ function renderAll() {
   renderChrome();
   renderSheet();
   renderRolls();
+  renderDiceTray();
   if (state.currentView === "map") renderMap();
-  else window.TT_VTT?.deactivate?.();
+  else {
+    window.TT_VTT?.deactivate?.();
+    if (state.currentView === "dice") window.TT_DICE_PHYSICS?.activate?.(roomDiceColors());
+  }
 }
 function renderChrome() {
   const room = state.room;
@@ -1795,7 +1813,7 @@ function openCharacterBuilder() {
       <label>Имя расы вручную<input id="builder-custom-race" value="${esc(s.race || rules.races[guessedRace]?.name || "")}"></label>
       <label>Бонус инициативы<input id="builder-initiative" type="number" value="${Number(s.initiativeBonus || 0)}"></label>
     </div>
-    <div class="section-actions builder-stat-actions"><h3 class="panel-title">Характеристики</h3><button id="builder-standard" class="secondary" type="button">Стандартный массив</button><button id="builder-tens" class="secondary" type="button">Все по 10</button></div>
+    <div class="section-actions builder-stat-actions"><h3 class="panel-title">Характеристики</h3><button id="builder-standard" class="secondary" type="button">Стандартный массив</button><button id="builder-roll-3d6" class="secondary" type="button">3d6 × 6</button><button id="builder-tens" class="secondary" type="button">Все по 10</button></div>
     <div class="ability-builder">${Object.entries(abilities).map(([key,name]) => `<label>${name}<input data-builder-stat="${key}" type="number" min="1" max="30" value="${Number(s.stats[key] || 10)}"><small>${signed(modifier(s.stats[key]))}</small></label>`).join("")}</div>
     <h3 class="panel-title">Автоматизация</h3>
     <div class="automation-options">
@@ -1841,6 +1859,18 @@ function openCharacterBuilder() {
     refreshPreview();
   });
   $("#builder-tens").addEventListener("click", () => { $$('[data-builder-stat]').forEach(input => { input.value = 10; input.nextElementSibling.textContent = "+0"; }); refreshPreview(); });
+  $("#builder-roll-3d6").addEventListener("click", () => {
+    const values = $$('[data-builder-stat]').map(() => {
+      const dice = Array.from({ length:3 }, () => Math.floor(Math.random() * 6) + 1);
+      return { total:dice.reduce((sum,value) => sum + value,0), dice };
+    });
+    $$('[data-builder-stat]').forEach((input,index) => {
+      input.value = values[index].total;
+      input.nextElementSibling.textContent = signed(modifier(values[index].total));
+    });
+    refreshPreview();
+    toast(`3d6 → ${values.map(entry => `${entry.total} [${entry.dice.join(",")}]`).join(" · ")}`);
+  });
   $("#builder-cancel").addEventListener("click", closeModal);
   $("#builder-apply").addEventListener("click", () => {
     const next = structuredClone(currentSheet());
@@ -2790,7 +2820,8 @@ function showRollPeek(label, response) {
   const diceDetails = (response.detail || []).map(entry => {
     const sign = Number(entry.sign) < 0 ? "−" : "";
     const rolls = (entry.rolls || []).join(", ");
-    return `${sign}${Number(entry.count)}к${Number(entry.sides)}: [${rolls}]${entry.kept !== undefined ? ` → оставлен ${entry.kept}` : ""}`;
+    const prefix = Number(entry.count) > 1 ? `${Number(entry.count)}к${Number(entry.sides)}` : `к${Number(entry.sides)}`;
+    return `${sign}${prefix}: [${rolls}]${entry.kept !== undefined ? ` → оставлен ${entry.kept}` : ""}`;
   });
   if (Number(response.modifier)) diceDetails.push(`модификатор ${signed(response.modifier)}`);
   $("small", peek).textContent = diceDetails.join(" · ") || "без кубиков";
@@ -2814,34 +2845,140 @@ $$('[data-dice-roll-mode]').forEach(button => button.addEventListener("click", (
   });
 }));
 $("#custom-roll").addEventListener("submit", event => { event.preventDefault(); const formula = new FormData(event.currentTarget).get("formula"); roll(formula); });
-function mapScene() {
-  return state.room?.scene || { name:"Главная сцена", backgroundUrl:"", backgroundColor:"#17120e", grid:{columns:24,rows:16,cellSize:52,visible:true,snap:true}, tokens:[], initiative:{active:false,round:1,currentTokenId:""} };
+
+function diceTraySelectionFromRoll(item) {
+  const detail = Array.isArray(item?.detail) ? item.detail : [];
+  return detail.filter(entry => Number(entry?.count) > 0 && window.TT_DICE_TRAY?.SIDES?.includes(Number(entry?.sides))).map(entry => ({ sides:Number(entry.sides), count:Number(entry.count) }));
 }
-function mapInitiativeOrder(scene = mapScene()) {
-  return (scene.tokens || []).filter(token => token.initiative !== null && token.initiative !== undefined).sort((a,b)=>Number(b.initiative)-Number(a.initiative) || String(a.name).localeCompare(String(b.name),"ru"));
+
+function renderDiceTray() {
+  const tray = window.TT_DICE_TRAY;
+  const root = $("#dice-view");
+  if (!tray || !root) return;
+  const build = $("#dice-tray-build",root);
+  if (build) build.innerHTML = tray.SIDES.map(sides => {
+    const count = Number(tray.state.counts[sides] || 0);
+    return `<article class="dice-tray-die ${count ? "active" : ""}"><span>к${sides}</span><div><button type="button" data-dice-tray-sub="${sides}" ${count ? "" : "disabled"}>−</button><b>${count}</b><button type="button" data-dice-tray-add="${sides}" ${tray.totalCount() >= tray.MAX_DICE ? "disabled" : ""}>＋</button></div></article>`;
+  }).join("");
+  const formula = $("#dice-tray-formula",root);
+  if (formula) formula.textContent = tray.formula();
+  const visibility = $("#dice-tray-visibility",root);
+  if (visibility) {
+    visibility.textContent = tray.state.visibility === "private" ? "🔒 В закрытую" : "🌐 Всем";
+    visibility.classList.toggle("active", tray.state.visibility === "private");
+    visibility.setAttribute("aria-pressed", String(tray.state.visibility === "private"));
+  }
+  const modifier = $("#dice-tray-modifier",root);
+  if (modifier && document.activeElement !== modifier) modifier.value = tray.state.modifier;
+  const color = $("#dice-player-color",root);
+  const ownColor = state.room?.players?.[state.clientId]?.sheet?.diceColor || "#d3ad6e";
+  if (color && document.activeElement !== color) color.value = ownColor;
+  root.querySelectorAll("[data-dice-tray-add]").forEach(button => button.addEventListener("click",()=>{ tray.add(button.dataset.diceTrayAdd,1); renderDiceTray(); }));
+  root.querySelectorAll("[data-dice-tray-sub]").forEach(button => button.addEventListener("click",()=>{ tray.add(button.dataset.diceTraySub,-1); renderDiceTray(); }));
 }
-function mapTokenCanMove(token) {
-  return state.room?.dmId === state.clientId || token?.playerId === state.clientId;
-}
-function sceneAction(event,payload = {}, successMessage = "") {
-  socket.emit(event,payload,response=>{
-    if (!response?.ok) return toast(response?.error || "Не удалось изменить карту");
-    if (successMessage) toast(successMessage);
+
+function rollPhysicalDice(selection = window.TT_DICE_TRAY?.selection?.(), modifier = window.TT_DICE_TRAY?.state?.modifier || 0) {
+  const dice = Array.isArray(selection) ? selection.filter(entry => Number(entry.count) > 0) : [];
+  if (!dice.length) return toast("Добавь хотя бы один кубик");
+  const visibility = window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public";
+  socket.emit("scene:dice-roll", { x:0, y:0, dice, modifier:Number(modifier) || 0, visibility }, response => {
+    if (!response?.ok) return toast(response?.error || "Не удалось бросить кубики");
+    showRollPeek(`${visibility === "private" ? "🔒 " : ""}${response.formula || "Бросок на столе"}`, response);
   });
 }
+function rollPhysicalFormula(formula) {
+  const value = String(formula || "").trim();
+  if (!value) return toast("Введи формулу, например 3d6+1");
+  const visibility = window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public";
+  socket.emit("scene:dice-roll", { x:0, y:0, formula:value, visibility }, response => {
+    if (!response?.ok) return toast(response?.error || "Не удалось бросить формулу");
+    showRollPeek(`${visibility === "private" ? "🔒 " : ""}${response.formula || value}`, response);
+  });
+}
+
+$("#dice-tray-modifier")?.addEventListener("input",event=>{ window.TT_DICE_TRAY?.setModifier(event.currentTarget.value); renderDiceTray(); });
+$("#dice-tray-visibility")?.addEventListener("click",()=>{ window.TT_DICE_TRAY?.setVisibility(window.TT_DICE_TRAY?.state?.visibility === "private" ? "public" : "private"); renderDiceTray(); });
+$("#dice-tray-roll")?.addEventListener("click",()=>rollPhysicalDice());
+$("#dice-physical-formula")?.addEventListener("submit", event => { event.preventDefault(); rollPhysicalFormula(new FormData(event.currentTarget).get("formula")); });
+$("#dice-tray-reset")?.addEventListener("click",()=>{ window.TT_DICE_TRAY?.reset(); renderDiceTray(); });
+$("#dice-tray-clear")?.addEventListener("click",()=>{ window.TT_DICE_TRAY?.clear(); renderDiceTray(); });
+$("#dice-player-color")?.addEventListener("change",async event=>{ await vttSavePreferences({ diceColor:event.currentTarget.value }); renderDiceTray(); });
+
 function buildVttCharacterModels() {
   return Object.fromEntries(Object.entries(state.room?.players || {}).map(([playerId, player]) => {
     const sheet = player?.sheet;
     if (!sheet) return [playerId, null];
+    const proficiency = effectiveProficiency(sheet);
+    const classes = classEntries(sheet);
+    const set = activeCombatSet(sheet);
+    const equippedIds = new Set([...Object.values(set.slots || {}), ...(set.quickSlots || [])].filter(Boolean));
+    const attackList = [
+      ...(sheet.attacksList || []).filter(attack => attack.sourceItemId && equippedIds.has(attack.sourceItemId)),
+      ...(sheet.attacksList || []).filter(attack => !attack.sourceItemId)
+    ].slice(0,8).map(attack => {
+      const bonus = resolveBonus(attackBonusFormula(attack,sheet),sheet) + activeAmmoMagicBonus(sheet,attack);
+      const safeDamageParts = Array.isArray(attack.damageParts) ? attack.damageParts.filter(part => part.type !== "smite") : [];
+      const rawDamage = safeDamageParts.length ? formulaFromParts(safeDamageParts,sheet) : attackDamageFormula(attack,sheet);
+      let damageFormula = rawDamage ? resolveDiceFormula(rawDamage,sheet) : "";
+      const ammoBonus = activeAmmoMagicBonus(sheet,attack);
+      if (damageFormula && ammoBonus) damageFormula += `${ammoBonus > 0 ? "+" : ""}${ammoBonus}`;
+      return {
+        id:attack.id,
+        name:attack.name || "Атака",
+        attackFormula:`1к20${bonus ? signed(bonus) : ""}`,
+        damageFormula:String(damageFormula || "").replace(/d/gi,"к"),
+        damageType:attack.damageType || ""
+      };
+    });
+    const equipment = Object.entries(set.slots || {}).map(([slot,itemId]) => {
+      const item = combatItem(sheet,itemId);
+      if (!item) return null;
+      return { slot, slotLabel:combatSlotMeta[slot]?.label || slot, name:item.name || "Предмет", icon:itemCombatIcon(item), quantity:Number(item.quantity || 0) };
+    }).filter(Boolean);
+    const quickItems = (set.quickSlots || []).map((itemId,index) => {
+      const item = combatItem(sheet,itemId);
+      return item ? { index, name:item.name || `Слот ${index+1}`, icon:itemCombatIcon(item), quantity:Number(item.quantity || 0) } : null;
+    }).filter(Boolean);
+    const abilityModels = Object.entries(abilities).map(([key,name]) => {
+      const bonus = modifier(sheet.stats?.[key]);
+      return { key, name, value:Number(sheet.stats?.[key] || 0), modifier:bonus, formula:`1к20${bonus ? signed(bonus) : ""}` };
+    });
+    const saveModels = Object.entries(abilities).map(([key,name]) => {
+      const proficient = (sheet.saveProficiencies || []).includes(key);
+      const bonus = modifier(sheet.stats?.[key]) + (proficient ? proficiency : 0);
+      return { key, name, bonus, proficient, formula:`1к20${bonus ? signed(bonus) : ""}` };
+    });
+    const skillModels = skills.map(([key,name,ability]) => {
+      const bonus = getSkillBonus(sheet,key);
+      return { key, name, ability, bonus, proficient:(sheet.skillProficiencies || []).includes(key), expertise:(sheet.expertise || []).includes(key), formula:`1к20${bonus ? signed(bonus) : ""}` };
+    });
     return [playerId, {
       playerId,
       name:sheet.characterName || player.name,
+      playerName:player.name,
+      portraitUrl:sheet.portraitUrl || sheet.tokenImageUrl || "",
+      tokenImageUrl:sheet.tokenImageUrl || sheet.portraitUrl || "",
+      classSummary:classes.map(entry => `${entry.name || rules.classes[entry.key]?.name || entry.key} ${Number(entry.level || 1)}`).join(" / "),
+      race:sheet.race || "",
+      background:sheet.background || "",
+      level:totalLevel(sheet),
       hp:Number(sheet.hpCurrent || 0),
       hpMax:Number(sheet.hpMax || 0),
       tempHp:Number(sheet.hpTemp || 0),
       ac:calculateAc(sheet),
+      speed:Number(sheet.speed || 0),
       initiativeBonus:initiativeBonus(sheet),
       initiativeAdvantage:Boolean(sheet.initiativeAdvantage),
+      proficiency,
+      passivePerception:passivePerception(sheet),
+      inspiration:Boolean(sheet.inspiration),
+      abilities:abilityModels,
+      saves:saveModels,
+      skills:skillModels,
+      attacks:attackList,
+      equipment,
+      quickItems,
+      combatSetName:set.name || "Боевой комплект",
       conditions:[...(sheet.conditions || [])],
       concentration:sheet.concentrationSpellName || "",
       deathSuccess:Number(sheet.deathSuccess || 0),
@@ -2851,204 +2988,48 @@ function buildVttCharacterModels() {
   }).filter(([, value]) => value));
 }
 
-function buildVttCombatModel() {
-  const player = state.room?.players?.[state.clientId];
-  const sheet = player?.sheet;
-  if (!sheet) return null;
-  const loadout = ensureCombatLoadout(sheet);
-  const set = activeCombatSet(sheet);
-  const equippedIds = new Set([...Object.values(set.slots || {}), ...(set.quickSlots || [])].filter(Boolean));
-  const linked = (sheet.attacksList || []).filter(attack => attack.sourceItemId && equippedIds.has(attack.sourceItemId));
-  const unlinked = (sheet.attacksList || []).filter(attack => !attack.sourceItemId);
-  const attacks = [...linked, ...unlinked].slice(0, 10).map(attack => ({
-    id:attack.id,
-    name:attack.name || "Атака",
-    bonus:signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + activeAmmoMagicBonus(sheet,attack)),
-    damage:friendlyFormula(attack,"damage",sheet) || String(attack.damage || "—").replace(/d/gi,"к"),
-    damageType:attack.damageType || "",
-    actionCost:actionCostLabel(attack.actionCost),
-    actionCostKey:["action","bonus","reaction","free"].includes(attack.actionCost) ? attack.actionCost : "action"
+function vttRollFormula(formula, label = formula, visibility = "public") {
+  return new Promise(resolve => socket.emit("scene:dice-roll", { x:0, y:0, formula, visibility }, response => {
+    if (!response?.ok) toast(response?.error || "Не удалось бросить кубики");
+    else showRollPeek(`${visibility === "private" ? "🔒 " : ""}${label}`,response);
+    resolve(response || { ok:false });
   }));
-  const quickSlots = (set.quickSlots || []).map((itemId,index) => {
-    const item = combatItem(sheet,itemId);
-    return item ? { index, id:item.id, name:item.name || `Слот ${index+1}`, quantity:Number(item.quantity || 0), icon:itemCombatIcon(item), summary:combatItemSummary(item) } : { index, id:"", name:`Слот ${index+1}`, quantity:0, icon:"◇", summary:"Пусто" };
-  });
-  const equipment = Object.entries(set.slots || {}).map(([slot,itemId]) => ({ slot, item:combatItem(sheet,itemId) })).filter(entry => entry.item).map(entry => ({ slot:entry.slot, name:entry.item.name, icon:itemCombatIcon(entry.item), quantity:Number(entry.item.quantity || 0) }));
-  const abilityChecks = Object.entries(abilities).map(([key,name]) => ({ key, name, short:key.toUpperCase(), bonus:modifier(sheet.stats[key]) }));
-  const saves = Object.entries(abilities).map(([key,name]) => ({ key, name, short:key.toUpperCase(), bonus:modifier(sheet.stats[key]) + ((sheet.saveProficiencies || []).includes(key) ? effectiveProficiency(sheet) : 0), proficient:(sheet.saveProficiencies || []).includes(key) }));
-  const skillChecks = skills.map(([key,name,ability]) => ({ key, name, ability, short:ability.toUpperCase(), bonus:getSkillBonus(sheet,key), proficient:(sheet.skillProficiencies || []).includes(key), expertise:(sheet.expertise || []).includes(key) }));
-  const fighterLevel = classLevel(sheet,"fighter");
-  const rogueLevel = classLevel(sheet,"rogue");
-  const monkLevel = classLevel(sheet,"monk");
-  const barbarianLevel = classLevel(sheet,"barbarian");
-  const bardLevel = classLevel(sheet,"bard");
-  const clericLevel = classLevel(sheet,"cleric");
-  const druidLevel = classLevel(sheet,"druid");
-  const paladinLevel = classLevel(sheet,"paladin");
-  const sorcererLevel = classLevel(sheet,"sorcerer");
-  const classSummary = classEntries(sheet).map(entry => `${entry.name || rules.classes[entry.key]?.name || entry.key} ${Number(entry.level || 1)}`).join(" / ");
-  const classActionOptions = [
-    ...(druidLevel >= 2 ? [{ key:"wild-shape",name:"Дикий облик",detail:"классовое действие" }] : []),
-    ...(clericLevel >= 2 ? [{ key:"channel-divinity",name:"Божественный канал",detail:"классовое действие" }] : []),
-    ...(paladinLevel >= 1 ? [{ key:"lay-on-hands",name:"Наложение рук",detail:"классовое действие" }] : []),
-    ...(paladinLevel >= 3 ? [{ key:"paladin-channel-divinity",name:"Божественный канал",detail:"классовое действие" }] : [])
-  ];
-  const bonusOptions = [
-    ...(rogueLevel >= 2 ? [{ key:"cunning-dash",name:"Рывок",detail:"Хитрое действие" },{ key:"cunning-disengage",name:"Отход",detail:"Хитрое действие" },{ key:"cunning-hide",name:"Скрыться",detail:"Хитрое действие" }] : []),
-    ...(monkLevel >= 1 ? [{ key:"martial-arts",name:"Боевые искусства",detail:"один безоружный удар" }] : []),
-    ...(monkLevel >= 2 ? [{ key:"patient-defense",name:"Терпеливая оборона",detail:"тратит Ци" },{ key:"step-of-wind",name:"Шаг ветра",detail:"тратит Ци" },{ key:"flurry",name:"Шквал ударов",detail:"тратит Ци" }] : []),
-    ...(barbarianLevel >= 1 ? [{ key:"rage",name:"Ярость",detail:"бонусное действие" }] : []),
-    ...(fighterLevel >= 1 ? [{ key:"second-wind",name:"Второе дыхание",detail:"бонусное действие" }] : []),
-    ...(bardLevel >= 1 ? [{ key:"bardic-inspiration",name:"Бардовское вдохновение",detail:"бонусное действие" }] : []),
-    ...(sorcererLevel >= 2 ? [{ key:"font-of-magic",name:"Источник магии",detail:"обмен ячеек и очков" }] : [])
-  ];
-  const reactionOptions = [
-    { key:"opportunity",name:"Провоцированная атака",detail:"реакция" },
-    { key:"ready-reaction",name:"Подготовленное действие",detail:"реакция" },
-    ...(rogueLevel >= 5 ? [{ key:"uncanny-dodge",name:"Невероятное уклонение",detail:"вдвое уменьшить урон" }] : []),
-    ...(monkLevel >= 3 ? [{ key:"deflect-missiles",name:"Отражение снарядов",detail:"реакция" }] : [])
-  ];
-  const savedHotbar = Array.isArray(sheet.vttHotbar) ? sheet.vttHotbar.slice(0,10) : [];
-  const autoHotbar = [
-    ...attacks.slice(0,4).map(attack => ({ kind:"attack", id:attack.id, label:attack.name, icon:"⚔", actionCost:attack.actionCostKey || "action" })),
-    ...quickSlots.filter(item => item.id).slice(0,2).map(item => ({ kind:"quick", id:String(item.index), label:item.name, icon:item.icon || "◈", actionCost:"action" })),
-    ...skillChecks.filter(item => ["stealth","perception"].includes(item.key)).map(item => ({ kind:"skill", key:item.key, label:item.name, icon:"◆", actionCost:"free" })),
-    ...saves.filter(item => item.key === "dex").map(item => ({ kind:"save", key:item.key, label:`Спас: ${item.name}`, icon:"◉", actionCost:"free" }))
-  ].slice(0,10);
-  const hotbar = Array.from({ length:10 }, (_, index) => savedHotbar[index] || autoHotbar[index] || null);
-  return {
-    playerId:state.clientId,
-    name:sheet.characterName || player.name,
-    uiMode:sheet.vttUiMode === "assistant" ? "assistant" : "veteran",
-    hotbar,
-    hotbarLibrary:{ attacks, quickSlots:quickSlots.filter(item => item.id), skills:skillChecks, saves, abilityChecks },
-    hp:Number(sheet.hpCurrent || 0),
-    hpMax:Number(sheet.hpMax || 0),
-    tempHp:Number(sheet.hpTemp || 0),
-    ac:calculateAc(sheet),
-    conditions:[...(sheet.conditions || [])],
-    concentration:sheet.concentrationSpellName || "",
-    deathSuccess:Number(sheet.deathSuccess || 0),
-    deathFail:Number(sheet.deathFail || 0),
-    setName:set.name || "Боевой комплект",
-    attacks,
-    quickSlots,
-    equipment,
-    abilityChecks,
-    saves,
-    skills:skillChecks,
-    classSummary,
-    attacksPerAction:attacksPerAction(sheet),
-    actionSurgeMax:fighterLevel >= 17 ? 2 : fighterLevel >= 2 ? 1 : 0,
-    actionOptions:[
-      { key:"dash",name:"Рывок",detail:"удвоить перемещение" },
-      { key:"disengage",name:"Отход",detail:"не провоцировать атаки" },
-      { key:"dodge",name:"Уклонение",detail:"помеха атакам по вам" },
-      { key:"help",name:"Помощь",detail:"дать преимущество союзнику" },
-      { key:"hide",name:"Скрыться",detail:"проверка Скрытности" },
-      { key:"ready",name:"Подготовить",detail:"действие по условию" },
-      { key:"search",name:"Поиск",detail:"проверка Внимательности" },
-      { key:"use-object",name:"Использовать предмет",detail:"обычное действие" },
-      ...classActionOptions
-    ],
-    bonusOptions,
-    reactionOptions
-  };
-}
-
-function vttRollDice(formula, label, visibility = "public", mode) {
-  return roll(formula, label || formula, { visibility, ...(mode ? { mode } : {}) });
-}
-function vttTokenState(tokenId) {
-  const token = (state.room?.scene?.tokens || []).find(entry => entry.id === tokenId);
-  if (!token) return null;
-  const character = token.playerId ? buildVttCharacterModels()[token.playerId] : null;
-  return { token, name:token.name, ac:Number(character?.ac ?? token.ac ?? 10), hp:Number(character?.hp ?? token.hp ?? 0), hpMax:Number(character?.hpMax ?? token.hpMax ?? 1), tempHp:Number(character?.tempHp ?? token.tempHp ?? 0) };
-}
-function vttAttack(attackId, visibility = "public", targetId = "", mode = "") {
-  const attack = currentSheet().attacksList.find(item => item.id === attackId);
-  if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
-  const target = vttTokenState(targetId);
-  const publicTarget = target ? { name:target.name, token:target.token } : null;
-  return performAttackRoll(attack, { visibility, silent:true, ...(mode ? { mode } : {}), target:publicTarget }).then(response => {
-    if (!response?.ok) return response;
-    const finish = verdict => new Promise(resolve => socket.emit("combat:card-create", {
-      attackId:attack.id, attackName:attack.name || "Атака", targetId:target?.token?.id || "", targetName:target?.name || "",
-      total:response.total, natural:response.natural, hit:verdict?.hit ?? null, critical:Boolean(verdict?.critical ?? response.natural === 20),
-      fumble:Boolean(verdict?.fumble ?? response.natural === 1), targetAc:Number(verdict?.targetAc || 0), visibility
-    }, cardResponse => resolve({ ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:target?.token?.id || "", targetName:target?.name || "", targetAc:Number(verdict?.targetAc || 0), hit:verdict?.hit ?? null, critical:Boolean(verdict?.critical ?? response.natural === 20), fumble:Boolean(verdict?.fumble ?? response.natural === 1), cardId:cardResponse?.cardId || "" })));
-    if (!target) return finish(null);
-    return new Promise(resolve => socket.emit("combat:resolve-hit", { targetId:target.token.id, total:response.total, natural:response.natural }, verdict => {
-      if (!verdict?.ok) { toast(verdict?.error || "Не удалось определить попадание"); return resolve({ ...response, ok:false, error:verdict?.error }); }
-      toast(verdict.hit ? (verdict.critical ? "Критическое попадание!" : "Попадание") : verdict.fumble ? "Автоматический промах" : "Промах");
-      finish(verdict).then(resolve);
-    }));
-  });
 }
 function vttApplyCombat(tokenId, kind, amount, label = "Бой", visibility = "public") {
   return new Promise(resolve => socket.emit("combat:apply", { tokenId, kind, amount, label, visibility }, response => {
     if (!response?.ok) toast(response?.error || "Не удалось применить эффект");
     else if (response.pending) toast("Отправлено ведущему на подтверждение");
-    else {
-      const applied = Number(response.result?.applied ?? amount);
-      toast(kind === "damage" ? `Урон применён: ${applied}` : kind === "healing" ? `Лечение применено: ${applied}` : `Временные HP: ${applied}`);
-      if (Number(response.result?.concentrationDc) > 0) toast(`Концентрация: нужен спасбросок Телосложения СЛ ${Number(response.result.concentrationDc)}`);
-      if (response.result?.concentrationBroken) toast("Концентрация прервана: цель потеряла сознание");
-    }
     resolve(response || { ok:false });
   }));
 }
-function vttDamage(attackId, critical = false, visibility = "public", targetId = "", cardId = "") {
-  const attack = currentSheet().attacksList.find(item => item.id === attackId);
-  if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
-  return rollAttackDamage(attack, critical, { visibility, silent:true, onResult:response => {
-    const apply = targetId && Number(response.total) > 0 ? vttApplyCombat(targetId, "damage", Number(response.total), `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, visibility) : Promise.resolve({ ok:true, pending:false });
-    Promise.resolve(apply).then(result => { if (cardId) socket.emit("combat:card-damage", { cardId, total:Number(response.total)||0, applied:Boolean(result?.ok && !result?.pending) }); });
-  }});
-}
-function vttUseQuick(index, visibility = "public", targetId = "") { return useQuickItem(Number(index), { visibility, targetId }); }
-function vttRollCheck(kind, key, visibility = "public", mode = "normal") {
-  const sheet = currentSheet();
-  if (kind === "skill") {
-    const skill = skills.find(entry => entry[0] === key); if (!skill) return;
-    const expertise = (sheet.expertise || []).includes(key), proficient = (sheet.skillProficiencies || []).includes(key);
-    return roll(`1к20${signed(getSkillBonus(sheet,key))}`, `Навык: ${skill[1]} · ${skill[2].toUpperCase()}${expertise ? " · компетентность" : proficient ? " · владение" : ""}`, { visibility, mode });
-  }
-  if (kind === "save") {
-    const bonus = modifier(sheet.stats[key]) + ((sheet.saveProficiencies || []).includes(key) ? effectiveProficiency(sheet) : 0);
-    return roll(`1к20${signed(bonus)}`, `Спасбросок: ${abilities[key]}${(sheet.saveProficiencies || []).includes(key) ? " · владение" : ""}`, { visibility, mode });
-  }
-  if (!abilities[key]) return;
-  return roll(`1к20${signed(modifier(sheet.stats[key]))}`, `Проверка: ${abilities[key]}`, { visibility, mode });
-}
-function vttToggleCondition(tokenId, condition, active) { return new Promise(resolve => socket.emit("combat:condition", { tokenId, condition, active }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить состояние"); resolve(response || { ok:false }); })); }
-function vttSetConcentration(tokenId, name) { return new Promise(resolve => socket.emit("combat:concentration", { tokenId, name }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию"); resolve(response || { ok:false }); })); }
-function vttDeathSave(tokenId, visibility = "public") { socket.emit("combat:death-save", { tokenId, visibility }, response => { if (!response?.ok) toast(response?.error || "Не удалось бросить спасбросок"); else showRollPeek("Спасбросок от смерти", { ...response, total:response.natural, dice:[response.natural], detail:[{ count:1,sides:20,sign:1,rolls:[response.natural],subtotal:response.natural }], modifier:0, mode:"normal" }); }); }
-function vttEndTurn(tokenId) { socket.emit("combat:end-turn", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить ход"); }); }
-function vttSpendAction(tokenId, cost, label, force = false) {
-  return new Promise(resolve => socket.emit("combat:spend-action", { tokenId, cost, label, force }, response => {
-    if (response?.needsConfirm && !force) {
-      if (confirm(response.error || "Ресурс хода уже потрачен. Выполнить всё равно?")) return vttSpendAction(tokenId,cost,label,true).then(resolve);
-      return resolve({ ok:false, cancelled:true });
-    }
-    if (!response?.ok) toast(response?.error || "Действие недоступно");
+function vttToggleCondition(tokenId, condition, active) {
+  return new Promise(resolve => socket.emit("combat:condition", { tokenId, condition, active }, response => {
+    if (!response?.ok) toast(response?.error || "Не удалось изменить состояние");
     resolve(response || { ok:false });
   }));
 }
-function vttActionSurge(tokenId) { return new Promise(resolve => socket.emit("combat:action-surge", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Всплеск действий недоступен"); resolve(response || { ok:false }); })); }
-function vttEndBattle() { return new Promise(resolve => socket.emit("combat:end-battle", {}, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить бой"); else toast("Бой завершён"); resolve(response || { ok:false }); })); }
-function vttResolveCombatRequest(requestId, accept) { socket.emit("combat:request-resolve", { requestId, accept }, response => { if (!response?.ok) toast(response?.error || "Не удалось обработать запрос"); }); }
+function vttSetConcentration(tokenId, name) {
+  return new Promise(resolve => socket.emit("combat:concentration", { tokenId, name }, response => {
+    if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию");
+    resolve(response || { ok:false });
+  }));
+}
+function vttOpenSheet(playerId = state.clientId) {
+  if (state.room?.players?.[playerId]) state.selectedId = playerId;
+  renderAll();
+  switchView("sheet");
+}
 function vttSavePreferences(patch = {}) {
-  const sheet = structuredClone(currentSheet());
+  const sheet = structuredClone(state.room?.players?.[state.clientId]?.sheet || currentSheet());
   if (patch.uiMode) sheet.vttUiMode = patch.uiMode === "assistant" ? "assistant" : "veteran";
   if (Array.isArray(patch.hotbar)) sheet.vttHotbar = patch.hotbar.slice(0,10);
+  if (/^#[0-9a-f]{6}$/i.test(String(patch.diceColor || ""))) sheet.diceColor = patch.diceColor;
   state.room.players[state.clientId].sheet = sheet;
   return new Promise(resolve => socket.emit("sheet:update", { sheet, reason:"Настройки виртуального стола" }, response => {
     if (!response?.ok) toast(response?.error || "Не удалось сохранить панель действий");
     resolve(response || { ok:false });
   }));
 }
-function vttSetActionPolicy(actionPolicy) { return new Promise(resolve => socket.emit("combat:settings", { actionPolicy }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить режим действий"); resolve(response || { ok:false }); })); }
 
 function renderMap() {
   const root = $("#map-view");
@@ -3065,76 +3046,30 @@ function renderMap() {
       openModal,
       closeModal,
       switchView,
-      combat:buildVttCombatModel(),
       characters:buildVttCharacterModels(),
-      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick, rollCheck:vttRollCheck, applyCombat:vttApplyCombat, toggleCondition:vttToggleCondition, setConcentration:vttSetConcentration, deathSave:vttDeathSave, endTurn:vttEndTurn, spendAction:vttSpendAction, actionSurge:vttActionSurge, endBattle:vttEndBattle, resolveRequest:vttResolveCombatRequest, savePreferences:vttSavePreferences, setActionPolicy:vttSetActionPolicy }
+      actions:{ roll:vttRollFormula, openSheet:vttOpenSheet, savePreferences:vttSavePreferences }
     });
     return;
   }
   root.innerHTML = `<div class="read-only">Модуль виртуального стола не загрузился. Обнови страницу с очисткой кеша.</div>`;
 }
-function bindMapControls() {
-  const root = $("#map-view"), scene = mapScene(), isDm = state.room?.dmId === state.clientId;
-  $("#map-roll-initiative",root)?.addEventListener("click",()=>{
-    const token = (scene.tokens||[]).find(entry=>entry.playerId===state.clientId);
-    if (token) sceneAction("initiative:roll",{tokenId:token.id});
-  });
-  $("#map-add-party",root)?.addEventListener("click",()=>sceneAction("scene:party-add",{},"Токены партии добавлены"));
-  $("#map-add-npc",root)?.addEventListener("click",openNpcTokenModal);
-  $("#map-settings",root)?.addEventListener("click",openSceneSettingsModal);
-  $("#map-next-turn",root)?.addEventListener("click",()=>sceneAction("initiative:next"));
-  $("#map-clear-initiative",root)?.addEventListener("click",()=>{ if(confirm("Сбросить инициативу и начать с первого раунда?")) sceneAction("initiative:clear"); });
-  $$('[data-map-focus-token]',root).forEach(button=>button.addEventListener("click",()=>{ state.mapSelectedTokenId=button.dataset.mapFocusToken; renderMap(); }));
-  $$('[data-map-initiative]',root).forEach(input=>input.addEventListener("change",()=>sceneAction("initiative:set",{tokenId:input.dataset.mapInitiative,value:input.value})));
-  $$('[data-map-token]',root).forEach(tokenButton=>{
-    tokenButton.addEventListener("click",()=>{ state.mapSelectedTokenId=tokenButton.dataset.mapToken; renderMap(); });
-    if (tokenButton.dataset.mapMovable !== "1") return;
-    tokenButton.addEventListener("pointerdown",event=>{
-      if (event.button !== 0) return;
-      const stage=$("#map-stage",root), rect=stage.getBoundingClientRect(), cell=Number(scene.grid.cellSize||52);
-      let moved=false, nextX=Number(tokenButton.style.getPropertyValue("--token-x")||0), nextY=Number(tokenButton.style.getPropertyValue("--token-y")||0);
-      const move=pointer=>{
-        const rawX=(pointer.clientX-rect.left)/cell, rawY=(pointer.clientY-rect.top)/cell;
-        nextX=Math.max(0,Math.min(Number(scene.grid.columns)-1,scene.grid.snap===false?Math.round(rawX*10)/10:Math.floor(rawX)));
-        nextY=Math.max(0,Math.min(Number(scene.grid.rows)-1,scene.grid.snap===false?Math.round(rawY*10)/10:Math.floor(rawY)));
-        tokenButton.style.setProperty("--token-x",String(nextX)); tokenButton.style.setProperty("--token-y",String(nextY)); moved=true;
-      };
-      const up=pointer=>{
-        document.removeEventListener("pointermove",move); document.removeEventListener("pointerup",up);
-        if (moved) { pointer.preventDefault(); sceneAction("scene:token-move",{tokenId:tokenButton.dataset.mapToken,x:nextX,y:nextY}); }
-      };
-      document.addEventListener("pointermove",move); document.addEventListener("pointerup",up,{once:true});
-      event.preventDefault();
-    });
-  });
-  const selected=(scene.tokens||[]).find(token=>token.id===state.mapSelectedTokenId);
-  $("#map-edit-token",root)?.addEventListener("click",()=>selected&&openTokenEditor(selected));
-  $("#map-roll-selected",root)?.addEventListener("click",()=>selected&&sceneAction("initiative:roll",{tokenId:selected.id}));
-  $("#map-remove-token",root)?.addEventListener("click",()=>{ if(selected&&confirm(`Удалить токен «${selected.name}»?`)) sceneAction("scene:token-remove",{tokenId:selected.id}); });
-}
-function openSceneSettingsModal() {
-  const scene=mapScene(), grid=scene.grid;
-  openModal("Настройки сцены",`<div class="scene-settings"><label>Название сцены<input id="scene-name" value="${esc(scene.name||"")}"></label><label>Фоновая картинка<input id="scene-background" value="${esc(scene.backgroundUrl||"")}" placeholder="https://…/battlemap.jpg"></label><div class="two-col"><label>Цвет поля<input id="scene-color" type="color" value="${esc(scene.backgroundColor||"#17120e")}"></label><label>Размер клетки, px<input id="scene-cell" type="number" min="32" max="96" value="${Number(grid.cellSize||52)}"></label></div><div class="two-col"><label>Клеток по ширине<input id="scene-columns" type="number" min="8" max="60" value="${Number(grid.columns||24)}"></label><label>Клеток по высоте<input id="scene-rows" type="number" min="6" max="40" value="${Number(grid.rows||16)}"></label></div><div class="item-toggle-grid"><label class="toggle-row"><span><strong>Показывать сетку</strong><small>Квадраты по 5 футов</small></span><input id="scene-grid-visible" type="checkbox" ${grid.visible!==false?"checked":""}><i></i></label><label class="toggle-row"><span><strong>Привязка токенов</strong><small>Перемещение по целым клеткам</small></span><input id="scene-grid-snap" type="checkbox" ${grid.snap!==false?"checked":""}><i></i></label></div><div class="modal-actions"><button id="scene-save" class="primary">Сохранить сцену</button><button id="scene-cancel" class="secondary">Отмена</button></div></div>`);
-  $("#scene-save").addEventListener("click",()=>{ sceneAction("scene:settings",{name:$("#scene-name").value,backgroundUrl:$("#scene-background").value,backgroundColor:$("#scene-color").value,grid:{columns:Number($("#scene-columns").value),rows:Number($("#scene-rows").value),cellSize:Number($("#scene-cell").value),visible:$("#scene-grid-visible").checked,snap:$("#scene-grid-snap").checked}},"Сцена обновлена"); closeModal(); });
-  $("#scene-cancel").addEventListener("click",closeModal);
-}
-function openNpcTokenModal() {
-  openModal("Новый токен NPC",`<label>Имя<input id="npc-token-name" placeholder="Гоблин"></label><label>Картинка<input id="npc-token-image" placeholder="https://…"></label><div class="two-col"><label>Цвет рамки<input id="npc-token-color" type="color" value="#9f7842"></label><label>Размер<input id="npc-token-size" type="number" min="0.5" max="4" step="0.5" value="1"></label></div><div class="two-col"><label>Зрение, футы<input id="npc-token-vision" type="number" min="0" value="60"></label><label>Бонус инициативы<input id="npc-token-init" type="number" value="0"></label></div><label class="toggle-row"><span><strong>Скрытый токен</strong><small>Виден только ведущему</small></span><input id="npc-token-hidden" type="checkbox"><i></i></label><div class="modal-actions"><button id="npc-token-add" class="primary">Добавить</button><button id="npc-token-cancel" class="secondary">Отмена</button></div>`);
-  $("#npc-token-add").addEventListener("click",()=>{ sceneAction("scene:token-add",{name:$("#npc-token-name").value,imageUrl:$("#npc-token-image").value,color:$("#npc-token-color").value,size:Number($("#npc-token-size").value),vision:Number($("#npc-token-vision").value),initiativeBonus:Number($("#npc-token-init").value),hidden:$("#npc-token-hidden").checked},"Токен добавлен"); closeModal(); });
-  $("#npc-token-cancel").addEventListener("click",closeModal);
-}
-function openTokenEditor(token) {
-  const npc=!token.playerId, isDm=state.room?.dmId===state.clientId;
-  openModal("Настройки токена",`${npc?`<label>Имя<input id="token-edit-name" value="${esc(token.name)}"></label><label>Картинка<input id="token-edit-image" value="${esc(token.imageUrl||"")}"></label><div class="two-col"><label>Цвет<input id="token-edit-color" type="color" value="${esc(token.color||"#9f7842")}"></label><label>Размер<input id="token-edit-size" type="number" min="0.5" max="4" step="0.5" value="${Number(token.size||1)}"></label></div><div class="two-col"><label>Зрение<input id="token-edit-vision" type="number" value="${Number(token.vision||0)}"></label><label>Бонус инициативы<input id="token-edit-init" type="number" value="${Number(token.initiativeBonus||0)}"></label></div>`:`<div class="read-only">Имя, картинка, цвет, размер и зрение этого токена берутся из листа персонажа.</div>`}${isDm?`<div class="item-toggle-grid"><label class="toggle-row"><span><strong>Скрыт</strong><small>Не показывать игрокам</small></span><input id="token-edit-hidden" type="checkbox" ${token.hidden?"checked":""}><i></i></label><label class="toggle-row"><span><strong>Заблокирован</strong><small>Двигает только ведущий</small></span><input id="token-edit-locked" type="checkbox" ${token.locked?"checked":""}><i></i></label></div>`:""}<div class="modal-actions"><button id="token-edit-save" class="primary">Сохранить</button><button id="token-edit-cancel" class="secondary">Отмена</button></div>`);
-  $("#token-edit-save").addEventListener("click",()=>{ sceneAction("scene:token-update",{tokenId:token.id,name:$("#token-edit-name")?.value,imageUrl:$("#token-edit-image")?.value,color:$("#token-edit-color")?.value,size:Number($("#token-edit-size")?.value),vision:Number($("#token-edit-vision")?.value),initiativeBonus:Number($("#token-edit-init")?.value),hidden:$("#token-edit-hidden")?.checked,locked:$("#token-edit-locked")?.checked},"Токен обновлён"); closeModal(); });
-  $("#token-edit-cancel").addEventListener("click",closeModal);
-}
-
 function renderRolls() {
   if (!state.room) return;
   const rolls = [...(state.room.rollLog || [])].sort((a,b) => Number(b.at || 0) - Number(a.at || 0));
-  $("#roll-log").innerHTML = rolls.length ? rolls.map(item => `
-    <div class="roll ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""} ${item.visibility === "private" || item.visibility === "gm" || item.privateToDm ? "private-roll" : ""}"><div><strong>${item.visibility === "private" || item.visibility === "gm" || item.privateToDm ? "🔒 " : ""}${esc(item.player)}</strong><br><span>${esc(item.label)}${item.activity ? ` · ${esc(item.activity)}` : ` · [${(item.dice || []).join(", ")}]${item.modifier ? ` ${signed(item.modifier)}` : ""}${item.mode === "advantage" ? " · преимущество" : item.mode === "disadvantage" ? " · помеха" : ""}`}</span></div><b>${item.total === null ? "✦" : item.total}</b></div>`).join("") : `<div class="read-only">Здесь появятся броски всей партии.</div>`;
+  $("#roll-log").innerHTML = rolls.length ? rolls.map(item => {
+    const privateRoll = item.visibility === "private" || item.visibility === "gm" || item.privateToDm;
+    const repeatSelection = diceTraySelectionFromRoll(item);
+    const repeat = repeatSelection.length ? `<button type="button" class="roll-repeat" data-repeat-roll="${esc(item.id)}" title="Собрать этот набор снова">↻</button>` : "";
+    return `<div class="roll ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""} ${privateRoll ? "private-roll" : ""}"><div><strong>${privateRoll ? "🔒 " : ""}${esc(item.player)}</strong><br><span>${esc(item.label)}${item.activity ? ` · ${esc(item.activity)}` : ` · [${(item.dice || []).join(", ")}]${item.modifier ? ` ${signed(item.modifier)}` : ""}${item.mode === "advantage" ? " · преимущество" : item.mode === "disadvantage" ? " · помеха" : ""}`}</span></div><b>${item.total === null ? "✦" : item.total}</b>${repeat}</div>`;
+  }).join("") : `<div class="read-only">Здесь появятся броски всей партии.</div>`;
+  $$('[data-repeat-roll]', $("#roll-log")).forEach(button => button.addEventListener("click",()=>{
+    const item = rolls.find(entry => entry.id === button.dataset.repeatRoll);
+    const selection = diceTraySelectionFromRoll(item);
+    if (!selection.length) return;
+    window.TT_DICE_TRAY?.apply(selection,Number(item.modifier)||0,item.visibility);
+    renderDiceTray();
+    rollPhysicalDice(selection,Number(item.modifier)||0);
+  }));
 }
 function switchView(view) {
   state.currentView = ["sheet","dice","map"].includes(view) ? view : "sheet";
@@ -3145,13 +3080,17 @@ function switchView(view) {
   $("#map-view").classList.toggle("hidden", !mapActive);
   $("#room").classList.toggle("map-fullscreen", mapActive);
   document.body.classList.toggle("vtt-active", mapActive);
-  $("#roll-peek")?.classList.toggle("hidden", mapActive || state.currentView === "dice");
+  $("#roll-peek")?.classList.toggle("hidden", state.currentView === "dice");
   if (mapActive) renderMap();
-  else window.TT_VTT?.deactivate?.();
+  else {
+    window.TT_VTT?.deactivate?.();
+    if (state.currentView === "dice") window.TT_DICE_PHYSICS?.activate?.(roomDiceColors());
+  }
 }
 $$('[data-view]').forEach(button => button.addEventListener("click", () => switchView(button.dataset.view)));
 $("#roll-peek").addEventListener("click", () => switchView("dice"));
 $("#own-sheet").addEventListener("click", () => { state.selectedId = state.clientId; renderAll(); switchView("sheet"); });
+$("#help-tour")?.addEventListener("click", () => openQuickGuide(false));
 $("#copy-code").addEventListener("click", async () => { await navigator.clipboard.writeText(state.room.code); toast("Код скопирован"); });
 $("#leave").addEventListener("click", () => {
   document.body.classList.remove("vtt-active");
@@ -3167,7 +3106,6 @@ $("#game-modal").addEventListener("click", event => {
 $("#game-modal").addEventListener("close", () => $("#game-modal").classList.remove("library-open", "builder-modal", "catalog-modal"));
 
 
-window.TT_APP_ACTIONS = { buildCombatModel:buildVttCombatModel, roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick };
 const hashCode = location.hash.slice(1).toUpperCase();
 if (/^[A-Z0-9]{6}$/.test(hashCode)) {
   $('[data-lobby-tab="join"]').click();

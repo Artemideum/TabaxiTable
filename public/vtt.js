@@ -10,15 +10,19 @@
   const cameraByScene = new Map();
   const selectionByScene = new Map();
   const measurementByScene = new Map();
+  const UI_STORAGE_KEY = "tt-vtt-ui";
+  let savedUi = {};
+  try { savedUi = JSON.parse(localStorage.getItem(UI_STORAGE_KEY) || "{}"); } catch {}
   const ui = {
     leftPanel: null,
-    rightPanel: null,
+    rightPanel: ["character","inspector","initiative"].includes(savedUi.rightPanel) ? savedUi.rightPanel : null,
     tool: "select",
     color: "#f4c875",
     fill: "#b94b42",
     fillOpacity: 0.18,
     strokeWidth: 3,
-    dieSides: 20
+    characterPlayerId: null,
+    diceFormula: "3d6+1"
   };
   let assetFilter = "all";
   let assetSearch = "";
@@ -30,160 +34,11 @@
   const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
   const roundTenth = value => Math.round((Number(value) || 0) * 10) / 10;
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[character]);
+  const bonusText = value => `${Number(value) >= 0 ? "+" : ""}${Number(value) || 0}`;
+  const saveUiState = () => { try { localStorage.setItem(UI_STORAGE_KEY,JSON.stringify({ rightPanel:ui.rightPanel })); } catch {} };
   const sceneKey = room => `${room.code}:${room.scene?.id || room.activeSceneId || "main"}`;
   const refKey = ref => `${ref.kind}:${ref.id}`;
   const uniqueRefs = refs => [...new Map((refs || []).filter(ref => ref?.kind && ref?.id).map(ref => [refKey(ref), { kind:ref.kind, id:ref.id }])).values()];
-  const GOLDEN_RATIO = (1 + Math.sqrt(5)) / 2;
-
-  function hashSeed(text) {
-    let hash = 2166136261;
-    for (const character of String(text || "")) {
-      hash ^= character.charCodeAt(0);
-      hash = Math.imul(hash, 16777619);
-    }
-    return hash >>> 0;
-  }
-
-  function shadeHex(hex, amount = 0) {
-    const value = String(hex || "#f4c875").trim();
-    const match = /^#?([0-9a-f]{6})$/i.exec(value);
-    if (!match) return "#f4c875";
-    const channels = match[1].match(/../g).map(part => parseInt(part, 16));
-    const blend = amount >= 0 ? 255 : 0;
-    const factor = Math.min(1, Math.abs(amount));
-    return `#${channels.map(channel => Math.round(channel + (blend - channel) * factor).toString(16).padStart(2, "0")).join("")}`;
-  }
-
-  function rotatePoint(point, rx, ry, rz) {
-    let [x, y, z] = point;
-    const sinX = Math.sin(rx), cosX = Math.cos(rx);
-    const sinY = Math.sin(ry), cosY = Math.cos(ry);
-    const sinZ = Math.sin(rz), cosZ = Math.cos(rz);
-    const y1 = y * cosX - z * sinX;
-    const z1 = y * sinX + z * cosX;
-    y = y1; z = z1;
-    const x2 = x * cosY + z * sinY;
-    const z2 = -x * sinY + z * cosY;
-    x = x2; z = z2;
-    const x3 = x * cosZ - y * sinZ;
-    const y3 = x * sinZ + y * cosZ;
-    return [x3, y3, z];
-  }
-
-  function crossProduct(a, b, c) {
-    const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
-    const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-    return [
-      ab[1] * ac[2] - ab[2] * ac[1],
-      ab[2] * ac[0] - ab[0] * ac[2],
-      ab[0] * ac[1] - ab[1] * ac[0]
-    ];
-  }
-
-  function normalizeVector(vector) {
-    const length = Math.hypot(vector[0], vector[1], vector[2]) || 1;
-    return [vector[0] / length, vector[1] / length, vector[2] / length];
-  }
-
-  function polyhedronDefinition(sides) {
-    const phi = GOLDEN_RATIO;
-    const invPhi = 1 / phi;
-    const cube = {
-      vertices:[[-1,-1,1],[1,-1,1],[1,1,1],[-1,1,1],[-1,-1,-1],[1,-1,-1],[1,1,-1],[-1,1,-1]],
-      faces:[[0,1,2,3],[1,5,6,2],[5,4,7,6],[4,0,3,7],[3,2,6,7],[4,5,1,0]],
-      scale:27
-    };
-    const tetra = {
-      vertices:[[1,1,1],[-1,-1,1],[-1,1,-1],[1,-1,-1]],
-      faces:[[0,1,2],[0,3,1],[0,2,3],[1,3,2]],
-      scale:29
-    };
-    const octa = {
-      vertices:[[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]],
-      faces:[[0,2,4],[2,1,4],[1,3,4],[3,0,4],[2,0,5],[1,2,5],[3,1,5],[0,3,5]],
-      scale:30
-    };
-    const bipyramid10 = (() => {
-      const ring = Array.from({ length:5 }, (_, index) => {
-        const angle = Math.PI * 2 * index / 5 - Math.PI / 2;
-        return [Math.cos(angle), Math.sin(angle), 0];
-      });
-      return {
-        vertices:[[0,0,1.35],[0,0,-1.35],...ring],
-        faces:[[0,2,3],[0,3,4],[0,4,5],[0,5,6],[0,6,2],[1,3,2],[1,4,3],[1,5,4],[1,6,5],[1,2,6]],
-        scale:29
-      };
-    })();
-    const dodeca = {
-      vertices:[
-        [1,1,1],[1,1,-1],[1,-1,1],[1,-1,-1],[-1,1,1],[-1,1,-1],[-1,-1,1],[-1,-1,-1],
-        [0,invPhi,phi],[0,invPhi,-phi],[0,-invPhi,phi],[0,-invPhi,-phi],[invPhi,phi,0],[invPhi,-phi,0],[-invPhi,phi,0],[-invPhi,-phi,0],[phi,0,invPhi],[phi,0,-invPhi],[-phi,0,invPhi],[-phi,0,-invPhi]
-      ],
-      faces:[[0,8,10,2,16],[0,12,14,4,8],[0,16,17,1,12],[1,17,3,11,9],[1,9,5,14,12],[2,10,6,15,13],[2,13,3,17,16],[3,13,15,7,11],[4,14,5,19,18],[4,18,6,10,8],[5,9,11,7,19],[6,18,19,7,15]],
-      scale:24
-    };
-    const icosa = {
-      vertices:[[-1,phi,0],[1,phi,0],[-1,-phi,0],[1,-phi,0],[0,-1,phi],[0,1,phi],[0,-1,-phi],[0,1,-phi],[phi,0,-1],[phi,0,1],[-phi,0,-1],[-phi,0,1]],
-      faces:[[0,11,5],[0,5,1],[0,1,7],[0,7,10],[0,10,11],[1,5,9],[5,11,4],[11,10,2],[10,7,6],[7,1,8],[3,9,4],[3,4,2],[3,2,6],[3,6,8],[3,8,9],[4,9,5],[2,4,11],[6,2,10],[8,6,7],[9,8,1]],
-      scale:28
-    };
-    if (sides === 4) return tetra;
-    if (sides === 6) return cube;
-    if (sides === 8) return octa;
-    if (sides === 10 || sides === 100) return bipyramid10;
-    if (sides === 12) return dodeca;
-    return icosa;
-  }
-
-  function renderDieSvg(sides, value, color, seed) {
-    const poly = polyhedronDefinition(sides);
-    const hash = hashSeed(`${seed}:${sides}:${value}`);
-    const rx = 0.55 + ((hash & 255) / 255) * 0.8;
-    const ry = 0.7 + (((hash >> 8) & 255) / 255) * 1.6;
-    const rz = 0.15 + (((hash >> 16) & 255) / 255) * 0.6;
-    const rotated = poly.vertices.map(vertex => rotatePoint(vertex, rx, ry, rz));
-    const dist = 6;
-    const scale = poly.scale || 28;
-    const centerX = 60;
-    const centerY = 54;
-    const projected = rotated.map(([x, y, z]) => {
-      const perspective = dist / (dist - z);
-      return { x:centerX + x * perspective * scale, y:centerY - y * perspective * scale, z, perspective };
-    });
-
-    const visibleFaces = poly.faces.map(face => {
-      const points3d = face.map(index => rotated[index]);
-      let normal = crossProduct(points3d[0], points3d[1], points3d[2]);
-      const centroid3d = points3d.reduce((sum, point) => [sum[0] + point[0], sum[1] + point[1], sum[2] + point[2]], [0,0,0]).map(channel => channel / face.length);
-      if (normal[0] * centroid3d[0] + normal[1] * centroid3d[1] + normal[2] * centroid3d[2] < 0) normal = normal.map(value => value * -1);
-      normal = normalizeVector(normal);
-      const centroid2d = face.reduce((sum, index) => ({ x:sum.x + projected[index].x, y:sum.y + projected[index].y }), { x:0, y:0 });
-      centroid2d.x /= face.length;
-      centroid2d.y /= face.length;
-      return {
-        face,
-        normal,
-        avgZ:face.reduce((sum, index) => sum + rotated[index][2], 0) / face.length,
-        centroid2d,
-        points:face.map(index => projected[index])
-      };
-    }).filter(entry => entry.normal[2] > -0.12).sort((a, b) => a.avgZ - b.avgZ);
-
-    const topFace = [...visibleFaces].sort((a, b) => (b.avgZ + b.normal[2] * 0.6) - (a.avgZ + a.normal[2] * 0.6))[0] || null;
-    const polygons = visibleFaces.map(entry => {
-      const brightness = clamp(0.28 + (entry.normal[2] + 1) * 0.36 + (entry.avgZ + 1) * 0.05, 0.18, 0.92);
-      const fill = shadeHex(color, brightness - 0.55);
-      const stroke = shadeHex(color, brightness > 0.62 ? -0.55 : -0.38);
-      const className = topFace === entry ? "die-face is-top" : "die-face";
-      const points = entry.points.map(point => `${roundTenth(point.x)},${roundTenth(point.y)}`).join(" ");
-      return `<polygon class="${className}" points="${points}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
-    }).join("");
-    const labelX = roundTenth(topFace?.centroid2d.x ?? centerX);
-    const labelY = roundTenth((topFace?.centroid2d.y ?? centerY) + 1);
-    const label = `<text class="die-value" x="${labelX}" y="${labelY}" text-anchor="middle" dominant-baseline="central">${esc(value)}</text>`;
-    const gloss = `<ellipse class="die-gloss" cx="38" cy="22" rx="18" ry="9" fill="#ffffff20" transform="rotate(-18 38 22)"/>`;
-    return `<svg class="vtt-die-svg" viewBox="0 0 120 120" aria-hidden="true">${polygons}${gloss}${label}</svg>`;
-  }
 
   function getCamera(room) {
     const key = sceneKey(room);
@@ -436,17 +291,6 @@
     return `<div class="vtt-ping" style="left:${point.x}px;top:${point.y}px;--ping-color:${esc(scene.ping.color || "#f4c875")}"><i></i><strong>${esc(scene.ping.by || "Игрок")}</strong></div>`;
   }
 
-  function diceMarkup(scene, metrics) {
-    const roll = scene.diceRoll;
-    if (!roll || Date.now() - Number(roll.at || 0) > 12000) return "";
-    const point = metrics.toWorld(roll.x, roll.y);
-    const sides = [4,6,8,10,12,20,100].includes(Number(roll.sides)) ? Number(roll.sides) : 20;
-    return `<div class="vtt-table-die die-d${sides}" style="left:${point.x}px;top:${point.y}px;--die-color:${esc(roll.color || "#f4c875")}" data-roll-id="${esc(roll.id)}">
-      <div class="vtt-die-shadow"></div>
-      <div class="vtt-die-model">${renderDieSvg(sides, Number(roll.value), roll.color || "#f4c875", roll.id || `${roll.at}:${roll.value}`)}</div>
-      <small>к${sides} · ${esc(roll.by || "Игрок")}</small>
-    </div>`;
-  }
 
   function boundsForEntry(entry) {
     const value = entry.value;
@@ -462,18 +306,22 @@
   }
 
   function inspectorMarkup(entries, isDm, clientId) {
-    if (!entries.length) return `<div class="vtt-empty-side"><span>◇</span><strong>Ничего не выбрано</strong><p>Инструментом выбора нажми на токен, карту, объект или рисунок.</p></div>`;
+    if (!entries.length) return `<div class="vtt-empty-side"><span>◇</span><strong>Ничего не выбрано</strong><p>Инструментом выбора нажми на токен, карту, объект или рисунок.</p>${isDm ? `<div class="vtt-empty-actions"><button data-vtt-select-set="party">Персонажи</button><button data-vtt-select-set="npc">Все NPC</button><button data-vtt-select-set="tokens">Все токены</button></div>` : ""}</div>`;
     if (entries.length > 1) {
+      const tokenCount = entries.filter(entry => entry.kind === "token").length;
+      const objectCount = entries.filter(entry => entry.kind === "object").length;
+      const annotationCount = entries.filter(entry => entry.kind === "annotation").length;
       return `<div class="vtt-inspector-card"><div class="vtt-inspector-title"><span class="vtt-object-symbol">${entries.length}</span><div><small>Групповое выделение</small><strong>${entries.length} объектов</strong></div></div>
+        <div class="vtt-selection-summary">${tokenCount ? `<span>● ${tokenCount} ток.</span>` : ""}${objectCount ? `<span>▧ ${objectCount} об.</span>` : ""}${annotationCount ? `<span>✎ ${annotationCount} рис.</span>` : ""}</div>
         <div class="vtt-align-grid"><button data-vtt-align="left" title="По левому краю">⇤</button><button data-vtt-align="h-center" title="По центру горизонтально">↔</button><button data-vtt-align="right" title="По правому краю">⇥</button><button data-vtt-align="top" title="По верхнему краю">⇡</button><button data-vtt-align="v-center" title="По центру вертикально">↕</button><button data-vtt-align="bottom" title="По нижнему краю">⇣</button></div>
-        ${isDm ? `<div class="vtt-inspector-actions"><button data-vtt-group-duplicate>Дублировать</button><button class="danger-action" data-vtt-group-remove>Удалить</button></div>` : ""}</div>`;
+        ${isDm ? `<div class="vtt-inspector-actions">${tokenCount ? `<button class="primary" data-vtt-group-token-settings>Общие параметры</button><button data-vtt-group-roll-initiative>Инициатива группе</button>` : ""}<button data-vtt-group-duplicate>Дублировать</button><button class="danger-action" data-vtt-group-remove>Удалить</button></div>` : ""}</div>`;
     }
     const entry = entries[0];
     const value = entry.value;
     if (entry.kind === "token") {
       const canEdit = isDm || value.playerId === clientId;
       return `<div class="vtt-inspector-card"><div class="vtt-inspector-title"><span class="vtt-color-dot" style="background:${esc(value.color || "#9f7842")}"></span><div><small>${value.playerId ? "Персонаж" : "Токен"}</small><strong>${esc(value.name)}</strong></div></div>
-        <div class="vtt-stat-grid"><span><small>X / Y</small><b>${Number(value.x)} / ${Number(value.y)}</b></span><span><small>Размер</small><b>${Number(value.size)}</b></span><span><small>Зрение</small><b>${Number(value.vision || 0)} фт.</b></span><span><small>Слой</small><b>${Number(value.z || 100)}</b></span></div>
+        <div class="vtt-stat-grid"><span><small>X / Y</small><b>${Number(value.x)} / ${Number(value.y)}</b></span><span><small>Размер</small><b>${Number(value.size)}</b></span><span><small>HP</small><b>${Number(value.hp || 0)}/${Number(value.hpMax || 0)}</b></span><span><small>Инициатива</small><b>${value.initiative ?? "—"}</b></span></div>
         <div class="vtt-inspector-actions">${canEdit ? `<button type="button" data-vtt-edit-token="${esc(value.id)}">Настроить</button>` : ""}<button type="button" data-vtt-roll="${esc(value.id)}" ${canEdit ? "" : "disabled"}>Инициатива</button>${isDm ? `<button type="button" data-vtt-duplicate-selected>Копировать</button><button class="danger-action" type="button" data-vtt-remove-selected>Удалить</button>` : ""}</div></div>`;
     }
     if (entry.kind === "object") {
@@ -499,14 +347,16 @@
       <div class="vtt-asset-list">${assets.length ? assets.map(assetCard).join("") : `<div class="vtt-library-empty"><span>▧</span><strong>${room.assets?.length ? "Ничего не найдено" : "Библиотека пуста"}</strong><p>${room.assets?.length ? "Измени поиск или фильтр." : "Загрузи PNG, JPG, WebP или GIF с компьютера."}</p></div>`}</div>`;
   }
 
-  function toolsPanel(grid, selectionCount, isDm) {
+  function toolsPanel(grid, selectionCount, isDm, diceColor = "#d3ad6e") {
+    const tray = window.TT_DICE_TRAY;
+    const diceBuilder = tray ? `<div class="vtt-dice-picker"><div class="vtt-dice-picker-head"><span>Горсть кубиков</span><label>Мой цвет<input id="vtt-dice-color" type="color" value="${esc(diceColor)}"></label></div><div class="vtt-dice-steppers">${tray.SIDES.map(sides => { const count = Number(tray.state.counts[sides] || 0); return `<article class="${count ? "active" : ""}"><strong>к${sides}</strong><div><button type="button" data-vtt-die-sub="${sides}" ${count ? "" : "disabled"}>−</button><b>${count}</b><button type="button" data-vtt-die-add="${sides}" ${tray.totalCount() >= tray.MAX_DICE ? "disabled" : ""}>＋</button></div></article>`; }).join("")}</div><div class="vtt-dice-total"><span><small>Бросок</small><strong>${esc(tray.formula())}</strong></span><label>Мод.<input id="vtt-dice-modifier" type="number" min="-999" max="999" value="${Number(tray.state.modifier || 0)}"></label></div><form class="vtt-dice-formula" id="vtt-dice-formula-form"><input id="vtt-dice-formula-input" name="formula" value="${esc(ui.diceFormula)}" placeholder="3d6+1"><button class="primary" type="submit">Бросить формулу</button></form><div class="vtt-dice-actions"><button id="vtt-dice-visibility" type="button" aria-pressed="${String(tray.state.visibility === "private")}" class="${tray.state.visibility === "private" ? "active" : ""}">${tray.state.visibility === "private" ? "🔒 Закрыто" : "🌐 Всем"}</button><button id="vtt-dice-reset" type="button">к20</button><button id="vtt-dice-clear" type="button">Очистить</button></div><small>${tray.state.visibility === "private" ? "Закрытый бросок видят только ты и ГМ." : "Набери набор и нажми на поле либо введи формулу."}</small></div>` : "";
     return `<div class="vtt-panel-head"><div><span class="eyebrow">Стол</span><h3>Инструменты</h3></div><b>${grid.snap === false ? "свободно" : "сетка"}</b></div>
       <div class="vtt-tool-options"><label>Цвет<input id="vtt-tool-color" type="color" value="${esc(ui.color)}"></label><label>Заливка<input id="vtt-tool-fill" type="color" value="${esc(ui.fill)}"></label><label>Толщина<input id="vtt-tool-width" type="number" min="1" max="20" value="${Number(ui.strokeWidth)}"></label></div>
       <div class="vtt-tool-help"><strong>${toolLabel(ui.tool)}</strong><p>${toolHelp(ui.tool)}</p></div>
-      ${ui.tool === "dice" ? `<div class="vtt-dice-picker"><span>Кубик</span>${[4,6,8,10,12,20,100].map(sides => `<button type="button" data-vtt-die-sides="${sides}" class="${ui.dieSides === sides ? "active" : ""}">к${sides}</button>`).join("")}<small>Выбери кубик и нажми на любое место поля.</small></div>` : ""}
+      ${ui.tool === "dice" ? diceBuilder : ""}
       ${isDm ? `<div class="vtt-history-actions"><button id="vtt-undo">↶ Отменить</button><button id="vtt-redo">↷ Повторить</button></div>` : ""}
       ${selectionCount > 1 && isDm ? `<div class="vtt-panel-subtitle">Выравнивание</div><div class="vtt-align-grid"><button data-vtt-align="left">⇤</button><button data-vtt-align="h-center">↔</button><button data-vtt-align="right">⇥</button><button data-vtt-align="top">⇡</button><button data-vtt-align="v-center">↕</button><button data-vtt-align="bottom">⇣</button></div>` : ""}
-      <div class="vtt-shortcuts"><span><kbd>V</kbd> выбор</span><span><kbd>H</kbd> рука</span><span><kbd>M</kbd> линейка</span><span><kbd>Del</kbd> удалить</span><span><kbd>Ctrl D</kbd> копия</span><span><kbd>K</kbd> кубик</span>${isDm ? `<span><kbd>Ctrl Z</kbd> отмена</span>` : ""}</div>`;
+      <div class="vtt-shortcuts"><span><kbd>V</kbd> выбор</span><span><kbd>H</kbd> рука</span><span><kbd>M</kbd> линейка</span><span><kbd>Del</kbd> удалить</span><span><kbd>Ctrl D</kbd> копия</span><span><kbd>K</kbd> кубик</span><span><kbd>Shift S</kbd> лист</span>${isDm ? `<span><kbd>Ctrl Z</kbd> отмена</span>` : ""}</div>`;
   }
 
   function toolLabel(tool) {
@@ -552,8 +402,14 @@
     const assets = (room.assets || []).filter(asset => assetFilter === "all" || asset.category === assetFilter)
       .filter(asset => !assetSearch || `${asset.name} ${(asset.tags || []).join(" ")}`.toLowerCase().includes(assetSearch.toLowerCase()));
     const ownToken = (scene.tokens || []).find(token => token.playerId === ctx.clientId);
-    const leftContent = ui.leftPanel === "library" && isDm ? libraryPanel(room, assets) : ui.leftPanel === "scenes" ? scenesPanel(room, isDm) : ui.leftPanel === "tools" ? toolsPanel(grid, entries.length, isDm) : "";
-    const rightContent = ui.rightPanel === "inspector" ? inspectorMarkup(entries, isDm, ctx.clientId) : ui.rightPanel === "initiative" ? initiativePanelMarkup(scene, order, isDm) : "";
+    const diceColor = room.players?.[ctx.clientId]?.sheet?.diceColor || "#d3ad6e";
+    const diceColors = [diceColor, ...Object.values(room.players || {}).map(player => player?.sheet?.diceColor).filter(Boolean), diceColor];
+    window.TT_DICE_PHYSICS?.activate?.(diceColors);
+    const linkedCharacterId = entries.find(entry => entry.kind === "token" && entry.value.playerId)?.value.playerId;
+    if (linkedCharacterId && ui.rightPanel === "character") ui.characterPlayerId = linkedCharacterId;
+    const characterId = ui.characterPlayerId && ctx.characters?.[ui.characterPlayerId] ? ui.characterPlayerId : ctx.characters?.[ctx.clientId] ? ctx.clientId : Object.keys(ctx.characters || {})[0];
+    const leftContent = ui.leftPanel === "library" && isDm ? libraryPanel(room, assets) : ui.leftPanel === "scenes" ? scenesPanel(room, isDm) : ui.leftPanel === "tools" ? toolsPanel(grid, entries.length, isDm, diceColor) : "";
+    const rightContent = ui.rightPanel === "inspector" ? inspectorMarkup(entries, isDm, ctx.clientId) : ui.rightPanel === "initiative" ? initiativePanelMarkup(scene, order, isDm) : ui.rightPanel === "character" ? characterPanelMarkup(ctx.characters || {}, characterId, isDm, ctx.clientId, scene) : "";
 
     root.innerHTML = `<div class="vtt-shell ${isDm ? "is-dm" : "is-player"}">
       <div id="vtt-viewport" class="vtt-viewport" tabindex="0">
@@ -566,16 +422,15 @@
           ${measurementMarkup(room, metrics)}
           <svg id="vtt-draft-layer" class="vtt-draft-layer" viewBox="0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}"></svg>
           ${pingMarkup(scene, metrics)}
-          ${diceMarkup(scene, metrics)}
           ${!(scene.tokens || []).length && !(scene.objects || []).length && !(scene.annotations || []).length ? `<div class="vtt-stage-empty" style="left:${metrics.originX}px;top:${metrics.originY}px"><span>◇</span><strong>Пустая сцена</strong><p>${isDm ? "Открой ресурсы и перетащи карту или токен." : "Ведущий ещё ничего не разместил."}</p></div>` : ""}
         </div>
         <div id="vtt-marquee" class="vtt-marquee hidden"></div>
       </div>
 
       <header class="vtt-top-dock">
-        <div class="vtt-global-nav"><button data-vtt-view="sheet">Лист</button><button data-vtt-view="dice">Кости</button><button data-vtt-panel-left="scenes" class="${ui.leftPanel === "scenes" ? "active" : ""}"><span>▤</span>${esc(scene.name)}</button></div>
+        <div class="vtt-global-nav"><button data-vtt-panel-right="character" class="${ui.rightPanel === "character" ? "active" : ""}">Лист</button><button data-vtt-view="dice">Кости</button><button data-vtt-panel-left="scenes" class="${ui.leftPanel === "scenes" ? "active" : ""}"><span>▤</span>${esc(scene.name)}</button></div>
         <div class="vtt-scene-status"><strong>${esc(scene.name)}</strong><small>${current ? `Раунд ${Number(scene.initiative.round || 1)} · ${esc(current.name)}` : "Сцена сохраняется автоматически"}</small></div>
-        <div class="vtt-top-actions"><button id="vtt-quick-d20" title="Бросить к20 в центре экрана">🎲 к20</button>${ownToken ? `<button class="primary" id="vtt-own-initiative">Инициатива</button>` : ""}${isDm ? `<button id="vtt-add-party">＋ Партия</button><button id="vtt-scene-settings">⚙</button>` : ""}</div>
+        <div class="vtt-top-actions">${ownToken ? `<button id="vtt-focus-own" title="Вернуться к своему токену">◎</button>` : ""}<button id="vtt-quick-d20" title="Бросить к20 в центре экрана">🎲 к20</button>${ownToken ? `<button class="primary" id="vtt-own-initiative">Инициатива</button>` : ""}${isDm ? `<button id="vtt-add-party">＋ Партия</button><button id="vtt-scene-settings">⚙</button>` : ""}</div>
       </header>
 
       <nav class="vtt-left-rail">
@@ -585,7 +440,7 @@
         <i></i>${toolRailMarkup(isDm)}
       </nav>
 
-      <nav class="vtt-right-rail"><button data-vtt-panel-right="inspector" class="${ui.rightPanel === "inspector" ? "active" : ""}" title="Инспектор"><span>◆</span>${entries.length ? `<b>${entries.length}</b>` : ""}</button><button data-vtt-panel-right="initiative" class="${ui.rightPanel === "initiative" ? "active" : ""}" title="Инициатива"><span>⚔</span>${order.length ? `<b>${order.length}</b>` : ""}</button></nav>
+      <nav class="vtt-right-rail"><button data-vtt-panel-right="character" class="${ui.rightPanel === "character" ? "active" : ""}" title="Мини-лист персонажа"><span>☷</span></button><button data-vtt-panel-right="inspector" class="${ui.rightPanel === "inspector" ? "active" : ""}" title="Инспектор"><span>◆</span>${entries.length ? `<b>${entries.length}</b>` : ""}</button><button data-vtt-panel-right="initiative" class="${ui.rightPanel === "initiative" ? "active" : ""}" title="Инициатива"><span>⚔</span>${order.length ? `<b>${order.length}</b>` : ""}</button></nav>
 
       ${leftContent ? `<aside class="vtt-floating-panel vtt-panel-left">${leftContent}</aside>` : ""}
       ${rightContent ? `<aside class="vtt-floating-panel vtt-panel-right">${rightContent}</aside>` : ""}
@@ -601,6 +456,35 @@
     return `<div class="vtt-panel-head"><div><span class="eyebrow">Порядок боя</span><h3>Инициатива</h3></div>${scene.initiative?.active ? `<b>Раунд ${Number(scene.initiative.round || 1)}</b>` : ""}</div>
       <div class="vtt-initiative-list">${order.length ? order.map((token,index) => `<article class="${token.id === scene.initiative?.currentTokenId ? "active" : ""}"><button type="button" data-vtt-focus-token="${esc(token.id)}"><small>${index+1}</small><span><strong>${esc(token.name)}</strong><em>${token.playerId ? "персонаж" : "NPC"}</em></span></button>${isDm ? `<input data-vtt-initiative="${esc(token.id)}" type="number" value="${Number(token.initiative)}">` : `<b>${Number(token.initiative)}</b>`}</article>`).join("") : `<div class="vtt-empty-side">Броски инициативы появятся здесь.</div>`}</div>
       ${isDm ? `<div class="vtt-initiative-actions"><button class="primary" id="vtt-next-turn" ${order.length ? "" : "disabled"}>Следующий ход</button><button id="vtt-clear-initiative" ${order.length ? "" : "disabled"}>Сбросить</button></div>` : ""}`;
+  }
+
+
+  function characterPanelMarkup(characters, selectedId, isDm, clientId, scene) {
+    const list = Object.values(characters || {}).filter(Boolean).filter(character => isDm || character.playerId === clientId);
+    const character = list.find(entry => entry.playerId === selectedId) || list.find(entry => entry.playerId === clientId) || list[0];
+    if (!character) return `<div class="vtt-empty-side"><span>☷</span><strong>Лист недоступен</strong><p>Подключи персонажа к комнате, и его основные параметры появятся здесь.</p></div>`;
+    const token = (scene.tokens || []).find(entry => entry.playerId === character.playerId);
+    const canRoll = character.playerId === clientId;
+    const rollButton = (formula,label,content,className="") => `<button type="button" class="${className}" data-vtt-character-formula="${esc(formula)}" data-vtt-character-label="${esc(label)}" ${canRoll ? "" : "disabled"}>${content}</button>`;
+    const abilities = (character.abilities || []).map(entry => rollButton(entry.formula,`Проверка: ${entry.name}`,`<small>${esc(String(entry.key).toUpperCase())}</small><strong>${Number(entry.value)}</strong><b>${bonusText(entry.modifier)}</b>`,`vtt-character-ability`)).join("");
+    const saves = (character.saves || []).map(entry => rollButton(entry.formula,`Спасбросок: ${entry.name}`,`<i>${entry.proficient ? "◆" : "·"}</i><em>${esc(entry.name)}</em><b>${bonusText(entry.bonus)}</b>`,entry.proficient ? "proficient" : "")).join("");
+    const skills = (character.skills || []).map(entry => rollButton(entry.formula,`Навык: ${entry.name}`,`<i>${entry.expertise ? "✦" : entry.proficient ? "◆" : "·"}</i><em>${esc(entry.name)}</em><small>${esc(String(entry.ability || "").toUpperCase())}</small><b>${bonusText(entry.bonus)}</b>`,entry.expertise ? "expertise" : entry.proficient ? "proficient" : "")).join("");
+    const attacks = (character.attacks || []).map(attack => `<article><div><strong>${esc(attack.name)}</strong><small>${esc(attack.damageType || "Атака")}</small></div>${rollButton(attack.attackFormula,`Атака: ${attack.name}`,esc(attack.attackFormula),"vtt-formula-button")}${attack.damageFormula ? rollButton(attack.damageFormula,`Урон: ${attack.name}`,esc(attack.damageFormula),"vtt-formula-button damage") : ""}</article>`).join("");
+    const equipment = (character.equipment || []).map(item => `<article><span>${esc(item.icon || "◇")}</span><div><small>${esc(item.slotLabel)}</small><strong>${esc(item.name)}</strong></div>${Number(item.quantity) > 1 ? `<b>${Number(item.quantity)}</b>` : ""}</article>`).join("");
+    const quickItems = (character.quickItems || []).map(item => `<article><span>${esc(item.icon || "◇")}</span><div><small>Быстрый слот ${Number(item.index)+1}</small><strong>${esc(item.name)}</strong></div>${Number(item.quantity) > 0 ? `<b>${Number(item.quantity)}</b>` : ""}</article>`).join("");
+    return `<div class="vtt-character-sheet">
+      <div class="vtt-panel-head"><div><span class="eyebrow">Быстрый просмотр</span><h3>Лист персонажа</h3></div><b>${Number(character.level || 1)} ур.</b></div>
+      ${isDm && list.length > 1 ? `<div class="vtt-character-switcher">${list.map(entry => `<button type="button" data-vtt-character-player="${esc(entry.playerId)}" class="${entry.playerId === character.playerId ? "active" : ""}" title="${esc(entry.name)}">${entry.portraitUrl ? `<img src="${esc(entry.portraitUrl)}" alt="">` : `<span>${esc((entry.name || "?")[0])}</span>`}</button>`).join("")}</div>` : ""}
+      <header class="vtt-character-hero">${character.portraitUrl ? `<img src="${esc(character.portraitUrl)}" alt="">` : `<span>${esc((character.name || "?")[0])}</span>`}<div><strong>${esc(character.name)}</strong><small>${esc(character.classSummary || "Искатель приключений")}${character.race ? ` · ${esc(character.race)}` : ""}</small></div></header>
+      <div class="vtt-character-vitals"><article><small>HP</small><strong>${Number(character.hp)}/${Number(character.hpMax)}${Number(character.tempHp) ? ` +${Number(character.tempHp)}` : ""}</strong></article><article><small>КД</small><strong>${Number(character.ac)}</strong></article><article><small>Скорость</small><strong>${Number(character.speed)} фт.</strong></article><article><small>Инициатива</small><strong>${bonusText(character.initiativeBonus)}</strong></article><article><small>Мастерство</small><strong>${bonusText(character.proficiency)}</strong></article><article><small>Пассивка</small><strong>${Number(character.passivePerception)}</strong></article></div>
+      <div class="vtt-character-abilities">${abilities}</div>
+      ${attacks ? `<details class="vtt-character-section" open><summary>Атаки и формулы</summary><div class="vtt-character-attacks">${attacks}</div></details>` : ""}
+      ${(equipment || quickItems) ? `<details class="vtt-character-section" open><summary>${esc(character.combatSetName || "Боевой комплект")}</summary><div class="vtt-character-equipment">${equipment}${quickItems}</div></details>` : ""}
+      <details class="vtt-character-section" open><summary>Спасброски</summary><div class="vtt-character-checks">${saves}</div></details>
+      <details class="vtt-character-section"><summary>Навыки</summary><div class="vtt-character-checks skills">${skills}</div></details>
+      ${!canRoll ? `<p class="vtt-character-readonly">Броски доступны владельцу персонажа. Ведущий видит значения без подмены игрока.</p>` : ""}
+      <div class="vtt-character-actions">${token ? `<button type="button" data-vtt-character-focus="${esc(token.id)}">◎ Найти токен</button>` : ""}<button type="button" class="primary" data-vtt-open-full-sheet="${esc(character.playerId)}">Открыть полный лист</button></div>
+    </div>`;
   }
 
   function bind(root, ctx, signal, metrics) {
@@ -667,26 +551,54 @@
     root.querySelectorAll("[data-vtt-panel-right]").forEach(button => button.addEventListener("click", () => {
       const panel = button.dataset.vttPanelRight;
       ui.rightPanel = ui.rightPanel === panel ? null : panel;
+      saveUiState();
       render(root, ctx);
+    }, { signal }));
+    root.querySelectorAll("[data-vtt-character-player]").forEach(button => button.addEventListener("click", () => {
+      ui.characterPlayerId = button.dataset.vttCharacterPlayer;
+      render(root, ctx);
+    }, { signal }));
+    root.querySelector("[data-vtt-open-full-sheet]")?.addEventListener("click", event => ctx.actions?.openSheet?.(event.currentTarget.dataset.vttOpenFullSheet), { signal });
+    root.querySelectorAll("[data-vtt-character-formula]").forEach(button => button.addEventListener("click", () => {
+      if (button.disabled) return;
+      const visibility = window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public";
+      ctx.actions?.roll?.(button.dataset.vttCharacterFormula,button.dataset.vttCharacterLabel || button.dataset.vttCharacterFormula,visibility,"normal");
     }, { signal }));
     root.querySelectorAll("[data-vtt-tool]").forEach(button => button.addEventListener("click", () => {
       ui.tool = button.dataset.vttTool;
+      if (ui.tool === "dice") ui.leftPanel = "tools";
       render(root, ctx);
     }, { signal }));
-    root.querySelectorAll("[data-vtt-die-sides]").forEach(button => button.addEventListener("click", () => {
-      ui.dieSides = Number(button.dataset.vttDieSides) || 20;
-      ui.tool = "dice";
-      render(root, ctx);
-    }, { signal }));
+    root.querySelectorAll("[data-vtt-die-add]").forEach(button => button.addEventListener("click", () => { window.TT_DICE_TRAY?.add(button.dataset.vttDieAdd,1); render(root,ctx); }, { signal }));
+    root.querySelectorAll("[data-vtt-die-sub]").forEach(button => button.addEventListener("click", () => { window.TT_DICE_TRAY?.add(button.dataset.vttDieSub,-1); render(root,ctx); }, { signal }));
+    root.querySelector("#vtt-dice-modifier")?.addEventListener("change", event => { window.TT_DICE_TRAY?.setModifier(event.currentTarget.value); render(root,ctx); }, { signal });
+    root.querySelector("#vtt-dice-visibility")?.addEventListener("click", () => { window.TT_DICE_TRAY?.setVisibility(window.TT_DICE_TRAY?.state?.visibility === "private" ? "public" : "private"); render(root,ctx); }, { signal });
+    root.querySelector("#vtt-dice-reset")?.addEventListener("click", () => { window.TT_DICE_TRAY?.reset(); render(root,ctx); }, { signal });
+    root.querySelector("#vtt-dice-clear")?.addEventListener("click", () => { window.TT_DICE_TRAY?.clear(); render(root,ctx); }, { signal });
+    root.querySelector("#vtt-dice-color")?.addEventListener("change", async event => { await ctx.actions?.savePreferences?.({ diceColor:event.currentTarget.value }); render(root,ctx); }, { signal });
+    root.querySelector("#vtt-dice-formula-input")?.addEventListener("input", event => { ui.diceFormula = event.currentTarget.value; }, { signal });
+    root.querySelector("#vtt-dice-formula-form")?.addEventListener("submit", event => {
+      event.preventDefault();
+      const formula = String(new FormData(event.currentTarget).get("formula") || "").trim();
+      if (!formula) return ctx.toast("Введи формулу, например 3d6+1");
+      ui.diceFormula = formula;
+      const point = cameraCenterGrid();
+      emit(ctx,"scene:dice-roll",{ ...point, formula, visibility:window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public" });
+    }, { signal });
 
     root.querySelector("#vtt-zoom-in")?.addEventListener("click", () => { const point = cameraCenterGrid(); centerCamera(point.x, point.y, camera.zoom * 1.2); }, { signal });
     root.querySelector("#vtt-zoom-out")?.addEventListener("click", () => { const point = cameraCenterGrid(); centerCamera(point.x, point.y, camera.zoom / 1.2); }, { signal });
     root.querySelector("#vtt-zoom-value")?.addEventListener("click", () => centerCamera(0, 0, 1), { signal });
     root.querySelector("#vtt-camera-reset")?.addEventListener("click", () => centerCamera(0, 0, 0.82), { signal });
+    root.querySelector("#vtt-focus-own")?.addEventListener("click", () => { if (ownToken) centerCamera(ownToken.x, ownToken.y, Math.max(camera.zoom,0.82)); }, { signal });
+    root.querySelectorAll("[data-vtt-character-focus]").forEach(button => button.addEventListener("click", () => {
+      const token = (scene.tokens || []).find(entry => entry.id === button.dataset.vttCharacterFocus);
+      if (token) centerCamera(token.x, token.y, Math.max(camera.zoom,0.82));
+    }, { signal }));
     root.querySelector("#vtt-clear-measure")?.addEventListener("click", () => { measurementByScene.delete(sceneKey(room)); render(root, ctx); }, { signal });
     root.querySelector("#vtt-quick-d20")?.addEventListener("click", () => {
       const point = cameraCenterGrid();
-      emit(ctx, "scene:dice-roll", { x:point.x, y:point.y, sides:20 });
+      emit(ctx, "scene:dice-roll", { x:point.x, y:point.y, dice:[{ sides:20, count:1 }], modifier:0, visibility:window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public" });
     }, { signal });
 
     viewport.addEventListener("wheel", event => {
@@ -753,7 +665,9 @@
       }
       if (ui.tool === "dice") {
         const point = screenToGrid(event.clientX, event.clientY, "cell");
-        emit(ctx, "scene:dice-roll", { ...point, sides:ui.dieSides });
+        const dice = window.TT_DICE_TRAY?.selection?.() || [];
+        if (!dice.length) return ctx.toast("Добавь хотя бы один кубик");
+        emit(ctx, "scene:dice-roll", { ...point, dice, modifier:Number(window.TT_DICE_TRAY?.state?.modifier) || 0, visibility:window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public" });
         return;
       }
       if (ui.tool === "text") {
@@ -789,6 +703,7 @@
 
     bindSceneItems(root, ctx, viewport, metrics, screenToGridRaw, signal);
     bindPanels(root, ctx, metrics, centerCamera, cameraCenterGrid, signal);
+    window.TT_DICE_PHYSICS?.play(scene.diceRolls?.length ? scene.diceRolls : scene.diceRoll);
   }
 
   function handleKeydown(event, root, ctx, viewport) {
@@ -805,6 +720,13 @@
       measurementByScene.delete(sceneKey(ctx.room));
       ui.tool = "select";
       render(root, ctx);
+      return;
+    }
+    if (event.shiftKey && key === "s") {
+      ui.rightPanel = ui.rightPanel === "character" ? null : "character";
+      saveUiState();
+      render(root, ctx);
+      event.preventDefault();
       return;
     }
     if (event.ctrlKey || event.metaKey) {
@@ -836,6 +758,7 @@
     }
     if ({ v:"select", h:"pan", m:"measure", p:"ping", r:"rect", c:"circle", n:"cone", l:"line", d:"draw", t:"text", k:"dice" }[key]) {
       ui.tool = { v:"select", h:"pan", m:"measure", p:"ping", r:"rect", c:"circle", n:"cone", l:"line", d:"draw", t:"text", k:"dice" }[key];
+      if (ui.tool === "dice") ui.leftPanel = "tools";
       render(root, ctx);
     }
   }
@@ -1102,6 +1025,18 @@
     root.querySelector("#vtt-next-turn")?.addEventListener("click", () => emit(ctx, "initiative:next"), { signal });
     root.querySelector("#vtt-clear-initiative")?.addEventListener("click", () => { if (confirm("Сбросить инициативу?")) emit(ctx, "initiative:clear"); }, { signal });
 
+    root.querySelectorAll("[data-vtt-select-set]").forEach(button => button.addEventListener("click", () => {
+      const mode = button.dataset.vttSelectSet;
+      const tokens = (scene.tokens || []).filter(token => mode === "tokens" || mode === "party" && token.playerId || mode === "npc" && !token.playerId);
+      setSelection(room,tokens.map(token => ({ kind:"token", id:token.id })));
+      render(root,ctx);
+    }, { signal }));
+    root.querySelector("[data-vtt-group-token-settings]")?.addEventListener("click", () => openGroupTokenEditor(ctx,getSelection(room).filter(ref => ref.kind === "token").map(ref => ref.id)), { signal });
+    root.querySelector("[data-vtt-group-roll-initiative]")?.addEventListener("click", () => {
+      const tokenIds = getSelection(room).filter(ref => ref.kind === "token").map(ref => ref.id);
+      emit(ctx,"scene:tokens-batch-update",{ tokenIds, rollInitiative:true },`Инициатива брошена: ${tokenIds.length}`);
+    }, { signal });
+
     root.querySelectorAll("[data-vtt-edit-token]").forEach(button => button.addEventListener("click", () => openTokenEditor(ctx, (scene.tokens || []).find(token => token.id === button.dataset.vttEditToken)), { signal }));
     root.querySelectorAll("[data-vtt-roll]").forEach(button => button.addEventListener("click", () => emit(ctx, "initiative:roll", { tokenId:button.dataset.vttRoll }), { signal }));
     root.querySelectorAll("[data-vtt-edit-object]").forEach(button => button.addEventListener("click", () => openObjectEditor(ctx, (scene.objects || []).find(object => object.id === button.dataset.vttEditObject)), { signal }));
@@ -1146,6 +1081,32 @@
       return { kind:item.entry.kind, id:item.entry.value.id, dx, dy };
     });
     emit(ctx, "scene:items-transform", { moves }, "Объекты выровнены");
+  }
+
+  function openGroupTokenEditor(ctx, tokenIds) {
+    const ids = [...new Set((tokenIds || []).filter(Boolean))];
+    if (!ids.length || ctx.room.dmId !== ctx.clientId) return;
+    const tokens = (ctx.room.scene.tokens || []).filter(token => ids.includes(token.id));
+    ctx.openModal(`Группа токенов · ${tokens.length}`, `<div class="vtt-modal-form vtt-group-editor"><p class="read-only">Пустое поле не изменяет значение. Можно выдать всей группе одинаковую инициативу, HP, метку, видимость или блокировку.</p><div class="three-col"><label>Одинаковая инициатива<input id="vtt-group-initiative" type="number" placeholder="без изменений"></label><label>Текущие HP<input id="vtt-group-hp" type="number" min="0" placeholder="без изменений"></label><label>Максимум HP<input id="vtt-group-hp-max" type="number" min="1" placeholder="без изменений"></label></div><div class="three-col"><label>Временные HP<input id="vtt-group-temp-hp" type="number" min="0" placeholder="без изменений"></label><label>Метка<input id="vtt-group-badge" maxlength="40" placeholder="без изменений"></label><label>Цвет метки<input id="vtt-group-badge-color" type="color" value="#f4c875"></label></div><div class="two-col"><label>Видимость<select id="vtt-group-hidden"><option value="keep">Не менять</option><option value="show">Показать</option><option value="hide">Скрыть</option></select></label><label>Блокировка<select id="vtt-group-locked"><option value="keep">Не менять</option><option value="unlock">Разблокировать</option><option value="lock">Заблокировать</option></select></label></div><label class="condition-chip"><input id="vtt-group-badge-enable" type="checkbox">Изменить метку у всей группы, включая возможность очистить её</label><div class="modal-actions"><button id="vtt-group-apply" class="primary">Применить</button><button id="vtt-group-roll" type="button">Бросить инициативу</button><button id="vtt-group-clear-init" type="button">Убрать инициативу</button><button id="vtt-modal-cancel" type="button">Отмена</button></div></div>`);
+    const valueOrMissing = id => {
+      const input = document.querySelector(id);
+      return input && String(input.value).trim() !== "" ? Number(input.value) : undefined;
+    };
+    document.querySelector("#vtt-group-apply")?.addEventListener("click", async () => {
+      const patch = {};
+      const initiative = valueOrMissing("#vtt-group-initiative"); if (initiative !== undefined) patch.initiative = initiative;
+      const hp = valueOrMissing("#vtt-group-hp"); if (hp !== undefined) patch.hp = hp;
+      const hpMax = valueOrMissing("#vtt-group-hp-max"); if (hpMax !== undefined) patch.hpMax = hpMax;
+      const tempHp = valueOrMissing("#vtt-group-temp-hp"); if (tempHp !== undefined) patch.tempHp = tempHp;
+      if (document.querySelector("#vtt-group-badge-enable")?.checked) { patch.badge = document.querySelector("#vtt-group-badge")?.value || ""; patch.badgeColor = document.querySelector("#vtt-group-badge-color")?.value; }
+      const hidden = document.querySelector("#vtt-group-hidden")?.value; if (hidden !== "keep") patch.hidden = hidden === "hide";
+      const locked = document.querySelector("#vtt-group-locked")?.value; if (locked !== "keep") patch.locked = locked === "lock";
+      await emit(ctx,"scene:tokens-batch-update",{ tokenIds:ids, patch },`Обновлено токенов: ${ids.length}`);
+      ctx.closeModal();
+    });
+    document.querySelector("#vtt-group-roll")?.addEventListener("click", async () => { await emit(ctx,"scene:tokens-batch-update",{ tokenIds:ids, rollInitiative:true },`Инициатива брошена: ${ids.length}`); ctx.closeModal(); });
+    document.querySelector("#vtt-group-clear-init")?.addEventListener("click", async () => { await emit(ctx,"scene:tokens-batch-update",{ tokenIds:ids, clearInitiative:true },"Инициатива группы очищена"); ctx.closeModal(); });
+    document.querySelector("#vtt-modal-cancel")?.addEventListener("click",ctx.closeModal);
   }
 
   function openSceneCreate(ctx) {
@@ -1234,6 +1195,7 @@
     spaceHeld = false;
     if (controller) controller.abort();
     controller = null;
+    window.TT_DICE_PHYSICS?.deactivate();
   }
 
   window.TT_VTT = { render, deactivate };

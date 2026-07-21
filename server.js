@@ -76,6 +76,73 @@ function sheetInitiativeBonus(sheet) {
 const COMBAT_SLOT_KEYS = ["head", "neck", "cloak", "body", "mainHand", "offHand", "belt", "feet", "ammo"];
 const COMBAT_SET_IDS = ["a", "b", "c"];
 const COMBAT_CONDITIONS = ["Скрыт", "Ослеплён", "Очарован", "Оглушён", "Отравлен", "Испуган", "Схвачен", "Недееспособен", "Невидим", "Парализован", "Окаменел", "Сбит с ног", "Опутан", "Без сознания", "Истощён", "Мёртв"];
+const TABLE_DIE_SIDES = [4,6,8,10,12,20,100];
+const MAX_TABLE_DICE = 24;
+const MAX_ACTIVE_TABLE_ROLLS = 20;
+const ACTIVE_TABLE_ROLL_MS = 20000;
+
+function normalizeDiceColor(value, fallback = "#d3ad6e") {
+  return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value) : fallback;
+}
+
+function normalizeTableDiceSelection(source) {
+  const entries = Array.isArray(source) ? source : [];
+  let remaining = MAX_TABLE_DICE;
+  return entries.slice(0, TABLE_DIE_SIDES.length * 2).map(entry => {
+    const sides = TABLE_DIE_SIDES.includes(Number(entry?.sides)) ? Number(entry.sides) : 0;
+    if (!sides || remaining <= 0) return null;
+    const cost = sides === 100 ? 2 : 1;
+    const count = Math.max(0, Math.min(Math.floor(remaining / cost), Number(entry?.count) || 0));
+    if (!count) return null;
+    remaining -= count * cost;
+    return { sides, count };
+  }).filter(Boolean);
+}
+
+function tableDiceFormula(sets, modifier = 0) {
+  const dice = sets.map(set => `${Number(set.count) > 1 ? `${set.count}к` : `к`}${set.sides}`);
+  const flat = Number(modifier) || 0;
+  if (flat) dice.push(`${flat > 0 ? "+" : "−"}${Math.abs(flat)}`);
+  return dice.join(" ") || "к20";
+}
+
+function normalizeSceneDiceRoll(source, coordinate = value => Math.max(-500, Math.min(500, Math.round((Number(value) || 0) * 10) / 10))) {
+  if (!source || typeof source !== "object") return null;
+  const at = Number(source.at) || Date.now();
+  if (Date.now() - at >= ACTIVE_TABLE_ROLL_MS) return null;
+  const legacySides = TABLE_DIE_SIDES.includes(Number(source.sides)) ? Number(source.sides) : 20;
+  const rawSets = Array.isArray(source.sets) && source.sets.length
+    ? source.sets
+    : [{ sides:legacySides, values:[Math.max(1, Math.min(legacySides, Number(source.value) || 1))] }];
+  let remaining = MAX_TABLE_DICE;
+  const sets = rawSets.map(raw => {
+    const sides = TABLE_DIE_SIDES.includes(Number(raw?.sides)) ? Number(raw.sides) : 0;
+    if (!sides || remaining <= 0) return null;
+    const values = (Array.isArray(raw?.values) ? raw.values : []).slice(0, remaining).map(value => Math.max(1, Math.min(sides, Number(value) || 1)));
+    if (!values.length) return null;
+    remaining -= values.length;
+    return { sides, values };
+  }).filter(Boolean);
+  if (!sets.length) return null;
+  const modifier = Math.max(-999, Math.min(999, Number(source.modifier) || 0));
+  const total = sets.flatMap(set => set.values).reduce((sum, value) => sum + value, modifier);
+  const visibility = ["private","gm"].includes(source.visibility) ? source.visibility : "public";
+  return {
+    id:cleanText(source.id,80) || id(),
+    x:coordinate(source.x), y:coordinate(source.y),
+    sets,
+    modifier,
+    total,
+    formula:cleanText(source.formula,120) || tableDiceFormula(sets.map(set => ({ sides:set.sides, count:set.values.length })), modifier),
+    color:normalizeDiceColor(source.color),
+    at,
+    by:cleanText(source.by,60),
+    visibility,
+    playerId: cleanText(source.playerId,80),
+    privateToDm: Boolean(source.privateToDm)
+  };
+}
+
 
 function emptyCombatSet(setId, index = 0) {
   return {
@@ -169,6 +236,7 @@ function defaultScene(name = "Главная сцена") {
     annotations: [],
     ping: null,
     diceRoll: null,
+    diceRolls: [],
     combatSettings: { actionPolicy: "soft" },
     initiative: { active: false, round: 1, currentTokenId: "", turnState:null, resources:{} },
     createdAt: Date.now(),
@@ -299,15 +367,10 @@ function normalizeScene(source, players = {}) {
     color: /^#[0-9a-f]{6}$/i.test(pingSource.color) ? pingSource.color : "#f4c875",
     at: Number(pingSource.at) || Date.now(), by: cleanText(pingSource.by, 60)
   } : null;
-  const diceSource = incoming.diceRoll && typeof incoming.diceRoll === "object" ? incoming.diceRoll : null;
-  const diceRoll = diceSource && Date.now() - Number(diceSource.at || 0) < 15000 ? {
-    id: cleanText(diceSource.id, 80) || id(),
-    x: normalizeCoordinate(diceSource.x), y: normalizeCoordinate(diceSource.y),
-    sides: [4,6,8,10,12,20,100].includes(Number(diceSource.sides)) ? Number(diceSource.sides) : 20,
-    value: Math.max(1, Math.min(Number(diceSource.sides) || 20, Number(diceSource.value) || 1)),
-    color: /^#[0-9a-f]{6}$/i.test(diceSource.color) ? diceSource.color : "#f4c875",
-    at: Number(diceSource.at) || Date.now(), by: cleanText(diceSource.by, 60)
-  } : null;
+  const diceCandidates = Array.isArray(incoming.diceRolls) ? incoming.diceRolls : [];
+  if (incoming.diceRoll && typeof incoming.diceRoll === "object") diceCandidates.push(incoming.diceRoll);
+  const diceRolls = [...new Map(diceCandidates.map(source => normalizeSceneDiceRoll(source, normalizeCoordinate)).filter(Boolean).sort((a,b) => a.at-b.at).map(roll => [roll.id,roll])).values()].slice(-MAX_ACTIVE_TABLE_ROLLS);
+  const diceRoll = diceRolls.at(-1) || null;
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
@@ -323,6 +386,7 @@ function normalizeScene(source, players = {}) {
     annotations,
     ping,
     diceRoll,
+    diceRolls,
     combatSettings: {
       actionPolicy: ["free","soft","strict"].includes(incoming.combatSettings?.actionPolicy) ? incoming.combatSettings.actionPolicy : "soft"
     },
@@ -681,8 +745,9 @@ function initiativeOrder(scene) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 9,
+    schemaVersion: 10,
     characterName: playerName,
+    diceColor: "#d3ad6e",
     vttUiMode: "veteran",
     vttHotbar: Array(10).fill(null),
     classKey: "",
@@ -967,7 +1032,8 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 9;
+  normalized.schemaVersion = 10;
+  normalized.diceColor = normalizeDiceColor(incoming.diceColor, base.diceColor);
   normalized.vttUiMode = incoming.vttUiMode === "assistant" ? "assistant" : "veteran";
   normalized.vttHotbar = Array.from({ length:10 }, (_, index) => {
     const raw = Array.isArray(incoming.vttHotbar) ? incoming.vttHotbar[index] : null;
@@ -1017,6 +1083,15 @@ function publicRoom(room, viewerId = "") {
   });
   const scene = activeScene(room);
   const isDm = viewerId === room.dmId;
+  const canSeeSceneRoll = roll => {
+    const visibility = ["private","gm"].includes(roll?.visibility) ? roll.visibility : "public";
+    if (roll?.privateToDm) return isDm;
+    if (visibility === "gm") return isDm;
+    if (visibility === "private") return isDm || cleanText(roll?.playerId,80) === viewerId;
+    return true;
+  };
+  scene.diceRolls = (Array.isArray(scene.diceRolls) ? scene.diceRolls : []).filter(canSeeSceneRoll);
+  scene.diceRoll = canSeeSceneRoll(scene.diceRoll) ? scene.diceRoll : scene.diceRolls.at(-1) || null;
   if (!isDm) {
     scene.tokens = scene.tokens.filter(token => !token.hidden).map(token => {
       if (token.playerId) return token;
@@ -1615,6 +1690,48 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
+  socket.on("scene:tokens-batch-update", ({ tokenIds, patch = {}, rollInitiative, clearInitiative } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет группу токенов" });
+    const scene = activeScene(room);
+    const ids = [...new Set((Array.isArray(tokenIds) ? tokenIds : []).map(value => cleanText(value,80)).filter(Boolean))].slice(0,100);
+    const tokens = scene.tokens.filter(token => ids.includes(token.id));
+    if (!tokens.length) return reply({ ok:false, error:"В группе нет токенов" });
+    rememberScene(room, scene);
+    const has = key => Object.prototype.hasOwnProperty.call(patch || {}, key);
+    for (const token of tokens) {
+      if (rollInitiative) token.initiative = crypto.randomInt(1,21) + Number(token.initiativeBonus || 0);
+      else if (clearInitiative) token.initiative = null;
+      else if (has("initiative")) token.initiative = Math.max(-1000,Math.min(1000,Number(patch.initiative)||0));
+      if (has("hidden")) token.hidden = Boolean(patch.hidden);
+      if (has("locked")) token.locked = Boolean(patch.locked);
+      if (has("badge")) token.badge = cleanText(patch.badge,40);
+      if (has("badgeColor") && /^#[0-9a-f]{6}$/i.test(String(patch.badgeColor || ""))) token.badgeColor = patch.badgeColor;
+      if (has("hpMax")) token.hpMax = Math.max(1,Math.min(1000000,Number(patch.hpMax)||1));
+      if (has("hp")) token.hp = Math.max(0,Math.min(Number(token.hpMax)||1,Number(patch.hp)||0));
+      if (has("tempHp")) token.tempHp = Math.max(0,Math.min(1000000,Number(patch.tempHp)||0));
+      if (token.playerId && room.players?.[token.playerId]?.sheet && (has("hp") || has("hpMax") || has("tempHp"))) {
+        const sheet = room.players[token.playerId].sheet;
+        sheet.hpMax = token.hpMax;
+        sheet.hpCurrent = token.hp;
+        sheet.hpTemp = token.tempHp;
+        room.players[token.playerId].sheet = normalizeSheet(sheet, room.players[token.playerId].name);
+      }
+    }
+    const order = initiativeOrder(scene);
+    scene.initiative.active = order.length > 0;
+    if (!scene.initiative.active) {
+      scene.initiative.currentTokenId = "";
+      scene.initiative.round = 1;
+    } else if (!order.some(token => token.id === scene.initiative.currentTokenId)) {
+      scene.initiative.currentTokenId = order[0].id;
+      scene.initiative.round = Math.max(1,Number(scene.initiative.round || 1));
+    }
+    setActiveScene(room,scene); saveRooms(); emitRoom(code);
+    reply({ ok:true, updated:tokens.length });
+  });
+
   socket.on("scene:token-hp", ({ tokenId, hp, hpMax, tempHp } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
@@ -1643,26 +1760,64 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("scene:dice-roll", ({ x, y, sides } = {}, reply = () => {}) => {
+  socket.on("scene:dice-roll", ({ x, y, sides, dice, modifier, visibility, formula:customFormula } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     const player = room?.players?.[clientId];
     if (!room || !player) return reply({ ok:false, error:"Игрок не подключён" });
     const scene = activeScene(room);
-    const safeSides = [4,6,8,10,12,20,100].includes(Number(sides)) ? Number(sides) : 20;
-    const value = crypto.randomInt(1, safeSides + 1);
-    const ownToken = scene.tokens.find(token => token.playerId === clientId);
-    scene.diceRoll = {
+    const safeVisibility = ["private","gm"].includes(visibility) ? visibility : "public";
+
+    let sets;
+    let flat;
+    let formula;
+    let detail;
+    let natural;
+    if (String(customFormula || "").trim()) {
+      const parsed = parseDiceFormula(customFormula, "normal");
+      if (!parsed.ok) return reply(parsed);
+      if (parsed.detail.some(entry => Number(entry.sign) < 0 || !TABLE_DIE_SIDES.includes(Number(entry.sides)))) {
+        return reply({ ok:false, error:"Физический дайстрей поддерживает к4, к6, к8, к10, к12, к20 и к100 без вычитания костей" });
+      }
+      const physicalCount = parsed.detail.reduce((sum, entry) => sum + Number(entry.count || 0) * (Number(entry.sides) === 100 ? 2 : 1), 0);
+      if (physicalCount > MAX_TABLE_DICE) return reply({ ok:false, error:`На физическом столе помещается не больше ${MAX_TABLE_DICE} костей` });
+      sets = parsed.detail.map(entry => ({ sides:Number(entry.sides), values:[...(entry.rolls || [])].map(Number) }));
+      flat = Math.max(-999, Math.min(999, Number(parsed.modifier) || 0));
+      formula = tableDiceFormula(sets.map(set => ({ sides:set.sides, count:set.values.length })), flat);
+      detail = parsed.detail;
+      natural = parsed.natural;
+    } else {
+      const selection = normalizeTableDiceSelection(Array.isArray(dice) && dice.length ? dice : [{ sides:Number(sides) || 20, count:1 }]);
+      if (!selection.length) return reply({ ok:false, error:"Добавь хотя бы один кубик" });
+      flat = Math.max(-999, Math.min(999, Number(modifier) || 0));
+      sets = selection.map(set => ({ sides:set.sides, values:Array.from({ length:set.count }, () => crypto.randomInt(1, set.sides + 1)) }));
+      formula = tableDiceFormula(selection, flat);
+      detail = sets.map(set => ({ count:set.values.length, sides:set.sides, sign:1, rolls:set.values, subtotal:set.values.reduce((sum,value)=>sum+value,0) }));
+      natural = sets.length === 1 && sets[0].sides === 20 && sets[0].values.length === 1 ? sets[0].values[0] : null;
+    }
+
+    const allValues = sets.flatMap(set => set.values);
+    const total = allValues.reduce((sum, value) => sum + value, flat);
+    const physicalRoll = {
       id:id(),
       x:sceneCoordinate(scene,x), y:sceneCoordinate(scene,y),
-      sides:safeSides, value,
-      color:/^#[0-9a-f]{6}$/i.test(ownToken?.color) ? ownToken.color : "#f4c875",
-      by:cleanText(player.name,60), at:Date.now()
+      sets, modifier:flat, total, formula,
+      color:normalizeDiceColor(player.sheet?.diceColor),
+      by:cleanText(player.name,60), at:Date.now(),
+      visibility:safeVisibility,
+      playerId:clientId,
+      privateToDm:false
     };
-    room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:`Бросок к${safeSides} на столе`, dice:[value], modifier:0, total:value, natural:safeSides===20 ? value : null, mode:"normal", at:Date.now() });
+    scene.diceRoll = physicalRoll;
+    scene.diceRolls = (Array.isArray(scene.diceRolls) ? scene.diceRolls : [])
+      .map(source => normalizeSceneDiceRoll(source))
+      .filter(Boolean)
+      .concat(physicalRoll)
+      .slice(-MAX_ACTIVE_TABLE_ROLLS);
+    room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:`${safeVisibility === "private" ? "Закрытый" : "Бросок"} на столе · ${formula}`, formula, dice:allValues, detail, modifier:flat, total, natural, mode:"normal", visibility:safeVisibility, at:Date.now() });
     room.rollLog = room.rollLog.slice(-100);
     setActiveScene(room, scene); saveRooms(); emitRoom(code);
-    reply({ ok:true, value, sides:safeSides, rollId:scene.diceRoll.id });
+    reply({ ok:true, sets, modifier:flat, total, formula, detail, rollId:physicalRoll.id, visibility:safeVisibility, by:player.name, natural });
   });
 
   socket.on("scene:token-remove", ({ tokenId } = {}, reply = () => {}) => {

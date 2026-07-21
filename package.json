@@ -1,19 +1,20 @@
 {
   "name": "tabaxi-table",
-  "version": "1.16.1",
+  "version": "2.0.0",
   "private": true,
   "description": "Онлайн-стол TabaxiTable и интерактивные листы персонажей D&D 5e",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check public/vtt.js && node --test",
+    "check": "node --check server.js && node --check public/app.js && node --check public/vtt.js && node --check public/dice-physics.js && node --check public/dice-tray.js && node --test",
     "test": "node --test"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@3d-dice/dice-box-threejs": "^0.0.12",
     "express": "^5.2.1",
     "socket.io": "^4.8.3"
   },

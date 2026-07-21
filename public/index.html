@@ -45,33 +45,31 @@
       <header class="topbar">
         <button id="leave" class="wordmark"><img src="/tabaxi-table.png" alt="">TabaxiTable</button>
         <div class="campaign"><strong id="campaign-title"></strong><span>Код: <button id="copy-code"></button></span></div>
-        <div id="save-state" class="save-state">Сохранено</div>
+        <div class="topbar-actions"><button id="help-tour" type="button" title="Краткая справка">?</button><div id="save-state" class="save-state">Сохранено</div></div>
       </header>
       <aside class="sidebar">
         <div class="side-title">Партия <span id="party-count"></span></div>
         <div id="players" class="players"></div>
         <button id="own-sheet" class="secondary">Мой персонаж</button>
       </aside>
-      <nav class="room-nav">
-        <button class="active" data-view="sheet">Лист</button>
-        <button data-view="dice">Кости</button>
-        <button data-view="map">Карта <small>VTT</small></button>
+      <nav class="room-nav" aria-label="Разделы комнаты">
+        <button class="active" data-view="sheet"><span>☷</span>Лист</button>
+        <button data-view="dice"><span>🎲</span>Кости</button>
+        <button data-view="map"><span>▦</span>Карта <small>VTT</small></button>
       </nav>
       <div class="content">
         <section id="sheet-view" class="view"></section>
         <section id="dice-view" class="view hidden">
-          <div class="dice-panel">
-            <div>
-              <span class="eyebrow">Общий стол бросков</span>
-              <h2>Кости</h2>
-              <div class="roll-mode dice-roll-mode" aria-label="Режим броска к20"><span>Режим к20:</span><button data-dice-roll-mode="normal" class="active" aria-pressed="true">Обычно</button><button data-dice-roll-mode="advantage" aria-pressed="false">Преимущество</button><button data-dice-roll-mode="disadvantage" aria-pressed="false">Помеха</button></div>
-              <div class="quick-dice">
-                <button data-die="1к4">к4</button><button data-die="1к6">к6</button><button data-die="1к8">к8</button>
-                <button data-die="1к10">к10</button><button data-die="1к12">к12</button><button data-die="1к20">к20</button>
-              </div>
-              <form id="custom-roll" class="custom-roll"><input name="formula" value="1к20" placeholder="1к20+5"><button class="primary">Бросить</button></form>
-            </div>
-            <div id="roll-log" class="roll-log"></div>
+          <div class="dice-tray-layout">
+            <section class="dice-tray-card">
+              <div class="dice-tray-head"><div><span class="eyebrow">Общий физический стол</span><h2>Дайстрей</h2><p>Набери горсть костей руками и брось её всей партии.</p></div><label class="dice-color-picker">Мой цвет<input id="dice-player-color" type="color" value="#d3ad6e"></label></div>
+              <div id="dice-tray-build" class="dice-tray-build"></div>
+              <div class="dice-tray-summary"><div><small>Набор</small><strong id="dice-tray-formula">1к20</strong></div><label>Модификатор<input id="dice-tray-modifier" type="number" min="-999" max="999" value="0"></label></div>
+              <div class="dice-tray-actions"><button id="dice-tray-roll" class="primary" type="button">🎲 Бросить набор</button><button id="dice-tray-visibility" type="button" aria-pressed="false">🌐 Всем</button><button id="dice-tray-reset" type="button">к20</button><button id="dice-tray-clear" type="button">Очистить</button></div>
+              <form id="dice-physical-formula" class="dice-formula-roll"><label><span>Своя физическая формула</span><input name="formula" value="3d6+1" placeholder="3d6+1" autocomplete="off"></label><button class="primary" type="submit">Бросить формулу</button></form>
+              <details class="dice-classic-roll"><summary>Дополнительный бросок только в журнал</summary><div class="roll-mode dice-roll-mode" aria-label="Режим броска к20"><span>Режим:</span><button data-dice-roll-mode="normal" class="active" aria-pressed="true">Обычно</button><button data-dice-roll-mode="advantage" aria-pressed="false">Преимущество</button><button data-dice-roll-mode="disadvantage" aria-pressed="false">Помеха</button></div><form id="custom-roll" class="custom-roll"><input name="formula" value="1к20" placeholder="1к20+5"><button class="primary">В журнал</button></form></details>
+            </section>
+            <section class="dice-history-card"><div class="dice-history-head"><div><span class="eyebrow">Новые сверху</span><h3>История бросков</h3></div><small>Все публичные результаты комнаты</small></div><div id="roll-log" class="roll-log"></div></section>
           </div>
         </section>
         <section id="map-view" class="view hidden"></section>
@@ -88,6 +86,8 @@
   <script src="/item-system.js"></script>
   <script src="/rules-5e.js"></script>
   <script src="/items-5e.js"></script>
+  <script src="/dice-tray.js"></script>
+  <script src="/dice-physics.js"></script>
   <script src="/vtt.js"></script>
   <script src="/app.js"></script>
 </body>

@@ -59,6 +59,7 @@ function waitFor(socket, event, predicate) {
 test("комната, лист, броски, история и резервная копия работают вместе", async () => {
   const dm = await connect();
   let player = await connect();
+  let observer = null;
   try {
     const health = await fetch(`http://127.0.0.1:${PORT}/health`).then(response => response.json());
     assert.deepEqual(health, { ok:true });
@@ -67,6 +68,9 @@ test("комната, лист, броски, история и резервна
     assert.match(index, /roll-peek[^>]*>[\s\S]*?<small>/);
     assert.match(index, /vtt\.js/);
     assert.match(index, /vtt\.css/);
+    assert.match(index, /dice-tray\.js/);
+    assert.match(index, /dice-physics\.js/);
+    assert.match(index, /dice-tray-roll/);
     const catalog = await fetch(`http://127.0.0.1:${PORT}/spells-5e.json`).then(response => response.json());
     assert.equal(catalog.length, 120);
     const itemCatalogScript = await fetch(`http://127.0.0.1:${PORT}/items-5e.js`).then(response => response.text());
@@ -82,8 +86,13 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /scene:history-undo/);
     assert.match(vttScript, /beginMarquee/);
     assert.match(vttScript, /scene:dice-roll/);
+    assert.match(vttScript, /scene:tokens-batch-update/);
+    assert.match(vttScript, /data-vtt-character-formula/);
+    assert.match(vttScript, /vtt-dice-formula-form/);
+    assert.match(vttScript, /data-vtt-die-add/);
     assert.match(vttScript, /scene:token-hp/);
-    assert.match(vttScript, /vtt-table-die/);
+    assert.match(vttScript, /TT_DICE_PHYSICS/);
+    assert.doesNotMatch(vttScript, /vtt-table-die/);
     assert.doesNotMatch(vttScript, /vtt-hotbar-slots/);
     assert.match(vttScript, /ui\.leftPanel === panel \? null : panel/);
     const vttStyle = await fetch(`http://127.0.0.1:${PORT}/vtt.css`).then(response => response.text());
@@ -91,15 +100,26 @@ test("комната, лист, броски, история и резервна
     assert.match(vttStyle, /room\.map-fullscreen/);
     assert.match(vttStyle, /body\.vtt-active/);
     assert.match(vttStyle, /game-modal \.vtt-modal-form button/);
-    assert.match(vttStyle, /vtt-table-die/);
+    assert.match(vttStyle, /vtt-physical-dice-layer/);
+    assert.doesNotMatch(vttStyle, /vtt-table-die/);
     assert.match(vttStyle, /vtt-token-hp/);
     assert.match(vttStyle, /vtt-token-badge/);
     assert.doesNotMatch(vttStyle, /vtt-hotbar-slots/);
+    const diceTray = await fetch(`http://127.0.0.1:${PORT}/dice-tray.js`).then(response => response.text());
+    assert.match(diceTray, /MAX_DICE = 24/);
+    assert.match(diceTray, /localStorage/);
+    assert.match(diceTray, /setVisibility/);
+    const dicePhysics = await fetch(`http://127.0.0.1:${PORT}/dice-physics.js`).then(response => response.text());
+    assert.match(dicePhysics, /dice-box-threejs\.es\.js/);
+    assert.match(dicePhysics, /terms\.push\("1d100","1d10"\)/);
+    assert.match(dicePhysics, /WebGLRenderingContext/);
+    const diceVendor = await fetch(`http://127.0.0.1:${PORT}/vendor/dice-box-threejs.es.js`).then(response => response.text());
+    assert.ok(diceVendor.length > 500000);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 9);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 10);
     assert.equal(created.room.scene.grid.columns, 24);
     assert.equal(created.room.scene.schemaVersion, 6);
     assert.deepEqual(created.room.scene.annotations, []);
@@ -111,6 +131,7 @@ test("комната, лист, броски, история и резервна
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
     assert.equal(created.room.players["test-dm"].sheet.passivePerceptionBonus, 0);
+    assert.equal(created.room.players["test-dm"].sheet.diceColor, "#d3ad6e");
     assert.equal(created.room.players["test-dm"].sheet.combatLoadout.sets.length, 3);
     assert.equal(created.room.players["test-dm"].sheet.combatLoadout.sets[0].quickSlots.length, 5);
     assert.equal("sheetHistory" in created.room.players["test-dm"], false);
@@ -128,6 +149,7 @@ test("комната, лист, броски, история и резервна
     sheet.coins.gp = 458;
     sheet.xp = 6500;
     sheet.passivePerceptionBonus = 3;
+    sheet.diceColor = "#3366cc";
     sheet.attacksList.push({ id:"bow", name:"Длинный лук +1", bonus:"[DEX]+[PROF]+1", damage:"1d8+[DEX]+1+5d6", damageType:"колющий", actionCost:"action", rollMode:"inherit", attackParts:[{ id:"dex", type:"ability", value:"dex" },{ id:"prof", type:"proficiency", value:"prof" },{ id:"magic", type:"flat", value:"1" }], damageParts:[{ id:"die", type:"dice", count:1, sides:8 },{ id:"damage-dex", type:"ability", value:"dex" },{ id:"sneak", type:"sneak" }] });
     sheet.resources.push({ id:"arrows", name:"Стрелы", current:19, max:20, reset:"none" });
     sheet.inventoryList.push({ id:"cloak", name:"Плащ летучей мыши", quantity:1, weight:3, equipped:true, attuned:true, magical:true });
@@ -149,9 +171,10 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 9);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 10);
     assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
     assert.equal(updatedRoom.players["test-player"].sheet.passivePerceptionBonus, 3);
+    assert.equal(updatedRoom.players["test-player"].sheet.diceColor, "#3366cc");
     assert.deepEqual(updatedRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",1]]);
     assert.equal(updatedRoom.players["test-player"].sheet.levelProgression.length, 1);
     assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[0].attuned, true);
@@ -297,6 +320,21 @@ test("комната, лист, броски, история и резервна
     assert.deepEqual(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.name), ["Красный гоблин 1","Красный гоблин 2","Красный гоблин 3"]);
     assert.equal(placedRoom.assets.find(asset => asset.id === uploadedAsset.asset.id).usageCount, 3);
 
+    const placedTokenIds = placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.id);
+    const batchTokenState = waitFor(dm, "room:state", room => placedTokenIds.every(id => room.scene.tokens.some(token => token.id === id && token.initiative === 12 && token.badge === "Отряд" && token.locked)));
+    const batchTokenUpdate = await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:12, badge:"Отряд", badgeColor:"#d3ad6e", locked:true, hp:8, hpMax:8 } });
+    assert.equal(batchTokenUpdate.ok, true);
+    assert.equal(batchTokenUpdate.updated, 3);
+    assert.equal((await emit(player, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:99 } })).ok, false);
+    const batchedRoom = await batchTokenState;
+    assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).hp === 8));
+    const batchInitiativeState = waitFor(dm, "room:state", room => placedTokenIds.every(id => {
+      const value = room.scene.tokens.find(token => token.id === id)?.initiative;
+      return Number.isInteger(value) && value >= 3 && value <= 22;
+    }));
+    assert.equal((await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, rollInitiative:true })).ok, true);
+    await batchInitiativeState;
+
     const blockedDelete = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets/${uploadedAsset.asset.id}`, { method:"DELETE", headers:{ "x-client-id":"test-dm" } });
     assert.equal(blockedDelete.status, 409);
     assert.equal((await blockedDelete.json()).usageCount, 3);
@@ -382,15 +420,57 @@ test("комната, лист, броски, история и резервна
     assert.equal((await emit(dm, "scene:ping", { x:3, y:4, color:"#ffcc00" })).ok, true);
     assert.equal((await pingState).scene.ping.color, "#ffcc00");
 
-    const tableDieState = waitFor(dm, "room:state", room => room.scene.diceRoll?.by === "Плут" && room.scene.diceRoll?.sides === 20);
-    const tableDie = await emit(player, "scene:dice-roll", { x:6, y:7, sides:20 });
+    const tableDieState = waitFor(dm, "room:state", room => room.scene.diceRoll?.by === "Плут" && room.scene.diceRoll?.sets?.some(set => set.sides === 20));
+    const tableDie = await emit(player, "scene:dice-roll", { x:6, y:7, dice:[{ sides:20, count:2 },{ sides:6, count:3 }], modifier:4 });
     assert.equal(tableDie.ok, true);
-    assert.ok(tableDie.value >= 1 && tableDie.value <= 20);
+    assert.equal(tableDie.sets.find(set => set.sides === 20).values.length, 2);
+    assert.equal(tableDie.sets.find(set => set.sides === 6).values.length, 3);
     const tableDieRoom = await tableDieState;
     assert.equal(tableDieRoom.scene.diceRoll.x, 6);
     assert.equal(tableDieRoom.scene.diceRoll.y, 7);
-    assert.equal(tableDieRoom.scene.diceRoll.value, tableDie.value);
-    assert.ok(tableDieRoom.rollLog.some(entry => entry.label === "Бросок к20 на столе" && entry.total === tableDie.value));
+    assert.equal(tableDieRoom.scene.diceRoll.color, "#3366cc");
+    assert.equal(tableDieRoom.scene.diceRoll.modifier, 4);
+    assert.equal(tableDieRoom.scene.diceRoll.total, tableDie.total);
+    assert.match(tableDieRoom.scene.diceRoll.formula, /2к20/);
+    assert.match(tableDieRoom.scene.diceRoll.formula, /3к6/);
+    assert.ok(tableDieRoom.rollLog.some(entry => entry.label.includes("Бросок на столе") && entry.total === tableDie.total && entry.detail.length === 2));
+    assert.ok(tableDieRoom.scene.diceRolls.some(entry => entry.id === tableDie.rollId));
+
+    const rapidRollState = waitFor(dm, "room:state", room => Array.isArray(room.scene.diceRolls) && room.scene.diceRolls.some(entry => entry.id === tableDie.rollId) && room.scene.diceRolls.length >= 2);
+    const rapidRoll = await emit(player, "scene:dice-roll", { x:6.5, y:7.5, dice:[{ sides:20, count:1 }], modifier:0 });
+    assert.equal(rapidRoll.ok, true);
+    const rapidRollRoom = await rapidRollState;
+    assert.ok(rapidRollRoom.scene.diceRolls.some(entry => entry.id === tableDie.rollId));
+    assert.ok(rapidRollRoom.scene.diceRolls.some(entry => entry.id === rapidRoll.rollId));
+    assert.equal(rapidRollRoom.scene.diceRoll.id, rapidRoll.rollId);
+
+
+    const formulaRollState = waitFor(dm, "room:state", room => room.scene.diceRoll?.formula === "3к6 +1");
+    const formulaRoll = await emit(player, "scene:dice-roll", { x:1, y:2, formula:"3d6+1", visibility:"public" });
+    assert.equal(formulaRoll.ok, true);
+    assert.equal(formulaRoll.sets.length, 1);
+    assert.equal(formulaRoll.sets[0].values.length, 3);
+    assert.equal(formulaRoll.modifier, 1);
+    assert.equal(formulaRoll.total, formulaRoll.sets[0].values.reduce((sum,value)=>sum+value,1));
+    await formulaRollState;
+    const unsupportedPhysical = await emit(player, "scene:dice-roll", { formula:"2d137+1" });
+    assert.equal(unsupportedPhysical.ok, false);
+
+    observer = await connect();
+    const observerJoined = await emit(observer, "room:join", { code:created.code, name:"Наблюдатель", clientId:"test-observer" });
+    assert.equal(observerJoined.ok, true);
+    const ownerPrivateState = waitFor(player, "room:state", room => room.scene.diceRolls.some(entry => entry.visibility === "private" && entry.playerId === "test-player"));
+    const dmPrivateState = waitFor(dm, "room:state", room => room.scene.diceRolls.some(entry => entry.visibility === "private" && entry.playerId === "test-player"));
+    const observerPrivateState = waitFor(observer, "room:state", room => room.rollLog.some(entry => entry.player === "Плут") && !room.scene.diceRolls.some(entry => entry.visibility === "private" && entry.playerId === "test-player"));
+    const privateRoll = await emit(player, "scene:dice-roll", { formula:"1d20+4", visibility:"private" });
+    assert.equal(privateRoll.ok, true);
+    const ownerPrivateRoom = await ownerPrivateState;
+    const dmPrivateRoom = await dmPrivateState;
+    const observerPrivateRoom = await observerPrivateState;
+    assert.ok(ownerPrivateRoom.scene.diceRolls.some(entry => entry.id === privateRoll.rollId));
+    assert.ok(dmPrivateRoom.scene.diceRolls.some(entry => entry.id === privateRoll.rollId));
+    assert.equal(observerPrivateRoom.scene.diceRolls.some(entry => entry.id === privateRoll.rollId), false);
+    assert.equal(observerPrivateRoom.rollLog.some(entry => entry.visibility === "private" && entry.playerId === "test-player"), false);
 
     const sceneCreatedState = waitFor(dm, "room:state", room => room.scenes.some(scene => scene.name === "Тайная лаборатория"));
     const sceneCreated = await emit(dm, "scene:create", { name:"Тайная лаборатория", activate:false });
@@ -437,5 +517,6 @@ test("комната, лист, броски, история и резервна
   } finally {
     dm.disconnect();
     player.disconnect();
+    observer?.disconnect();
   }
 });
