@@ -75,6 +75,7 @@ function sheetInitiativeBonus(sheet) {
 
 const COMBAT_SLOT_KEYS = ["head", "neck", "cloak", "body", "mainHand", "offHand", "belt", "feet", "ammo"];
 const COMBAT_SET_IDS = ["a", "b", "c"];
+const COMBAT_CONDITIONS = ["Ослеплён", "Очарован", "Оглушён", "Отравлен", "Испуган", "Схвачен", "Недееспособен", "Невидим", "Парализован", "Окаменел", "Сбит с ног", "Опутан", "Без сознания", "Истощён", "Мёртв"];
 
 function emptyCombatSet(setId, index = 0) {
   return {
@@ -145,7 +146,7 @@ function normalizeCombatLoadout(source, inventory, itemIdAliases = new Map()) {
 
 function defaultScene(name = "Главная сцена") {
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: id(),
     name: cleanText(name, 60) || "Главная сцена",
     published: true,
@@ -223,7 +224,16 @@ function normalizeScene(source, players = {}) {
       z: Math.max(-1000, Math.min(1000, Number(raw?.z) || 100)),
       initiativeBonus: Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : raw?.initiativeBonus) || 0)),
       initiativeAdvantage: Boolean(player ? sheet.initiativeAdvantage : raw?.initiativeAdvantage),
-      initiative
+      initiative,
+      hpMax: Math.max(1, Math.min(1000000, Number(player ? sheet.hpMax : raw?.hpMax) || 1)),
+      hp: Math.max(0, Math.min(1000000, Number(player ? sheet.hpCurrent : raw?.hp) || 0)),
+      tempHp: Math.max(0, Math.min(1000000, Number(player ? sheet.hpTemp : raw?.tempHp) || 0)),
+      ac: Math.max(0, Math.min(1000, Number(player ? sheet.ac : raw?.ac) || 10)),
+      conditions: player ? [] : (Array.isArray(raw?.conditions) ? [...new Set(raw.conditions.map(value => cleanText(value, 40)).filter(value => COMBAT_CONDITIONS.includes(value)))].slice(0, COMBAT_CONDITIONS.length) : []),
+      concentration: player ? "" : cleanText(raw?.concentration, 120),
+      deathSuccess: Math.max(0, Math.min(3, Number(player ? sheet.deathSuccess : raw?.deathSuccess) || 0)),
+      deathFail: Math.max(0, Math.min(3, Number(player ? sheet.deathFail : raw?.deathFail) || 0)),
+      stable: Boolean(raw?.stable)
     };
   }).filter(Boolean);
   const objectIds = new Set();
@@ -288,7 +298,7 @@ function normalizeScene(source, players = {}) {
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     id: cleanText(incoming.id, 80) || base.id,
     name: cleanText(incoming.name, 60) || base.name,
     published: incoming.published !== false,
@@ -354,6 +364,11 @@ function ensureRoomVtt(room) {
   if (!room.scenes.length) room.scenes = [defaultScene()];
   room.activeSceneId = ids.has(cleanText(room.activeSceneId, 80)) ? cleanText(room.activeSceneId, 80) : room.scenes[0].id;
   room.assets = normalizeAssets(room.assets, room.code);
+  room.combatRequests = (Array.isArray(room.combatRequests) ? room.combatRequests : []).slice(-100).map(raw => ({
+    id:cleanText(raw?.id,80) || id(), requesterId:cleanText(raw?.requesterId,80), tokenId:cleanText(raw?.tokenId,80),
+    kind:["damage","healing","temp"].includes(raw?.kind) ? raw.kind : "damage", amount:Math.max(0,Math.min(1000000,Number(raw?.amount)||0)),
+    label:cleanText(raw?.label,120), status:["pending","accepted","rejected"].includes(raw?.status) ? raw.status : "pending", at:Number(raw?.at)||Date.now()
+  })).filter(request => request.requesterId && request.tokenId && request.amount > 0);
   room.scene = room.scenes.find(scene => scene.id === room.activeSceneId) || room.scenes[0];
 }
 
@@ -457,6 +472,112 @@ function sceneTokenForPlayer(scene, playerId) {
   return scene.tokens.find(token => token.playerId === playerId);
 }
 
+function tokenCombatState(room, token) {
+  const player = token?.playerId ? room.players?.[token.playerId] : null;
+  const sheet = player?.sheet;
+  if (sheet) return {
+    hp:Math.max(0,Number(sheet.hpCurrent)||0), hpMax:Math.max(1,Number(sheet.hpMax)||1), tempHp:Math.max(0,Number(sheet.hpTemp)||0),
+    ac:Math.max(0,Number(sheet.ac)||10), conditions:Array.isArray(sheet.conditions) ? sheet.conditions : [],
+    concentration:cleanText(sheet.concentrationSpellName,120), deathSuccess:Math.max(0,Math.min(3,Number(sheet.deathSuccess)||0)),
+    deathFail:Math.max(0,Math.min(3,Number(sheet.deathFail)||0)), stable:Boolean(sheet.stable)
+  };
+  return {
+    hp:Math.max(0,Number(token?.hp)||0), hpMax:Math.max(1,Number(token?.hpMax)||1), tempHp:Math.max(0,Number(token?.tempHp)||0),
+    ac:Math.max(0,Number(token?.ac)||10), conditions:Array.isArray(token?.conditions) ? token.conditions : [],
+    concentration:cleanText(token?.concentration,120), deathSuccess:Math.max(0,Math.min(3,Number(token?.deathSuccess)||0)),
+    deathFail:Math.max(0,Math.min(3,Number(token?.deathFail)||0)), stable:Boolean(token?.stable)
+  };
+}
+
+function updateTokenCombatState(room, token, patch = {}) {
+  const player = token?.playerId ? room.players?.[token.playerId] : null;
+  const target = player?.sheet || token;
+  if (!target) return null;
+  const keys = player ? { hp:"hpCurrent", hpMax:"hpMax", tempHp:"hpTemp", conditions:"conditions", concentration:"concentrationSpellName", deathSuccess:"deathSuccess", deathFail:"deathFail", stable:"stable" }
+    : { hp:"hp", hpMax:"hpMax", tempHp:"tempHp", conditions:"conditions", concentration:"concentration", deathSuccess:"deathSuccess", deathFail:"deathFail", stable:"stable" };
+  if (patch.hpMax !== undefined) target[keys.hpMax] = Math.max(1,Math.min(1000000,Number(patch.hpMax)||1));
+  const hpMax = Math.max(1,Number(target[keys.hpMax])||1);
+  if (patch.hp !== undefined) target[keys.hp] = Math.max(0,Math.min(hpMax,Number(patch.hp)||0));
+  if (patch.tempHp !== undefined) target[keys.tempHp] = Math.max(0,Math.min(1000000,Number(patch.tempHp)||0));
+  if (patch.conditions !== undefined) target[keys.conditions] = [...new Set((Array.isArray(patch.conditions) ? patch.conditions : []).map(value => cleanText(value,40)).filter(value => COMBAT_CONDITIONS.includes(value)))];
+  if (patch.concentration !== undefined) {
+    target[keys.concentration] = cleanText(patch.concentration,120);
+    if (player && !target[keys.concentration]) target.concentrationSpellId = "";
+  }
+  if (patch.deathSuccess !== undefined) target[keys.deathSuccess] = Math.max(0,Math.min(3,Number(patch.deathSuccess)||0));
+  if (patch.deathFail !== undefined) target[keys.deathFail] = Math.max(0,Math.min(3,Number(patch.deathFail)||0));
+  if (patch.stable !== undefined) target[keys.stable] = Boolean(patch.stable);
+  if (player) player.sheet = normalizeSheet(target, player.name);
+  return tokenCombatState(room, token);
+}
+
+function applyCombatAmount(room, token, kind, amount) {
+  const state = tokenCombatState(room, token);
+  amount = Math.max(0,Math.min(1000000,Number(amount)||0));
+  if (!amount) return { state, before:state, applied:0, absorbed:0, hpDelta:0, concentrationDc:0 };
+  if (kind === "temp") {
+    const nextTemp = Math.max(state.tempHp, amount);
+    const next = updateTokenCombatState(room, token, { tempHp:nextTemp });
+    return { state:next, before:state, applied:nextTemp - state.tempHp, absorbed:0, hpDelta:0, concentrationDc:0 };
+  }
+  if (kind === "healing") {
+    const nextHp = Math.min(state.hpMax, state.hp + amount);
+    const patch = { hp:nextHp };
+    if (nextHp > 0) Object.assign(patch,{ deathSuccess:0, deathFail:0, stable:false, conditions:state.conditions.filter(value => value !== "Без сознания") });
+    const next = updateTokenCombatState(room, token, patch);
+    return { state:next, before:state, applied:nextHp - state.hp, absorbed:0, hpDelta:nextHp - state.hp, concentrationDc:0 };
+  }
+  const absorbed = Math.min(state.tempHp, amount);
+  const hpDamage = Math.max(0, amount - absorbed);
+  const nextHp = Math.max(0, state.hp - hpDamage);
+  const conditions = nextHp === 0 && !state.conditions.includes("Без сознания") ? [...state.conditions,"Без сознания"] : state.conditions;
+  const actualHpDamage = state.hp - nextHp;
+  const effectiveDamage = absorbed + actualHpDamage;
+  const next = updateTokenCombatState(room, token, { hp:nextHp, tempHp:state.tempHp - absorbed, stable:false, conditions, ...(nextHp === 0 ? { concentration:"" } : {}) });
+  return {
+    state:next,
+    before:state,
+    applied:effectiveDamage,
+    absorbed,
+    hpDelta:-actualHpDamage,
+    concentrationDc:state.concentration && nextHp > 0 && effectiveDamage > 0 ? Math.max(10,Math.floor(effectiveDamage / 2)) : 0,
+    concentrationBroken:Boolean(state.concentration && nextHp === 0)
+  };
+}
+
+function combatResultDetail(token, kind, requested, result) {
+  const before = result.before || result.state;
+  const after = result.state;
+  if (kind === "damage") {
+    const parts = [`${token.name} получает ${result.applied} урона`];
+    if (result.absorbed) parts.push(`${result.absorbed} поглощено временными HP`);
+    parts.push(`HP ${before.hp}/${before.hpMax} → ${after.hp}/${after.hpMax}${after.tempHp ? ` (+${after.tempHp})` : ""}`);
+    if (requested > result.applied) parts.push(`из ${requested} заявленного`);
+    if (result.concentrationDc) parts.push(`концентрация: СЛ ${result.concentrationDc}`);
+    if (result.concentrationBroken) parts.push("концентрация прервана при 0 HP");
+    return parts.join(" · ");
+  }
+  if (kind === "healing") return `${token.name} восстанавливает ${result.applied} HP · ${before.hp}/${before.hpMax} → ${after.hp}/${after.hpMax}`;
+  return `${token.name} получает ${result.applied} временных HP · ${before.tempHp} → ${after.tempHp}`;
+}
+
+function appendActivity(room, playerId, label, detail, visibility = "public") {
+  const player = room.players?.[playerId];
+  room.rollLog.push({ id:id(), playerId, player:player?.name || "Ведущий", label:cleanText(label,80), activity:cleanText(detail,180), total:null, visibility:["private","gm"].includes(visibility) ? visibility : "public", at:Date.now() });
+  room.rollLog = room.rollLog.slice(-100);
+}
+
+function advanceInitiative(scene) {
+  const order = initiativeOrder(scene);
+  if (!order.length) return null;
+  const currentIndex = order.findIndex(token => token.id === scene.initiative.currentTokenId);
+  const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % order.length;
+  if (currentIndex >= 0 && nextIndex === 0) scene.initiative.round = Math.min(999,scene.initiative.round + 1);
+  scene.initiative.active = true;
+  scene.initiative.currentTokenId = order[nextIndex].id;
+  return order[nextIndex];
+}
+
 function initiativeOrder(scene) {
   return scene.tokens.filter(token => token.initiative !== null).sort((a, b) => Number(b.initiative) - Number(a.initiative) || a.name.localeCompare(b.name, "ru"));
 }
@@ -507,6 +628,7 @@ function defaultSheet(playerName) {
     hitDicePools: [],
     deathSuccess: 0,
     deathFail: 0,
+    stable: false,
     exhaustion: 0,
     conditions: [],
     concentrationSpellId: "",
@@ -746,6 +868,7 @@ function normalizeSheet(sheet, playerName) {
   };
   normalized.schemaVersion = 8;
   normalized.passivePerceptionBonus = Math.max(-100, Math.min(100, Number(incoming.passivePerceptionBonus) || 0));
+  normalized.stable = Boolean(incoming.stable);
   normalized.xp = Math.max(0, Math.min(999999999, Number(incoming.xp) || 0));
   normalized.skillProficiencies = Array.isArray(incoming.skillProficiencies) ? [...new Set(incoming.skillProficiencies.map(value => cleanText(value, 30)).filter(Boolean))] : [];
   normalized.expertise = Array.isArray(incoming.expertise) ? [...new Set(incoming.expertise.map(value => cleanText(value, 30)).filter(Boolean))] : [];
@@ -796,6 +919,7 @@ function publicRoom(room, viewerId = "") {
       if (visibility === "private") return isDm || cleanText(entry?.playerId, 80) === viewerId;
       return true;
     }).slice(-100),
+    combatRequests: room.combatRequests.filter(request => request.status === "pending" && (isDm || request.requesterId === viewerId)),
     scene,
     activeSceneId: room.activeSceneId,
     scenes: sceneSummaries(room, viewerId),
@@ -928,6 +1052,7 @@ io.on("connection", (socket) => {
         [clientId]: { id: clientId, name, role: "dm", online: true, sheet: defaultSheet(name), sheetHistory: [] }
       },
       rollLog: [],
+      combatRequests: [],
       scene: defaultScene(),
       scenes: [],
       activeSceneId: "",
@@ -1035,6 +1160,7 @@ io.on("connection", (socket) => {
     room.scenes = Array.isArray(backup.scenes) ? backup.scenes.map(scene => normalizeScene(scene, restoredPlayers)) : [normalizeScene(backup.scene, restoredPlayers)];
     room.activeSceneId = cleanText(backup.activeSceneId, 80) || room.scenes[0]?.id || "";
     room.assets = normalizeAssets(backup.assets || room.assets, room.code);
+    room.combatRequests = Array.isArray(backup.combatRequests) ? backup.combatRequests : [];
     ensureRoomVtt(room);
     room.rollLog = Array.isArray(backup.rollLog) ? backup.rollLog.slice(-100).map(entry => ({
       id:id(), playerId:cleanText(entry?.playerId, 80), player:cleanText(entry?.player, 40) || "Игрок", label:cleanText(entry?.label, 80), activity:cleanText(entry?.activity, 120),
@@ -1284,7 +1410,10 @@ io.on("connection", (socket) => {
       hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:100,
       initiativeBonus:Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : payload.initiativeBonus) || 0)),
       initiativeAdvantage:Boolean(player ? sheet.initiativeAdvantage : payload.initiativeAdvantage),
-      initiative:null
+      initiative:null,
+      hpMax:Math.max(1,Math.min(1000000,Number(player ? sheet.hpMax : payload.hpMax)||1)), hp:Math.max(0,Math.min(1000000,Number(player ? sheet.hpCurrent : payload.hp)||0)),
+      tempHp:Math.max(0,Math.min(1000000,Number(player ? sheet.hpTemp : payload.tempHp)||0)), ac:Math.max(0,Math.min(1000,Number(player ? sheet.ac : payload.ac)||10)),
+      conditions:[], concentration:"", deathSuccess:0, deathFail:0, stable:false
     });
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true, scene:activeScene(room) });
@@ -1300,7 +1429,7 @@ io.on("connection", (socket) => {
     Object.entries(room.players).forEach(([playerId, player]) => {
       if (sceneTokenForPlayer(scene, playerId)) return;
       const position = nextScenePosition(scene), sheet = player.sheet || {};
-      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null });
+      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false });
       added += 1;
     });
     setActiveScene(room, scene);
@@ -1343,6 +1472,12 @@ io.on("connection", (socket) => {
       token.opacity = Math.max(.05,Math.min(1,Number(payload.opacity)||1));
       token.vision = Math.max(0,Math.min(10000,Number(payload.vision)||0));
       token.initiativeBonus = Math.max(-100,Math.min(100,Number(payload.initiativeBonus)||0));
+      if (payload.hpMax !== undefined) token.hpMax = Math.max(1,Math.min(1000000,Number(payload.hpMax)||1));
+      if (payload.hp !== undefined) token.hp = Math.max(0,Math.min(token.hpMax,Number(payload.hp)||0));
+      if (payload.tempHp !== undefined) token.tempHp = Math.max(0,Math.min(1000000,Number(payload.tempHp)||0));
+      if (payload.ac !== undefined) token.ac = Math.max(0,Math.min(1000,Number(payload.ac)||10));
+      if (payload.concentration !== undefined) token.concentration = cleanText(payload.concentration,120);
+      if (Array.isArray(payload.conditions)) token.conditions = [...new Set(payload.conditions.map(value => cleanText(value,40)).filter(value => COMBAT_CONDITIONS.includes(value)))];
     }
     if (isDm) { token.hidden = Boolean(payload.hidden); token.locked = Boolean(payload.locked); }
     setActiveScene(room, scene);
@@ -1551,6 +1686,126 @@ io.on("connection", (socket) => {
     setActiveScene(room, scene); emitRoom(code); reply({ ok:true });
   });
 
+  socket.on("combat:apply", ({ tokenId, kind, amount, label, visibility } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || !room.players?.[clientId]) return reply({ ok:false, error:"Игрок не подключён" });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Цель не найдена" });
+    const safeKind = ["damage","healing","temp"].includes(kind) ? kind : "damage";
+    const safeAmount = Math.max(0,Math.min(1000000,Number(amount)||0));
+    if (!safeAmount) return reply({ ok:false, error:"Укажи количество" });
+    const isDm = room.dmId === clientId;
+    const ownsTarget = token.playerId === clientId;
+    if (!isDm && !ownsTarget) {
+      const request = { id:id(), requesterId:clientId, tokenId:token.id, kind:safeKind, amount:safeAmount, label:cleanText(label,120), status:"pending", at:Date.now() };
+      room.combatRequests.push(request);
+      room.combatRequests = room.combatRequests.slice(-100);
+      appendActivity(room, clientId, "Запрос ведущему", `${room.players[clientId].name}: ${safeKind === "damage" ? "урон" : safeKind === "healing" ? "лечение" : "временные HP"} ${safeAmount} → ${token.name}`, "private");
+      saveRooms(); emitRoom(code); return reply({ ok:true, pending:true, requestId:request.id });
+    }
+    const result = applyCombatAmount(room, token, safeKind, safeAmount);
+    appendActivity(room, clientId, cleanText(label,80) || "Бой", combatResultDetail(token, safeKind, safeAmount, result), visibility);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, pending:false, state:result.state, result });
+  });
+
+  socket.on("combat:request-resolve", ({ requestId, accept } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий подтверждает применение" });
+    const scene = activeScene(room);
+    const request = room.combatRequests.find(entry => entry.id === cleanText(requestId,80) && entry.status === "pending");
+    if (!request) return reply({ ok:false, error:"Запрос уже обработан" });
+    const token = scene.tokens.find(entry => entry.id === request.tokenId);
+    request.status = accept ? "accepted" : "rejected";
+    if (!accept || !token) {
+      appendActivity(room, clientId, "Запрос отклонён", request.label || "Изменение HP", "private");
+      saveRooms(); emitRoom(code); return reply({ ok:true, accepted:false });
+    }
+    const result = applyCombatAmount(room, token, request.kind, request.amount);
+    const requester = room.players?.[request.requesterId]?.name || "Игрок";
+    appendActivity(room, clientId, request.label || "Бой", `${requester} · ${combatResultDetail(token, request.kind, request.amount, result)}`);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, accepted:true, state:result.state, result });
+  });
+
+  socket.on("combat:condition", ({ tokenId, condition, active:enabled } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    const safeCondition = cleanText(condition,40);
+    if (!token || !COMBAT_CONDITIONS.includes(safeCondition)) return reply({ ok:false, error:"Состояние не найдено" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Можно менять состояния только своего персонажа" });
+    const state = tokenCombatState(room, token);
+    const conditions = new Set(state.conditions);
+    if (enabled === false || conditions.has(safeCondition)) conditions.delete(safeCondition); else conditions.add(safeCondition);
+    const next = updateTokenCombatState(room, token, { conditions:[...conditions] });
+    appendActivity(room, clientId, enabled === false ? "Состояние снято" : "Состояние", `${token.name}: ${safeCondition}`);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, state:next });
+  });
+
+  socket.on("combat:concentration", ({ tokenId, name } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80));
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Можно менять концентрацию только своего персонажа" });
+    const concentration = cleanText(name,120);
+    const next = updateTokenCombatState(room, token, { concentration });
+    appendActivity(room, clientId, concentration ? "Концентрация" : "Концентрация завершена", concentration ? `${token.name}: ${concentration}` : token.name);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, state:next });
+  });
+
+  socket.on("combat:death-save", ({ tokenId, visibility } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = activeScene(room);
+    const token = scene.tokens.find(entry => entry.id === cleanText(tokenId,80)) || sceneTokenForPlayer(scene,clientId);
+    if (!token) return reply({ ok:false, error:"Токен не найден" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && token.playerId !== clientId) return reply({ ok:false, error:"Можно бросать только за своего персонажа" });
+    const state = tokenCombatState(room, token);
+    if (state.hp > 0) return reply({ ok:false, error:"Персонаж ещё в сознании" });
+    if (state.conditions.includes("Мёртв")) return reply({ ok:false, error:"Персонаж мёртв — обычный спасбросок уже не поможет" });
+    if (state.stable) return reply({ ok:false, error:"Персонаж уже стабилен" });
+    const natural = crypto.randomInt(1,21);
+    let patch = { stable:false };
+    if (natural === 20) patch = { hp:1, deathSuccess:0, deathFail:0, stable:false, conditions:state.conditions.filter(value => value !== "Без сознания") };
+    else if (natural === 1) patch.deathFail = Math.min(3,state.deathFail + 2);
+    else if (natural >= 10) patch.deathSuccess = Math.min(3,state.deathSuccess + 1);
+    else patch.deathFail = Math.min(3,state.deathFail + 1);
+    if (Number(patch.deathSuccess ?? state.deathSuccess) >= 3) patch.stable = true;
+    if (Number(patch.deathFail ?? state.deathFail) >= 3) patch.conditions = [...new Set([...(patch.conditions || state.conditions),"Мёртв"])];
+    const next = updateTokenCombatState(room, token, patch);
+    let safeVisibility = ["private","gm"].includes(visibility) ? visibility : "public";
+    if (safeVisibility === "gm" && !isDm) safeVisibility = "private";
+    room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Спасбросок от смерти · ${token.name}`, formula:"1к20", dice:[natural], detail:[{ count:1,sides:20,sign:1,rolls:[natural],subtotal:natural }], modifier:0, total:natural, mode:"normal", natural, visibility:safeVisibility, at:Date.now() });
+    room.rollLog = room.rollLog.slice(-100);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, natural, state:next });
+  });
+
+  socket.on("combat:end-turn", ({ tokenId } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room) return reply({ ok:false });
+    const scene = activeScene(room);
+    const current = scene.tokens.find(token => token.id === scene.initiative.currentTokenId);
+    if (!current) return reply({ ok:false, error:"Сейчас нет активного хода" });
+    const isDm = room.dmId === clientId;
+    if (!isDm && current.playerId !== clientId) return reply({ ok:false, error:"Сейчас не твой ход" });
+    if (tokenId && cleanText(tokenId,80) !== current.id) return reply({ ok:false, error:"Активный токен изменился" });
+    const next = advanceInitiative(scene);
+    appendActivity(room, clientId, "Ход завершён", `${current.name} → ${next?.name || "—"}`);
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, currentTokenId:next?.id || "" });
+  });
+
   socket.on("initiative:roll", ({ tokenId } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
@@ -1593,11 +1848,7 @@ io.on("connection", (socket) => {
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий переключает ход" });
     const scene = activeScene(room), order = initiativeOrder(scene);
     if (!order.length) return reply({ ok:false, error:"Инициатива ещё не брошена" });
-    const currentIndex = order.findIndex(token => token.id === scene.initiative.currentTokenId);
-    const nextIndex = currentIndex < 0 ? 0 : (currentIndex + 1) % order.length;
-    if (currentIndex >= 0 && nextIndex === 0) scene.initiative.round = Math.min(999,scene.initiative.round + 1);
-    scene.initiative.active = true;
-    scene.initiative.currentTokenId = order[nextIndex].id;
+    advanceInitiative(scene);
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });

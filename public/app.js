@@ -1078,12 +1078,15 @@ function activeAmmoMagicBonus(sheet, attack) {
 }
 function performAttackRoll(attack, options = {}) {
   const sheet = currentSheet();
-  const fixedMode = attack?.rollMode && attack.rollMode !== "inherit" ? attack.rollMode : undefined;
+  const fixedMode = options.mode || (attack?.rollMode && attack.rollMode !== "inherit" ? attack.rollMode : undefined);
   const ammoBonus = activeAmmoMagicBonus(sheet,attack);
-  roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + ammoBonus)}`, `Атака: ${attack.name}${ammoBonus ? ` · боеприпас +${ammoBonus}` : ""}`, { ...options, ...(fixedMode ? { mode:fixedMode } : {}), onResult: response => {
+  const targetSuffix = options.target?.name ? ` → ${options.target.name}` : "";
+  const externalResult = options.onResult;
+  return roll(`1к20${signed(resolveBonus(attackBonusFormula(attack,sheet),sheet) + ammoBonus)}`, `Атака: ${attack.name}${targetSuffix}${ammoBonus ? ` · боеприпас +${ammoBonus}` : ""}`, { ...options, ...(fixedMode ? { mode:fixedMode } : {}), onResult: response => {
     if (response.natural === 20) { state.lastCriticalAttackId = attack.id; toast("Натуральная 20! Жми ✦ для критического урона"); }
     else if (response.natural === 1) toast("Натуральная 1 — автоматический промах");
     consumeLoadoutAmmo(attack);
+    externalResult?.(response);
   }});
 }
 
@@ -2307,7 +2310,7 @@ function rollAttackDamage(attack, critical = false, options = {}) {
   if (critical) formula = criticalFormula(formula);
   const sourceItem = (sheet.inventoryList || []).find(item => item.id === attack.sourceItemId);
   if (critical && sourceItem?.extraDamage?.criticalOnly && sourceItem.extraDamage.formula) formula += `+${resolveDiceFormula(sourceItem.extraDamage.formula,sheet)}`;
-  roll(formula, `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, { ...options, mode:"normal" });
+  return roll(formula, `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, { ...options, mode:"normal" });
 }
 
 function openSmiteDamageModal(attack, critical, options = {}) {
@@ -2723,8 +2726,8 @@ function roll(formula, label = formula, options = {}) {
   const isD20 = /(?:^|[^\d])1[кd]20(?:$|[^\d])/i.test(String(formula));
   const usesSelectedMode = isD20 && !options.mode;
   const mode = options.mode || (isD20 ? state.rollMode : "normal");
-  socket.emit("dice:roll", { formula, label, mode, visibility:options.visibility || "public" }, response => {
-    if (!response.ok) return toast(response.error);
+  return new Promise(resolve => socket.emit("dice:roll", { formula, label, mode, visibility:options.visibility || "public" }, response => {
+    if (!response.ok) { toast(response.error); resolve(response); return; }
     showRollPeek(label, response);
     options.onResult?.(response);
     if (usesSelectedMode && state.rollMode !== "normal") {
@@ -2739,7 +2742,8 @@ function roll(formula, label = formula, options = {}) {
       });
       $(".roll-mode summary b", $("#sheet-view")) && ($(".roll-mode summary b", $("#sheet-view")).textContent = "обычно");
     }
-  });
+    resolve(response);
+  }));
 }
 function showRollPeek(label, response) {
   const peek = $("#roll-peek");
@@ -2800,7 +2804,12 @@ function buildVttCharacterModels() {
       tempHp:Number(sheet.hpTemp || 0),
       ac:calculateAc(sheet),
       initiativeBonus:initiativeBonus(sheet),
-      initiativeAdvantage:Boolean(sheet.initiativeAdvantage)
+      initiativeAdvantage:Boolean(sheet.initiativeAdvantage),
+      conditions:[...(sheet.conditions || [])],
+      concentration:sheet.concentrationSpellName || "",
+      deathSuccess:Number(sheet.deathSuccess || 0),
+      deathFail:Number(sheet.deathFail || 0),
+      stable:Boolean(sheet.stable)
     }];
   }).filter(([, value]) => value));
 }
@@ -2827,6 +2836,9 @@ function buildVttCombatModel() {
     return item ? { index, id:item.id, name:item.name || `Слот ${index+1}`, quantity:Number(item.quantity || 0), icon:itemCombatIcon(item), summary:combatItemSummary(item) } : { index, id:"", name:`Слот ${index+1}`, quantity:0, icon:"◇", summary:"Пусто" };
   });
   const equipment = Object.entries(set.slots || {}).map(([slot,itemId]) => ({ slot, item:combatItem(sheet,itemId) })).filter(entry => entry.item).map(entry => ({ slot:entry.slot, name:entry.item.name, icon:itemCombatIcon(entry.item), quantity:Number(entry.item.quantity || 0) }));
+  const abilityChecks = Object.entries(abilities).map(([key,name]) => ({ key, name, short:key.toUpperCase(), bonus:modifier(sheet.stats[key]) }));
+  const saves = Object.entries(abilities).map(([key,name]) => ({ key, name, short:key.toUpperCase(), bonus:modifier(sheet.stats[key]) + ((sheet.saveProficiencies || []).includes(key) ? effectiveProficiency(sheet) : 0), proficient:(sheet.saveProficiencies || []).includes(key) }));
+  const skillChecks = skills.map(([key,name,ability]) => ({ key, name, ability, short:ability.toUpperCase(), bonus:getSkillBonus(sheet,key), proficient:(sheet.skillProficiencies || []).includes(key), expertise:(sheet.expertise || []).includes(key) }));
   return {
     playerId:state.clientId,
     name:sheet.characterName || player.name,
@@ -2834,25 +2846,80 @@ function buildVttCombatModel() {
     hpMax:Number(sheet.hpMax || 0),
     tempHp:Number(sheet.hpTemp || 0),
     ac:calculateAc(sheet),
+    conditions:[...(sheet.conditions || [])],
+    concentration:sheet.concentrationSpellName || "",
+    deathSuccess:Number(sheet.deathSuccess || 0),
+    deathFail:Number(sheet.deathFail || 0),
     setName:set.name || "Боевой комплект",
     attacks,
     quickSlots,
-    equipment
+    equipment,
+    abilityChecks,
+    saves,
+    skills:skillChecks
   };
 }
 
 function vttRollDice(formula, label, visibility = "public", mode) {
-  roll(formula, label || formula, { visibility, ...(mode ? { mode } : {}) });
+  return roll(formula, label || formula, { visibility, ...(mode ? { mode } : {}) });
 }
-function vttAttack(attackId, visibility = "public") {
-  const attack = currentSheet().attacksList.find(item => item.id === attackId);
-  if (attack) performAttackRoll(attack, { visibility });
+function vttTokenState(tokenId) {
+  const token = (state.room?.scene?.tokens || []).find(entry => entry.id === tokenId);
+  if (!token) return null;
+  const character = token.playerId ? buildVttCharacterModels()[token.playerId] : null;
+  return { token, name:token.name, ac:Number(character?.ac ?? token.ac ?? 10), hp:Number(character?.hp ?? token.hp ?? 0), hpMax:Number(character?.hpMax ?? token.hpMax ?? 1), tempHp:Number(character?.tempHp ?? token.tempHp ?? 0) };
 }
-function vttDamage(attackId, critical = false, visibility = "public") {
+function vttAttack(attackId, visibility = "public", targetId = "", mode = "") {
   const attack = currentSheet().attacksList.find(item => item.id === attackId);
-  if (attack) rollAttackDamage(attack, critical, { visibility });
+  if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
+  const target = vttTokenState(targetId);
+  return performAttackRoll(attack, { visibility, ...(mode ? { mode } : {}), target }).then(response => {
+    if (!response?.ok) return response;
+    const hit = target ? response.natural === 20 || response.natural !== 1 && Number(response.total) >= Number(target.ac) : null;
+    if (target) toast(`${hit ? "Попадание" : "Промах"}: ${target.name} · ${response.total} против КД ${target.ac}`);
+    return { ...response, attackId:attack.id, attackName:attack.name || "Атака", targetId:target?.token?.id || "", targetName:target?.name || "", targetAc:target?.ac || 0, hit, critical:response.natural === 20, fumble:response.natural === 1 };
+  });
+}
+function vttApplyCombat(tokenId, kind, amount, label = "Бой", visibility = "public") {
+  return new Promise(resolve => socket.emit("combat:apply", { tokenId, kind, amount, label, visibility }, response => {
+    if (!response?.ok) toast(response?.error || "Не удалось применить эффект");
+    else if (response.pending) toast("Отправлено ведущему на подтверждение");
+    else {
+      const applied = Number(response.result?.applied ?? amount);
+      toast(kind === "damage" ? `Урон применён: ${applied}` : kind === "healing" ? `Лечение применено: ${applied}` : `Временные HP: ${applied}`);
+      if (Number(response.result?.concentrationDc) > 0) toast(`Концентрация: нужен спасбросок Телосложения СЛ ${Number(response.result.concentrationDc)}`);
+      if (response.result?.concentrationBroken) toast("Концентрация прервана: цель потеряла сознание");
+    }
+    resolve(response || { ok:false });
+  }));
+}
+function vttDamage(attackId, critical = false, visibility = "public", targetId = "") {
+  const attack = currentSheet().attacksList.find(item => item.id === attackId);
+  if (!attack) return Promise.resolve({ ok:false, error:"Атака не найдена" });
+  return rollAttackDamage(attack, critical, { visibility, onResult:response => {
+    if (targetId && Number(response.total) > 0) vttApplyCombat(targetId, "damage", Number(response.total), `${critical ? "Критический урон" : "Урон"}: ${attack.name}`, visibility);
+  }});
 }
 function vttUseQuick(index, visibility = "public") { useQuickItem(Number(index), { visibility }); }
+function vttRollCheck(kind, key, visibility = "public", mode = "normal") {
+  const sheet = currentSheet();
+  if (kind === "skill") {
+    const skill = skills.find(entry => entry[0] === key); if (!skill) return;
+    const expertise = (sheet.expertise || []).includes(key), proficient = (sheet.skillProficiencies || []).includes(key);
+    return roll(`1к20${signed(getSkillBonus(sheet,key))}`, `Навык: ${skill[1]} · ${skill[2].toUpperCase()}${expertise ? " · компетентность" : proficient ? " · владение" : ""}`, { visibility, mode });
+  }
+  if (kind === "save") {
+    const bonus = modifier(sheet.stats[key]) + ((sheet.saveProficiencies || []).includes(key) ? effectiveProficiency(sheet) : 0);
+    return roll(`1к20${signed(bonus)}`, `Спасбросок: ${abilities[key]}${(sheet.saveProficiencies || []).includes(key) ? " · владение" : ""}`, { visibility, mode });
+  }
+  if (!abilities[key]) return;
+  return roll(`1к20${signed(modifier(sheet.stats[key]))}`, `Проверка: ${abilities[key]}`, { visibility, mode });
+}
+function vttToggleCondition(tokenId, condition, active) { socket.emit("combat:condition", { tokenId, condition, active }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить состояние"); }); }
+function vttSetConcentration(tokenId, name) { socket.emit("combat:concentration", { tokenId, name }, response => { if (!response?.ok) toast(response?.error || "Не удалось изменить концентрацию"); }); }
+function vttDeathSave(tokenId, visibility = "public") { socket.emit("combat:death-save", { tokenId, visibility }, response => { if (!response?.ok) toast(response?.error || "Не удалось бросить спасбросок"); else showRollPeek("Спасбросок от смерти", { ...response, total:response.natural, dice:[response.natural], detail:[{ count:1,sides:20,sign:1,rolls:[response.natural],subtotal:response.natural }], modifier:0, mode:"normal" }); }); }
+function vttEndTurn(tokenId) { socket.emit("combat:end-turn", { tokenId }, response => { if (!response?.ok) toast(response?.error || "Не удалось завершить ход"); }); }
+function vttResolveCombatRequest(requestId, accept) { socket.emit("combat:request-resolve", { requestId, accept }, response => { if (!response?.ok) toast(response?.error || "Не удалось обработать запрос"); }); }
 
 function renderMap() {
   const root = $("#map-view");
@@ -2871,7 +2938,7 @@ function renderMap() {
       switchView,
       combat:buildVttCombatModel(),
       characters:buildVttCharacterModels(),
-      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick }
+      actions:{ roll:vttRollDice, attack:vttAttack, damage:vttDamage, useQuick:vttUseQuick, rollCheck:vttRollCheck, applyCombat:vttApplyCombat, toggleCondition:vttToggleCondition, setConcentration:vttSetConcentration, deathSave:vttDeathSave, endTurn:vttEndTurn, resolveRequest:vttResolveCombatRequest }
     });
     return;
   }

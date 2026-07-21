@@ -16,6 +16,7 @@ test.before(async () => {
     env: { ...process.env, PORT: String(PORT), DATA_DIR },
     stdio: ["ignore", "pipe", "pipe"]
   });
+  server.stderr.on("data", chunk => console.error(String(chunk)));
   await new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("Сервер не запустился")), 5000);
     server.stdout.on("data", chunk => {
@@ -47,9 +48,11 @@ function emit(socket, event, payload) {
 }
 
 function waitFor(socket, event, predicate) {
-  return new Promise(resolve => {
+  const origin = new Error(`waitFor ${event}`).stack;
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`Timeout waiting for ${event}\n${origin}`)), 5000);
     const handler = value => {
-      if (predicate(value)) resolve(value);
+      if (predicate(value)) { clearTimeout(timeout); resolve(value); }
       else socket.once(event, handler);
     };
     socket.once(event, handler);
@@ -85,6 +88,12 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /vtt-place-own/);
     assert.match(vttScript, /vtt-roll-visibility/);
     assert.match(vttScript, /vtt-combat-attacks/);
+    assert.match(vttScript, /data-vtt-check-kind/);
+    assert.match(vttScript, /data-vtt-target-token/);
+    assert.match(vttScript, /data-vtt-request/);
+    assert.match(vttScript, /data-vtt-rolls-tab/);
+    assert.match(vttScript, /data-vtt-result-damage/);
+    assert.match(vttScript, /vtt-target-select/);
     assert.match(vttScript, /ui\.leftPanel === panel \? null : panel/);
     const vttStyle = await fetch(`http://127.0.0.1:${PORT}/vtt.css`).then(response => response.text());
     assert.match(vttStyle, /vtt-viewport/);
@@ -94,6 +103,10 @@ test("комната, лист, броски, история и резервна
     assert.match(vttStyle, /vtt-token-hp/);
     assert.match(vttStyle, /vtt-roll-entry/);
     assert.match(vttStyle, /vtt-combat-quick/);
+    assert.match(vttStyle, /vtt-target-card/);
+    assert.match(vttStyle, /vtt-check-list/);
+    assert.match(vttStyle, /vtt-attack-result/);
+    assert.match(vttStyle, /vtt-token-life-state/);
     assert.doesNotMatch(vttStyle, /\.vtt-ping i::before/);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
@@ -101,7 +114,7 @@ test("комната, лист, броски, история и резервна
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 8);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 4);
+    assert.equal(created.room.scene.schemaVersion, 5);
     assert.deepEqual(created.room.scene.annotations, []);
     assert.equal(created.room.scene.tokens.length, 0);
     assert.equal(created.room.scenes.length, 1);
@@ -111,6 +124,7 @@ test("комната, лист, броски, история и резервна
     assert.equal(created.room.players["test-dm"].sheet.autoSpellSlots, true);
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
     assert.equal(created.room.players["test-dm"].sheet.passivePerceptionBonus, 0);
+    assert.equal(created.room.players["test-dm"].sheet.stable, false);
     assert.equal(created.room.players["test-dm"].sheet.combatLoadout.sets.length, 3);
     assert.equal(created.room.players["test-dm"].sheet.combatLoadout.sets[0].quickSlots.length, 5);
     assert.equal("sheetHistory" in created.room.players["test-dm"], false);
@@ -138,6 +152,8 @@ test("комната, лист, броски, история и резервна
     sheet.spellsList.push({ id:"acid", catalogKey:"acid-splash", name:"Брызги кислоты", level:0, prepared:true, damage:"2d6", rollKind:"damage", effectParts:[{ id:"acid-die", type:"dice", count:2, sides:6 }], upcastParts:[] });
     sheet.goalsList.push({ id:"goal", text:"Добраться до крепости", done:false });
     sheet.notesList.push({ id:"note", title:"Контакт", text:"Варус" });
+    sheet.skillProficiencies.push("perception");
+    sheet.saveProficiencies.push("dex");
     sheet.expertise.push("stealth");
     sheet.spellSlots[0] = { level:1, total:4, used:1 };
     sheet.schemaVersion = 4;
@@ -210,6 +226,15 @@ test("комната, лист, броски, история и резервна
     assert.equal(ownPlacedToken.name, "Шёпот");
     assert.equal(ownPlacedToken.initiativeBonus, 4);
     assert.equal((await emit(player, "scene:token-add", { playerId:"test-dm" })).ok, false);
+
+    const damagedOwnState = waitFor(dm, "room:state", room => room.players["test-player"].sheet.hpCurrent === 7);
+    const damagedOwn = await emit(player, "combat:apply", { tokenId:ownPlacedToken.id, kind:"damage", amount:3, label:"Самопроверка" });
+    assert.equal(damagedOwn.ok, true);
+    assert.equal(damagedOwn.pending, false);
+    assert.equal((await damagedOwnState).players["test-player"].sheet.hpCurrent, 7);
+    const conditionState = waitFor(dm, "room:state", room => room.players["test-player"].sheet.conditions.includes("Отравлен"));
+    assert.equal((await emit(player, "combat:condition", { tokenId:ownPlacedToken.id, condition:"Отравлен", active:true })).ok, true);
+    assert.ok((await conditionState).players["test-player"].sheet.conditions.includes("Отравлен"));
 
     const advantage = await emit(player, "dice:roll", { formula:"1d20+7", label:"Скрытность", mode:"advantage" });
     assert.equal(advantage.ok, true);
@@ -294,6 +319,30 @@ test("комната, лист, броски, история и резервна
     assert.equal(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).length, 3);
     assert.deepEqual(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.name), ["Красный гоблин 1","Красный гоблин 2","Красный гоблин 3"]);
     assert.equal(placedRoom.assets.find(asset => asset.id === uploadedAsset.asset.id).usageCount, 3);
+    const combatNpc = placedRoom.scene.tokens.find(token => token.assetId === uploadedAsset.asset.id);
+    const npcReadyState = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === combatNpc.id && token.hpMax === 10 && token.hp === 10));
+    assert.equal((await emit(dm, "scene:token-update", { tokenId:combatNpc.id, hpMax:10, hp:10, ac:13 })).ok, true);
+    await npcReadyState;
+    const requestForDm = waitFor(dm, "room:state", room => room.combatRequests.some(request => request.tokenId === combatNpc.id && request.amount === 4));
+    const requestedDamage = await emit(player, "combat:apply", { tokenId:combatNpc.id, kind:"damage", amount:4, label:"Урон длинного лука" });
+    assert.equal(requestedDamage.ok, true);
+    assert.equal(requestedDamage.pending, true);
+    const requestRoom = await requestForDm;
+    const combatRequest = requestRoom.combatRequests.find(request => request.id === requestedDamage.requestId);
+    assert.ok(combatRequest);
+    const acceptedState = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === combatNpc.id && token.hp === 6) && !room.combatRequests.some(request => request.id === combatRequest.id));
+    assert.equal((await emit(dm, "combat:request-resolve", { requestId:combatRequest.id, accept:true })).ok, true);
+    assert.equal((await acceptedState).scene.tokens.find(token => token.id === combatNpc.id).hp, 6);
+
+    const concentrationReady = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === combatNpc.id && token.concentration === "Тьма"));
+    assert.equal((await emit(dm, "scene:token-update", { tokenId:combatNpc.id, concentration:"Тьма" })).ok, true);
+    await concentrationReady;
+    const concentrationDamageState = waitFor(dm, "room:state", room => room.scene.tokens.some(token => token.id === combatNpc.id && token.hp === 4));
+    const concentrationDamage = await emit(dm, "combat:apply", { tokenId:combatNpc.id, kind:"damage", amount:2, label:"Проверка концентрации" });
+    assert.equal(concentrationDamage.ok, true);
+    assert.equal(concentrationDamage.result.applied, 2);
+    assert.equal(concentrationDamage.result.concentrationDc, 10);
+    assert.equal((await concentrationDamageState).scene.tokens.find(token => token.id === combatNpc.id).hp, 4);
 
     const blockedDelete = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets/${uploadedAsset.asset.id}`, { method:"DELETE", headers:{ "x-client-id":"test-dm" } });
     assert.equal(blockedDelete.status, 409);

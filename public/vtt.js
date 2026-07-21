@@ -11,6 +11,8 @@
   const selectionByScene = new Map();
   const measurementByScene = new Map();
   const rollSeenByRoom = new Map();
+  const targetByScene = new Map();
+  const lastAttackByScene = new Map();
   const ui = {
     leftPanel: null,
     rightPanel: null,
@@ -19,7 +21,10 @@
     fill: "#b94b42",
     fillOpacity: 0.18,
     strokeWidth: 3,
-    rollVisibility: "public"
+    rollVisibility: "public",
+    checkMode: "normal",
+    combatTab: "attacks",
+    rollsTab: "log"
   };
   let assetFilter = "all";
   let assetSearch = "";
@@ -51,6 +56,40 @@
 
   function getMeasurement(room) {
     return measurementByScene.get(sceneKey(room)) || null;
+  }
+
+  function getTargetId(room) { return targetByScene.get(sceneKey(room)) || ""; }
+  function setTargetId(room, tokenId) {
+    const key = sceneKey(room);
+    if (!tokenId) targetByScene.delete(key);
+    else targetByScene.set(key, tokenId);
+    const lastAttack = lastAttackByScene.get(key);
+    if (lastAttack && lastAttack.targetId !== tokenId) lastAttackByScene.delete(key);
+  }
+
+  function getLastAttack(room) { return lastAttackByScene.get(sceneKey(room)) || null; }
+  function setLastAttack(room, value) {
+    const key = sceneKey(room);
+    if (!value) lastAttackByScene.delete(key); else lastAttackByScene.set(key, value);
+  }
+
+  function combatStateForToken(token, room, characters = {}) {
+    if (!token) return null;
+    const character = token.playerId ? characters[token.playerId] : null;
+    const sheet = token.playerId ? room.players?.[token.playerId]?.sheet : null;
+    return {
+      token,
+      name:token.name,
+      hp:Number(character?.hp ?? sheet?.hpCurrent ?? token.hp ?? 0),
+      hpMax:Math.max(1,Number(character?.hpMax ?? sheet?.hpMax ?? token.hpMax ?? 1)),
+      tempHp:Math.max(0,Number(character?.tempHp ?? sheet?.hpTemp ?? token.tempHp ?? 0)),
+      ac:Number(character?.ac ?? sheet?.ac ?? token.ac ?? 10),
+      conditions:[...(character?.conditions ?? sheet?.conditions ?? token.conditions ?? [])],
+      concentration:String(character?.concentration ?? sheet?.concentrationSpellName ?? token.concentration ?? ""),
+      deathSuccess:Number(character?.deathSuccess ?? sheet?.deathSuccess ?? token.deathSuccess ?? 0),
+      deathFail:Number(character?.deathFail ?? sheet?.deathFail ?? token.deathFail ?? 0),
+      stable:Boolean(character?.stable ?? sheet?.stable ?? token.stable)
+    };
   }
 
   function sceneOrder(scene) {
@@ -184,25 +223,26 @@
     </button>`;
   }
 
-  function tokenMarkup(token, metrics, selection, currentId, isDm, clientId, room, characters = {}) {
+  function tokenMarkup(token, metrics, selection, currentId, targetId, isDm, clientId, room, characters = {}) {
     const size = Number(token.size) || 1;
     const position = itemPosition(metrics, token.x, token.y, size, size);
     const movable = isDm || token.playerId === clientId;
-    const sheet = token.playerId ? room.players?.[token.playerId]?.sheet : null;
-    const character = token.playerId ? characters[token.playerId] : null;
-    const hp = Number(character?.hp ?? sheet?.hpCurrent ?? 0);
-    const hpMax = Math.max(0, Number(character?.hpMax ?? sheet?.hpMax ?? 0));
-    const hpPercent = hpMax ? clamp(hp / hpMax * 100, 0, 100) : 0;
-    const ac = Number(character?.ac ?? sheet?.ac ?? 0);
+    const state = combatStateForToken(token, room, characters);
+    const hpPercent = state.hpMax ? clamp(state.hp / state.hpMax * 100, 0, 100) : 0;
     const initiativeValue = token.initiative !== null && token.initiative !== undefined ? Number(token.initiative) : Number(token.initiativeBonus || 0);
     const initiativeLabel = token.initiative !== null && token.initiative !== undefined ? String(initiativeValue) : `${initiativeValue >= 0 ? "+" : ""}${initiativeValue}`;
-    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selectionHas(selection, "token", token.id) ? "is-selected" : ""} ${token.id === currentId ? "is-current" : ""}"
+    const conditionBadges = state.conditions.slice(0,4).map(condition => `<i title="${esc(condition)}">${esc(condition[0])}</i>`).join("");
+    const dead = state.conditions.includes("Мёртв");
+    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selectionHas(selection, "token", token.id) ? "is-selected" : ""} ${token.id === currentId ? "is-current" : ""} ${token.id === targetId ? "is-target" : ""} ${state.hp <= 0 ? "is-down" : ""} ${state.stable ? "is-stable" : ""} ${dead ? "is-dead" : ""}"
       data-vtt-token="${esc(token.id)}" data-vtt-movable="${movable && (!token.locked || isDm) ? "1" : "0"}"
       style="left:${position.left}px;top:${position.top}px;width:${size * metrics.cell}px;height:${size * metrics.cell}px;--rotation:${Number(token.rotation) || 0}deg;--opacity:${Number(token.opacity) || 1};--z:${Number(token.z) || 100};--color:${esc(token.color || "#9f7842")}"
-      title="${esc(token.name)}${sheet ? ` · HP ${hp}/${hpMax} · КД ${ac}` : ""} · Инициатива ${initiativeLabel}">
+      title="${esc(token.name)} · HP ${state.hp}/${state.hpMax}${state.tempHp ? ` +${state.tempHp}` : ""} · КД ${state.ac} · Инициатива ${initiativeLabel}">
       <i>${token.imageUrl ? `<img src="${esc(token.imageUrl)}" alt="">` : `<span>${esc((token.name || "?")[0].toUpperCase())}</span>`}</i>
       <strong>${esc(token.name)}</strong>
-      ${sheet && hpMax ? `<span class="vtt-token-hp"><i style="width:${hpPercent}%"></i><em>${hp}/${hpMax}</em></span><span class="vtt-token-ac" title="Класс доспеха">${ac}</span>` : ""}
+      <span class="vtt-token-hp"><i style="width:${hpPercent}%"></i><em>${state.hp}/${state.hpMax}${state.tempHp ? ` +${state.tempHp}` : ""}</em></span><span class="vtt-token-ac" title="Класс доспеха">${state.ac}</span>
+      ${state.concentration ? `<span class="vtt-token-concentration" title="Концентрация: ${esc(state.concentration)}">◉</span>` : ""}
+      ${dead ? `<span class="vtt-token-life-state dead" title="Мёртв">✝</span>` : state.stable ? `<span class="vtt-token-life-state stable" title="Стабилен">✓</span>` : ""}
+      ${conditionBadges ? `<span class="vtt-token-conditions">${conditionBadges}${state.conditions.length > 4 ? `<b>+${state.conditions.length-4}</b>` : ""}</span>` : ""}
       <b class="vtt-token-initiative ${token.initiative !== null && token.initiative !== undefined ? "rolled" : "bonus"}" title="${token.initiative !== null && token.initiative !== undefined ? "Результат инициативы" : "Бонус инициативы"}">${initiativeLabel}</b>
     </button>`;
   }
@@ -315,7 +355,7 @@
       const canEdit = isDm || value.playerId === clientId;
       return `<div class="vtt-inspector-card"><div class="vtt-inspector-title"><span class="vtt-color-dot" style="background:${esc(value.color || "#9f7842")}"></span><div><small>${value.playerId ? "Персонаж" : "Токен"}</small><strong>${esc(value.name)}</strong></div></div>
         <div class="vtt-stat-grid"><span><small>X / Y</small><b>${Number(value.x)} / ${Number(value.y)}</b></span><span><small>Размер</small><b>${Number(value.size)}</b></span><span><small>Зрение</small><b>${Number(value.vision || 0)} фт.</b></span><span><small>Инициатива</small><b>${value.initiative === null || value.initiative === undefined ? `${Number(value.initiativeBonus || 0) >= 0 ? "+" : ""}${Number(value.initiativeBonus || 0)}` : Number(value.initiative)}</b></span></div>
-        <div class="vtt-inspector-actions">${canEdit ? `<button type="button" data-vtt-edit-token="${esc(value.id)}">Настроить</button>` : ""}<button type="button" data-vtt-roll="${esc(value.id)}" ${canEdit ? "" : "disabled"}>Инициатива</button>${isDm ? `<button type="button" data-vtt-duplicate-selected>Копировать</button><button class="danger-action" type="button" data-vtt-remove-selected>Удалить</button>` : ""}</div></div>`;
+        <div class="vtt-inspector-actions"><button type="button" data-vtt-target-token="${esc(value.id)}">🎯 Цель</button>${canEdit ? `<button type="button" data-vtt-edit-token="${esc(value.id)}">Настроить</button>` : ""}<button type="button" data-vtt-roll="${esc(value.id)}" ${canEdit ? "" : "disabled"}>Инициатива</button>${isDm ? `<button type="button" data-vtt-duplicate-selected>Копировать</button><button class="danger-action" type="button" data-vtt-remove-selected>Удалить</button>` : ""}</div></div>`;
     }
     if (entry.kind === "object") {
       return `<div class="vtt-inspector-card"><div class="vtt-inspector-title"><span class="vtt-object-symbol">${value.type === "map" ? "▦" : "◆"}</span><div><small>${value.type === "map" ? "Карта" : "Объект"}</small><strong>${esc(value.name)}</strong></div></div>
@@ -395,21 +435,60 @@
     return `<article class="vtt-roll-entry ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""} ${locked ? "private" : ""}"><div><small>${locked ? "🔒 " : ""}${esc(item.player || "Игрок")}</small><strong>${esc(item.label || item.formula || "Бросок")}</strong><span>${dice}</span></div><b>${item.total === null ? "✦" : Number(item.total)}</b></article>`;
   }
 
-  function rollsPanelMarkup(room, isDm) {
-    const rolls = [...(room.rollLog || [])].sort((a,b) => Number(b.at || 0) - Number(a.at || 0));
-    return `<div class="vtt-panel-head"><div><span class="eyebrow">Общий журнал</span><h3>Броски</h3></div><b>${rolls.length}</b></div>
-      ${rollVisibilityMarkup(isDm)}
-      <div class="vtt-roll-compose"><div class="vtt-quick-dice">${[4,6,8,10,12,20,100].map(sides => `<button type="button" data-vtt-quick-die="1к${sides}">к${sides}</button>`).join("")}</div><form id="vtt-custom-roll"><input name="formula" value="1к20" aria-label="Формула броска"><button class="primary">Бросить</button></form></div>
-      <div class="vtt-roll-list">${rolls.length ? rolls.map(rollEntryMarkup).join("") : `<div class="vtt-empty-side">Бросков пока нет.</div>`}</div>`;
+  function checkButtonMarkup(kind, item) {
+    return `<button type="button" data-vtt-check-kind="${kind}" data-vtt-check-key="${esc(item.key)}"><span><strong>${esc(item.name)}</strong><small>${esc(item.short || "")}${item.expertise ? " · компетентность" : item.proficient ? " · владение" : ""}</small></span><b>${Number(item.bonus) >= 0 ? "+" : ""}${Number(item.bonus)}</b></button>`;
   }
 
-  function combatPanelMarkup(combat, isDm) {
-    if (!combat) return `<div class="vtt-empty-side"><span>⚔</span><strong>Лист не найден</strong><p>Открой лист персонажа и сохрани его.</p></div>`;
-    return `<div class="vtt-panel-head"><div><span class="eyebrow">Быстрый бой</span><h3>${esc(combat.name)}</h3></div><b>КД ${Number(combat.ac)}</b></div>
-      <div class="vtt-combat-vitals"><span><small>HP</small><strong>${Number(combat.hp)}/${Number(combat.hpMax)}</strong>${combat.tempHp ? `<em>+${Number(combat.tempHp)} врем.</em>` : ""}</span><span><small>Комплект</small><strong>${esc(combat.setName)}</strong><em>${combat.equipment.length ? combat.equipment.map(item => item.icon).join(" ") : "без предметов"}</em></span></div>
+  function checkModeMarkup() {
+    return `<div class="vtt-check-mode"><button type="button" data-vtt-check-mode="normal" class="${ui.checkMode === "normal" ? "active" : ""}">Обычно</button><button type="button" data-vtt-check-mode="advantage" class="${ui.checkMode === "advantage" ? "active" : ""}">Преимущество</button><button type="button" data-vtt-check-mode="disadvantage" class="${ui.checkMode === "disadvantage" ? "active" : ""}">Помеха</button></div>`;
+  }
+
+  function checksMarkup(combat) {
+    if (!combat) return `<div class="vtt-empty-side"><span>◈</span><strong>Нет листа персонажа</strong><p>Навыки и спасброски появятся после сохранения листа.</p></div>`;
+    return `<div class="vtt-check-section"><div class="vtt-panel-subtitle">Спасброски</div><div class="vtt-check-grid">${combat.saves.map(item => checkButtonMarkup("save",item)).join("")}</div><div class="vtt-panel-subtitle">Навыки</div><div class="vtt-check-list">${combat.skills.map(item => checkButtonMarkup("skill",item)).join("")}</div><div class="vtt-panel-subtitle">Характеристики</div><div class="vtt-check-grid">${combat.abilityChecks.map(item => checkButtonMarkup("ability",item)).join("")}</div></div>`;
+  }
+
+  function rollsPanelMarkup(room, isDm, combat) {
+    const rolls = [...(room.rollLog || [])].sort((a,b) => Number(b.at || 0) - Number(a.at || 0));
+    return `<div class="vtt-panel-head"><div><span class="eyebrow">Кости и проверки</span><h3>Броски</h3></div><b>${rolls.length}</b></div>
       ${rollVisibilityMarkup(isDm)}
-      <div class="vtt-panel-subtitle">Атаки</div><div class="vtt-combat-attacks">${combat.attacks.length ? combat.attacks.map(attack => `<article><button type="button" data-vtt-combat-attack="${esc(attack.id)}"><span><strong>${esc(attack.name)}</strong><small>${esc(attack.actionCost)} · ${esc(attack.damageType)}</small></span><b>${esc(attack.bonus)}</b></button><button type="button" data-vtt-combat-damage="${esc(attack.id)}"><span>${esc(attack.damage)}</span><small>урон</small></button><button type="button" data-vtt-combat-critical="${esc(attack.id)}" title="Критический урон">✦</button></article>`).join("") : `<div class="vtt-empty-mini">В активном комплекте нет атак.</div>`}</div>
-      <div class="vtt-panel-subtitle">Быстрые предметы</div><div class="vtt-combat-quick">${combat.quickSlots.map(item => `<button type="button" data-vtt-combat-quick="${item.index}" ${item.id && item.quantity > 0 ? "" : "disabled"}><span>${esc(item.icon)}</span><strong>${esc(item.name)}</strong><small>${item.id ? `${Number(item.quantity)} шт. · ${esc(item.summary)}` : "пусто"}</small></button>`).join("")}</div>`;
+      <div class="vtt-roll-tabs"><button type="button" data-vtt-rolls-tab="log" class="${ui.rollsTab === "log" ? "active" : ""}">Журнал</button><button type="button" data-vtt-rolls-tab="checks" class="${ui.rollsTab === "checks" ? "active" : ""}">Навыки и спасы</button><button type="button" data-vtt-rolls-tab="dice" class="${ui.rollsTab === "dice" ? "active" : ""}">Кубы</button></div>
+      ${ui.rollsTab !== "log" ? checkModeMarkup() : ""}
+      ${ui.rollsTab === "log" ? `<div class="vtt-roll-list">${rolls.length ? rolls.map(rollEntryMarkup).join("") : `<div class="vtt-empty-side">Бросков пока нет.</div>`}</div>` : ""}
+      ${ui.rollsTab === "checks" ? checksMarkup(combat) : ""}
+      ${ui.rollsTab === "dice" ? `<div class="vtt-roll-compose"><div class="vtt-quick-dice">${[4,6,8,10,12,20,100].map(sides => `<button type="button" data-vtt-quick-die="1к${sides}">к${sides}</button>`).join("")}</div><form id="vtt-custom-roll"><label>Формула<input name="formula" value="1к20" aria-label="Формула броска"></label><button class="primary">Бросить</button></form><small>Для к20 используется выбранный режим. Остальные кубы бросаются обычно.</small></div>` : ""}`;
+  }
+
+  function combatPanelMarkup(combat, room, isDm, target, currentToken = null, clientId = "", lastAttack = null) {
+    if (!combat) return `<div class="vtt-empty-side"><span>⚔</span><strong>Лист не найден</strong><p>Открой лист персонажа и сохрани его.</p></div>`;
+    const requests = room.combatRequests || [];
+    const tokens = room.scene?.tokens || [];
+    const targetState = target?.state;
+    const targetToken = target?.token;
+    const canEditTarget = Boolean(targetToken && (isDm || targetToken.playerId === clientId));
+    const dead = Boolean(targetState?.conditions?.includes("Мёртв"));
+    const canRollDeath = Boolean(targetState && targetState.hp <= 0 && !targetState.stable && !dead && canEditTarget);
+    const conditionNames = ["Ослеплён","Очарован","Оглушён","Отравлен","Испуган","Схвачен","Недееспособен","Невидим","Парализован","Окаменел","Сбит с ног","Опутан","Без сознания","Истощён","Мёртв"];
+    const targetOptions = tokens.map(token => `<option value="${esc(token.id)}" ${token.id === targetToken?.id ? "selected" : ""}>${esc(token.name)}${token.playerId === clientId ? " · я" : ""}</option>`).join("");
+    const status = dead ? "Мёртв" : targetState?.stable ? "Стабилен" : targetState?.hp <= 0 ? "Без сознания" : targetState?.conditions?.length ? `${targetState.conditions.length} сост.` : "В строю";
+    const targetMarkup = targetState ? `<section class="vtt-target-card ${dead ? "is-dead" : targetState.stable ? "is-stable" : ""}"><div class="vtt-target-head"><span>🎯</span><div><small>Выбранная цель · ${esc(status)}</small><strong>${esc(targetState.name)}</strong></div><button type="button" data-vtt-clear-target title="Снять цель">×</button></div><div class="vtt-target-stats"><span><small>HP</small><b>${targetState.hp}/${targetState.hpMax}${targetState.tempHp ? ` +${targetState.tempHp}` : ""}</b></span><span><small>КД</small><b>${targetState.ac}</b></span><span><small>Смерть</small><b>${targetState.deathSuccess}✓ ${targetState.deathFail}✕</b></span></div>
+      <div class="vtt-hp-actions"><button data-vtt-apply-kind="damage" data-vtt-apply-amount="1">−1</button><button data-vtt-apply-kind="damage" data-vtt-apply-amount="5">−5</button><input id="vtt-combat-amount" type="number" min="0" value="1"><button class="danger-action" data-vtt-apply-kind="damage">Урон</button><button data-vtt-apply-kind="healing">Лечение</button><button data-vtt-apply-kind="temp">Врем.</button></div>${canEditTarget ? "" : `<div class="vtt-empty-mini">Изменение чужой цели уйдёт ведущему на подтверждение.</div>`}
+      <div class="vtt-condition-grid">${conditionNames.map(condition => `<button type="button" data-vtt-condition="${esc(condition)}" class="${targetState.conditions.includes(condition) ? "active" : ""}" title="${esc(condition)}" ${canEditTarget ? "" : "disabled"}>${esc(condition)}</button>`).join("")}</div>
+      <div class="vtt-concentration-row"><input id="vtt-concentration-name" value="${esc(targetState.concentration)}" placeholder="Концентрация…" ${canEditTarget ? "" : "disabled"}><button data-vtt-concentration-set ${canEditTarget ? "" : "disabled"}>${targetState.concentration ? "Изменить" : "Начать"}</button>${targetState.concentration ? `<button data-vtt-concentration-clear ${canEditTarget ? "" : "disabled"}>Сбросить</button>` : ""}</div>
+      ${targetState.stable ? `<div class="vtt-life-banner stable">✓ Персонаж стабилен</div>` : dead ? `<div class="vtt-life-banner dead">✝ Три провала — персонаж мёртв</div>` : canRollDeath ? `<button class="vtt-death-save" data-vtt-death-save>к20 · спасбросок от смерти</button>` : ""}</section>` : `<button type="button" class="vtt-target-empty" data-vtt-open-inspector><span>🎯</span><strong>Выбери цель на карте</strong><small>ПКМ по токену, список выше или кнопка «Цель» в инспекторе</small></button>`;
+    const attackResultMarkup = lastAttack ? `<section class="vtt-attack-result ${lastAttack.hit ? "hit" : "miss"}"><div><small>${lastAttack.critical ? "Критическое попадание" : lastAttack.fumble ? "Автоматический промах" : lastAttack.hit ? "Попадание" : "Промах"}</small><strong>${esc(lastAttack.attackName)} → ${esc(lastAttack.targetName || "без цели")}</strong><span>${Number(lastAttack.total)}${lastAttack.targetAc ? ` против КД ${Number(lastAttack.targetAc)}` : ""}</span></div>${lastAttack.hit && lastAttack.targetId ? `<button type="button" class="primary" data-vtt-result-damage="${esc(lastAttack.attackId)}" data-vtt-result-critical="${lastAttack.critical ? "1" : "0"}">${lastAttack.critical ? "Критический урон" : "Бросить урон"}</button>` : ""}<button type="button" data-vtt-dismiss-attack title="Закрыть">×</button></section>` : "";
+    const requestMarkup = isDm && requests.length ? `<section class="vtt-request-list"><div class="vtt-panel-subtitle">Запросы игроков</div>${requests.map(request => { const requester = room.players?.[request.requesterId]?.name || "Игрок"; const requestTarget = tokens.find(token => token.id === request.tokenId)?.name || "цель"; return `<article><span><strong>${esc(requester)} → ${esc(requestTarget)}</strong><small>${request.kind === "damage" ? "урон" : request.kind === "healing" ? "лечение" : "временные HP"}: ${Number(request.amount)} · ${esc(request.label || "Бой")}</small></span><button class="primary" data-vtt-request="${esc(request.id)}" data-vtt-request-action="accept">✓</button><button class="danger-action" data-vtt-request="${esc(request.id)}" data-vtt-request-action="reject">×</button></article>`; }).join("")}</section>` : "";
+    return `<div class="vtt-panel-head"><div><span class="eyebrow">Быстрый бой${room.scene?.initiative?.active ? ` · раунд ${Number(room.scene.initiative.round || 1)}` : ""}</span><h3>${esc(combat.name)}</h3></div><b>КД ${Number(combat.ac)}</b></div>
+      <div class="vtt-combat-vitals"><span><small>HP</small><strong>${Number(combat.hp)}/${Number(combat.hpMax)}</strong>${combat.tempHp ? `<em>+${Number(combat.tempHp)} врем.</em>` : ""}</span><span><small>Комплект</small><strong>${esc(combat.setName)}</strong><em>${combat.equipment.length ? combat.equipment.map(item => item.icon).join(" ") : "без предметов"}</em></span></div>
+      ${currentToken ? `<button class="vtt-end-turn ${currentToken.playerId === clientId || isDm ? "primary" : ""}" data-vtt-end-turn="${esc(currentToken.id)}" ${currentToken.playerId === clientId || isDm ? "" : "disabled"}>Завершить ход · ${esc(currentToken.name)}</button>` : ""}
+      <label class="vtt-target-select"><span>Цель</span><select id="vtt-target-select"><option value="">Без цели</option>${targetOptions}</select></label>
+      ${rollVisibilityMarkup(isDm)}
+      ${checkModeMarkup()}
+      ${targetMarkup}${attackResultMarkup}${requestMarkup}
+      <div class="vtt-combat-tabs"><button data-vtt-combat-tab="attacks" class="${ui.combatTab === "attacks" ? "active" : ""}">Атаки</button><button data-vtt-combat-tab="checks" class="${ui.combatTab === "checks" ? "active" : ""}">Навыки и спасы</button><button data-vtt-combat-tab="items" class="${ui.combatTab === "items" ? "active" : ""}">Предметы</button></div>
+      ${ui.combatTab === "attacks" ? `<div class="vtt-combat-attacks">${combat.attacks.length ? combat.attacks.map(attack => `<article><button type="button" data-vtt-combat-attack="${esc(attack.id)}"><span><strong>${esc(attack.name)}</strong><small>${esc(attack.actionCost)} · ${esc(attack.damageType)}</small></span><b>${esc(attack.bonus)}</b></button><button type="button" data-vtt-combat-damage="${esc(attack.id)}"><span>${esc(attack.damage)}</span><small>урон</small></button><button type="button" data-vtt-combat-critical="${esc(attack.id)}" title="Критический урон">✦</button></article>`).join("") : `<div class="vtt-empty-mini">В активном комплекте нет атак.</div>`}</div>` : ""}
+      ${ui.combatTab === "checks" ? checksMarkup(combat) : ""}
+      ${ui.combatTab === "items" ? `<div class="vtt-combat-quick">${combat.quickSlots.map(item => `<button type="button" data-vtt-combat-quick="${item.index}" ${item.id && item.quantity > 0 ? "" : "disabled"}><span>${esc(item.icon)}</span><strong>${esc(item.name)}</strong><small>${item.id ? `${Number(item.quantity)} шт. · ${esc(item.summary)}` : "пусто"}</small></button>`).join("")}</div>` : ""}`;
   }
 
   function render(root, ctx) {
@@ -430,11 +509,15 @@
     const entries = selectedEntries(room);
     const order = sceneOrder(scene);
     const current = order.find(token => token.id === scene.initiative?.currentTokenId);
+    const targetId = getTargetId(room);
+    const targetToken = (scene.tokens || []).find(token => token.id === targetId);
+    if (targetId && !targetToken) setTargetId(room, "");
+    const target = targetToken ? { token:targetToken, state:combatStateForToken(targetToken, room, ctx.characters || {}) } : null;
     const assets = (room.assets || []).filter(asset => assetFilter === "all" || asset.category === assetFilter)
       .filter(asset => !assetSearch || `${asset.name} ${(asset.tags || []).join(" ")}`.toLowerCase().includes(assetSearch.toLowerCase()));
     const ownToken = (scene.tokens || []).find(token => token.playerId === ctx.clientId);
     const leftContent = ui.leftPanel === "library" && isDm ? libraryPanel(room, assets) : ui.leftPanel === "scenes" ? scenesPanel(room, isDm) : ui.leftPanel === "characters" ? charactersPanel(room, isDm, ctx.clientId, ctx.characters || {}) : ui.leftPanel === "tools" ? toolsPanel(grid, entries.length, isDm) : "";
-    const rightContent = ui.rightPanel === "inspector" ? inspectorMarkup(entries, isDm, ctx.clientId) : ui.rightPanel === "initiative" ? initiativePanelMarkup(scene, order, isDm) : ui.rightPanel === "combat" ? combatPanelMarkup(ctx.combat, isDm) : ui.rightPanel === "rolls" ? rollsPanelMarkup(room, isDm) : "";
+    const rightContent = ui.rightPanel === "inspector" ? inspectorMarkup(entries, isDm, ctx.clientId) : ui.rightPanel === "initiative" ? initiativePanelMarkup(scene, order, isDm) : ui.rightPanel === "combat" ? combatPanelMarkup(ctx.combat, room, isDm, target, current, ctx.clientId, getLastAttack(room)) : ui.rightPanel === "rolls" ? rollsPanelMarkup(room, isDm, ctx.combat) : "";
     const lastSeen = Number(rollSeenByRoom.get(room.code) || 0);
     const unreadRolls = (room.rollLog || []).filter(entry => Number(entry.at || 0) > lastSeen).length;
     if (ui.rightPanel === "rolls") rollSeenByRoom.set(room.code, Math.max(0, ...(room.rollLog || []).map(entry => Number(entry.at || 0))));
@@ -446,7 +529,7 @@
           <div class="vtt-origin" style="left:${metrics.originX}px;top:${metrics.originY}px"></div>
           ${(scene.objects || []).sort((a,b)=>Number(a.z||0)-Number(b.z||0)).map(object => objectMarkup(object, metrics, selection, isDm)).join("")}
           <svg class="vtt-annotation-layer" viewBox="0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}">${(scene.annotations || []).sort((a,b)=>Number(a.z||50)-Number(b.z||50)).map(annotation => annotationMarkup(annotation, metrics, selection, ctx.clientId, isDm)).join("")}</svg>
-          ${(scene.tokens || []).sort((a,b)=>Number(a.z||100)-Number(b.z||100)).map(token => tokenMarkup(token, metrics, selection, scene.initiative?.currentTokenId, isDm, ctx.clientId, room, ctx.characters || {})).join("")}
+          ${(scene.tokens || []).sort((a,b)=>Number(a.z||100)-Number(b.z||100)).map(token => tokenMarkup(token, metrics, selection, scene.initiative?.currentTokenId, getTargetId(room), isDm, ctx.clientId, room, ctx.characters || {})).join("")}
           ${measurementMarkup(room, metrics)}
           <svg id="vtt-draft-layer" class="vtt-draft-layer" viewBox="0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}"></svg>
           ${pingMarkup(scene, metrics)}
@@ -826,6 +909,13 @@
     };
 
     const bindItem = (element, kind, id) => {
+      if (kind === "token") element.addEventListener("contextmenu", event => {
+        event.preventDefault(); event.stopPropagation();
+        setSelection(room, [{ kind:"token", id }]);
+        setTargetId(room, id);
+        ui.rightPanel = "combat";
+        render(root, ctx);
+      }, { signal });
       element.addEventListener("pointerdown", event => {
         if (event.button !== 0 || spaceHeld || ui.tool !== "select") return;
         event.stopPropagation();
@@ -962,12 +1052,35 @@
     root.querySelector("#vtt-tool-fill")?.addEventListener("input", event => { ui.fill = event.target.value; }, { signal });
     root.querySelector("#vtt-tool-width")?.addEventListener("change", event => { ui.strokeWidth = clamp(event.target.value, 1, 20); }, { signal });
     root.querySelectorAll("[data-vtt-roll-visibility]").forEach(button => button.addEventListener("click", () => { ui.rollVisibility = button.dataset.vttRollVisibility; render(root, ctx); }, { signal }));
-    root.querySelectorAll("[data-vtt-quick-die]").forEach(button => button.addEventListener("click", () => ctx.actions?.roll?.(button.dataset.vttQuickDie, button.dataset.vttQuickDie, ui.rollVisibility), { signal }));
-    root.querySelector("#vtt-custom-roll")?.addEventListener("submit", event => { event.preventDefault(); const formula = new FormData(event.currentTarget).get("formula"); ctx.actions?.roll?.(formula, formula, ui.rollVisibility); }, { signal });
-    root.querySelectorAll("[data-vtt-combat-attack]").forEach(button => button.addEventListener("click", () => ctx.actions?.attack?.(button.dataset.vttCombatAttack, ui.rollVisibility), { signal }));
-    root.querySelectorAll("[data-vtt-combat-damage]").forEach(button => button.addEventListener("click", () => ctx.actions?.damage?.(button.dataset.vttCombatDamage, false, ui.rollVisibility), { signal }));
-    root.querySelectorAll("[data-vtt-combat-critical]").forEach(button => button.addEventListener("click", () => ctx.actions?.damage?.(button.dataset.vttCombatCritical, true, ui.rollVisibility), { signal }));
+    root.querySelectorAll("[data-vtt-rolls-tab]").forEach(button => button.addEventListener("click", () => { ui.rollsTab = button.dataset.vttRollsTab; render(root, ctx); }, { signal }));
+    root.querySelectorAll("[data-vtt-quick-die]").forEach(button => button.addEventListener("click", () => { const formula = button.dataset.vttQuickDie; ctx.actions?.roll?.(formula, formula, ui.rollVisibility, /1[кd]20/i.test(formula) ? ui.checkMode : "normal"); }, { signal }));
+    root.querySelector("#vtt-custom-roll")?.addEventListener("submit", event => { event.preventDefault(); const formula = String(new FormData(event.currentTarget).get("formula") || ""); ctx.actions?.roll?.(formula, formula, ui.rollVisibility, /1[кd]20/i.test(formula) ? ui.checkMode : "normal"); }, { signal });
+    root.querySelectorAll("[data-vtt-check-mode]").forEach(button => button.addEventListener("click", () => { ui.checkMode = button.dataset.vttCheckMode; render(root, ctx); }, { signal }));
+    root.querySelectorAll("[data-vtt-combat-tab]").forEach(button => button.addEventListener("click", () => { ui.combatTab = button.dataset.vttCombatTab; render(root, ctx); }, { signal }));
+    root.querySelectorAll("[data-vtt-check-kind]").forEach(button => button.addEventListener("click", () => ctx.actions?.rollCheck?.(button.dataset.vttCheckKind, button.dataset.vttCheckKey, ui.rollVisibility, ui.checkMode), { signal }));
+    root.querySelectorAll("[data-vtt-combat-attack]").forEach(button => button.addEventListener("click", async () => {
+      const result = await ctx.actions?.attack?.(button.dataset.vttCombatAttack, ui.rollVisibility, getTargetId(room), ui.checkMode);
+      if (result?.ok) { setLastAttack(room, result); render(root, ctx); }
+    }, { signal }));
+    root.querySelectorAll("[data-vtt-combat-damage]").forEach(button => button.addEventListener("click", () => ctx.actions?.damage?.(button.dataset.vttCombatDamage, false, ui.rollVisibility, getTargetId(room)), { signal }));
+    root.querySelectorAll("[data-vtt-combat-critical]").forEach(button => button.addEventListener("click", () => ctx.actions?.damage?.(button.dataset.vttCombatCritical, true, ui.rollVisibility, getTargetId(room)), { signal }));
     root.querySelectorAll("[data-vtt-combat-quick]").forEach(button => button.addEventListener("click", () => ctx.actions?.useQuick?.(button.dataset.vttCombatQuick, ui.rollVisibility), { signal }));
+    root.querySelectorAll("[data-vtt-target-token]").forEach(button => button.addEventListener("click", () => { setTargetId(room, button.dataset.vttTargetToken); ui.rightPanel = "combat"; render(root, ctx); }, { signal }));
+    root.querySelector("#vtt-target-select")?.addEventListener("change", event => { setTargetId(room, event.currentTarget.value); render(root, ctx); }, { signal });
+    root.querySelector("[data-vtt-clear-target]")?.addEventListener("click", () => { setTargetId(room, ""); render(root, ctx); }, { signal });
+    root.querySelector("[data-vtt-dismiss-attack]")?.addEventListener("click", () => { setLastAttack(room, null); render(root, ctx); }, { signal });
+    root.querySelector("[data-vtt-result-damage]")?.addEventListener("click", event => ctx.actions?.damage?.(event.currentTarget.dataset.vttResultDamage, event.currentTarget.dataset.vttResultCritical === "1", ui.rollVisibility, getTargetId(room)), { signal });
+    root.querySelector("[data-vtt-open-inspector]")?.addEventListener("click", () => { ui.rightPanel = "inspector"; render(root, ctx); }, { signal });
+    root.querySelectorAll("[data-vtt-apply-kind]").forEach(button => button.addEventListener("click", () => {
+      const amount = Number(button.dataset.vttApplyAmount || root.querySelector("#vtt-combat-amount")?.value || 0);
+      ctx.actions?.applyCombat?.(getTargetId(room), button.dataset.vttApplyKind, amount, `Бой · ${button.dataset.vttApplyKind}`, ui.rollVisibility);
+    }, { signal }));
+    root.querySelectorAll("[data-vtt-condition]").forEach(button => button.addEventListener("click", () => ctx.actions?.toggleCondition?.(getTargetId(room), button.dataset.vttCondition, !button.classList.contains("active")), { signal }));
+    root.querySelector("[data-vtt-concentration-set]")?.addEventListener("click", () => ctx.actions?.setConcentration?.(getTargetId(room), root.querySelector("#vtt-concentration-name")?.value || "Концентрация"), { signal });
+    root.querySelector("[data-vtt-concentration-clear]")?.addEventListener("click", () => ctx.actions?.setConcentration?.(getTargetId(room), ""), { signal });
+    root.querySelector("[data-vtt-death-save]")?.addEventListener("click", () => ctx.actions?.deathSave?.(getTargetId(room), ui.rollVisibility), { signal });
+    root.querySelector("[data-vtt-end-turn]")?.addEventListener("click", event => ctx.actions?.endTurn?.(event.currentTarget.dataset.vttEndTurn), { signal });
+    root.querySelectorAll("[data-vtt-request]").forEach(button => button.addEventListener("click", () => ctx.actions?.resolveRequest?.(button.dataset.vttRequest, button.dataset.vttRequestAction === "accept"), { signal }));
     root.querySelector("#vtt-undo")?.addEventListener("click", () => { setSelection(room, []); emit(ctx, "scene:history-undo"); }, { signal });
     root.querySelector("#vtt-redo")?.addEventListener("click", () => { setSelection(room, []); emit(ctx, "scene:history-redo"); }, { signal });
 
@@ -1051,8 +1164,9 @@
     if (!token) return;
     const isDm = ctx.room.dmId === ctx.clientId;
     const npc = !token.playerId;
-    ctx.openModal("Настройки токена", `<div class="vtt-modal-form">${npc ? `<label>Имя<input id="vtt-token-name" value="${esc(token.name)}"></label><div class="two-col"><label>Цвет рамки<input id="vtt-token-color" type="color" value="${esc(token.color || "#9f7842")}"></label><label>Размер<input id="vtt-token-size" type="number" min="0.25" max="12" step="0.25" value="${Number(token.size || 1)}"></label></div><div class="two-col"><label>Поворот<input id="vtt-token-rotation" type="number" value="${Number(token.rotation || 0)}"></label><label>Прозрачность<input id="vtt-token-opacity" type="number" min="0.05" max="1" step="0.05" value="${Number(token.opacity || 1)}"></label></div><div class="two-col"><label>Зрение<input id="vtt-token-vision" type="number" value="${Number(token.vision || 0)}"></label><label>Бонус инициативы<input id="vtt-token-init" type="number" value="${Number(token.initiativeBonus || 0)}"></label></div>` : `<div class="read-only">Имя и изображение связаны с листом персонажа.</div>`}${isDm ? `<div class="item-toggle-grid"><label class="toggle-row"><span><strong>Скрытый</strong><small>Не передаётся игрокам</small></span><input id="vtt-token-hidden" type="checkbox" ${token.hidden ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Заблокирован</strong><small>Не двигается случайно</small></span><input id="vtt-token-locked" type="checkbox" ${token.locked ? "checked" : ""}><i></i></label></div>` : ""}<div class="modal-actions"><button id="vtt-token-save" class="primary">Сохранить</button><button id="vtt-modal-cancel">Отмена</button></div></div>`);
-    document.querySelector("#vtt-token-save")?.addEventListener("click", () => { emit(ctx, "scene:token-update", { tokenId:token.id, name:document.querySelector("#vtt-token-name")?.value, color:document.querySelector("#vtt-token-color")?.value, size:Number(document.querySelector("#vtt-token-size")?.value), rotation:Number(document.querySelector("#vtt-token-rotation")?.value), opacity:Number(document.querySelector("#vtt-token-opacity")?.value), vision:Number(document.querySelector("#vtt-token-vision")?.value), initiativeBonus:Number(document.querySelector("#vtt-token-init")?.value), hidden:document.querySelector("#vtt-token-hidden")?.checked, locked:document.querySelector("#vtt-token-locked")?.checked }, "Токен обновлён"); ctx.closeModal(); });
+    const state = combatStateForToken(token, ctx.room, ctx.characters || {});
+    ctx.openModal("Настройки токена", `<div class="vtt-modal-form">${npc ? `<label>Имя<input id="vtt-token-name" value="${esc(token.name)}"></label><div class="two-col"><label>Цвет рамки<input id="vtt-token-color" type="color" value="${esc(token.color || "#9f7842")}"></label><label>Размер<input id="vtt-token-size" type="number" min="0.25" max="12" step="0.25" value="${Number(token.size || 1)}"></label></div><div class="three-col"><label>HP<input id="vtt-token-hp" type="number" min="0" value="${state.hp}"></label><label>Макс. HP<input id="vtt-token-hp-max" type="number" min="1" value="${state.hpMax}"></label><label>Врем. HP<input id="vtt-token-temp" type="number" min="0" value="${state.tempHp}"></label></div><div class="two-col"><label>КД<input id="vtt-token-ac" type="number" min="0" value="${state.ac}"></label><label>Концентрация<input id="vtt-token-concentration" value="${esc(state.concentration)}"></label></div><div class="two-col"><label>Поворот<input id="vtt-token-rotation" type="number" value="${Number(token.rotation || 0)}"></label><label>Прозрачность<input id="vtt-token-opacity" type="number" min="0.05" max="1" step="0.05" value="${Number(token.opacity || 1)}"></label></div><div class="two-col"><label>Зрение<input id="vtt-token-vision" type="number" value="${Number(token.vision || 0)}"></label><label>Бонус инициативы<input id="vtt-token-init" type="number" value="${Number(token.initiativeBonus || 0)}"></label></div>` : `<div class="read-only">Имя, изображение, HP, КД и состояния связаны с листом персонажа.</div>`}${isDm ? `<div class="item-toggle-grid"><label class="toggle-row"><span><strong>Скрытый</strong><small>Не передаётся игрокам</small></span><input id="vtt-token-hidden" type="checkbox" ${token.hidden ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Заблокирован</strong><small>Не двигается случайно</small></span><input id="vtt-token-locked" type="checkbox" ${token.locked ? "checked" : ""}><i></i></label></div>` : ""}<div class="modal-actions"><button id="vtt-token-save" class="primary">Сохранить</button><button id="vtt-modal-cancel">Отмена</button></div></div>`);
+    document.querySelector("#vtt-token-save")?.addEventListener("click", () => { emit(ctx, "scene:token-update", { tokenId:token.id, name:document.querySelector("#vtt-token-name")?.value, color:document.querySelector("#vtt-token-color")?.value, size:Number(document.querySelector("#vtt-token-size")?.value), rotation:Number(document.querySelector("#vtt-token-rotation")?.value), opacity:Number(document.querySelector("#vtt-token-opacity")?.value), vision:Number(document.querySelector("#vtt-token-vision")?.value), initiativeBonus:Number(document.querySelector("#vtt-token-init")?.value), hp:Number(document.querySelector("#vtt-token-hp")?.value), hpMax:Number(document.querySelector("#vtt-token-hp-max")?.value), tempHp:Number(document.querySelector("#vtt-token-temp")?.value), ac:Number(document.querySelector("#vtt-token-ac")?.value), concentration:document.querySelector("#vtt-token-concentration")?.value, hidden:document.querySelector("#vtt-token-hidden")?.checked, locked:document.querySelector("#vtt-token-locked")?.checked }, "Токен обновлён"); ctx.closeModal(); });
     document.querySelector("#vtt-modal-cancel")?.addEventListener("click", ctx.closeModal);
   }
 
