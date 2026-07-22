@@ -137,6 +137,7 @@ function normalizeSceneDiceRoll(source, coordinate = value => Math.max(-500, Mat
     color:normalizeDiceColor(source.color),
     at,
     by:cleanText(source.by,60),
+    label:cleanText(source.label,100),
     visibility,
     playerId: cleanText(source.playerId,80),
     privateToDm: Boolean(source.privateToDm)
@@ -1760,7 +1761,7 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("scene:dice-roll", ({ x, y, sides, dice, modifier, visibility, formula:customFormula } = {}, reply = () => {}) => {
+  socket.on("scene:dice-roll", ({ x, y, sides, dice, modifier, visibility, formula:customFormula, label, silent } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     const player = room?.players?.[clientId];
@@ -1804,6 +1805,7 @@ io.on("connection", (socket) => {
       sets, modifier:flat, total, formula,
       color:normalizeDiceColor(player.sheet?.diceColor),
       by:cleanText(player.name,60), at:Date.now(),
+      label:cleanText(label,100),
       visibility:safeVisibility,
       playerId:clientId,
       privateToDm:false
@@ -1814,8 +1816,10 @@ io.on("connection", (socket) => {
       .filter(Boolean)
       .concat(physicalRoll)
       .slice(-MAX_ACTIVE_TABLE_ROLLS);
-    room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:`${safeVisibility === "private" ? "Закрытый" : "Бросок"} на столе · ${formula}`, formula, dice:allValues, detail, modifier:flat, total, natural, mode:"normal", visibility:safeVisibility, at:Date.now() });
-    room.rollLog = room.rollLog.slice(-100);
+    if (!silent) {
+      room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:cleanText(label,100) || `${safeVisibility === "private" ? "Закрытый" : "Бросок"} на столе · ${formula}`, formula, dice:allValues, detail, modifier:flat, total, natural, mode:"normal", visibility:safeVisibility, at:Date.now() });
+      room.rollLog = room.rollLog.slice(-100);
+    }
     setActiveScene(room, scene); saveRooms(); emitRoom(code);
     reply({ ok:true, sets, modifier:flat, total, formula, detail, rollId:physicalRoll.id, visibility:safeVisibility, by:player.name, natural, roll:physicalRoll });
   });

@@ -291,7 +291,7 @@
     });
     if (Number(roll?.modifier)) details.push(`модификатор ${Number(roll.modifier) > 0 ? "+" : "−"}${Math.abs(Number(roll.modifier) || 0)}`);
     result.className = `vtt-physical-dice-result${fallback ? " is-fallback" : ""}${roll?.visibility === "private" ? " is-private" : ""}`;
-    result.innerHTML = `<div><span>${roll?.visibility === "private" ? "🔒 " : ""}${roll.formula || "Бросок"}</span><small>${details.join(" · ") || (roll.by || "Игрок")}</small></div><strong>${Number(roll.total)}</strong>`;
+    result.innerHTML = `<div><span>${roll?.visibility === "private" ? "🔒 " : ""}${roll.label || roll.formula || "Бросок"}</span><small>${details.join(" · ") || (roll.by || "Игрок")}</small></div><strong>${Number(roll.total)}</strong>`;
     stack.prepend(result);
     slot.resultEl = result;
     requestAnimationFrame(() => result.classList.add("is-visible"));
