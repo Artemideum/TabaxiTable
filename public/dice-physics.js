@@ -16,6 +16,7 @@
   let lastRecoveryAt = 0;
   const slots = [];
   const playedRolls = new Map();
+  const playingRolls = new Map();
 
   function ensureLayer() {
     let layer = document.querySelector("#vtt-physical-dice-layer");
@@ -338,9 +339,7 @@
     for (const [rollId,at] of playedRolls) if (now-at > PLAYED_MEMORY_MS) playedRolls.delete(rollId);
   }
 
-  async function playOne(roll, attempt = 0) {
-    if (!roll?.id || attempt === 0 && playedRolls.has(roll.id)) return;
-    if (attempt === 0) rememberPlayed(roll.id);
+  async function runRoll(roll, attempt = 0) {
     const root = ensureLayer();
     root.hidden = false;
     root.classList.add("is-active");
@@ -351,17 +350,18 @@
     try {
       await nextFrame();
       const box = await promiseWithTimeout(configureSlot(slot,roll.color), 11000, "dice slot");
-      if (slot.rollId !== roll.id) return;
+      if (slot.rollId !== roll.id) return { ok:false, interrupted:true };
       await nextFrame();
       slot.rolling = true;
       await promiseWithTimeout(box.roll(notationFor(roll)), 15000, "physical dice");
       slot.rolling = false;
-      if (slot.rollId !== roll.id) return;
+      if (slot.rollId !== roll.id) return { ok:false, interrupted:true };
       showResult(slot,roll,false);
       scheduleRelease(slot,DISPLAY_MS);
+      return { ok:true, fallback:false };
     } catch (error) {
       console.error("Не удалось воспроизвести физический бросок", error);
-      if (slot.rollId !== roll.id) return;
+      if (slot.rollId !== roll.id) return { ok:false, interrupted:true };
       destroySlotBox(slot);
       slot.host.hidden = false;
       slot.busy = true;
@@ -371,15 +371,26 @@
         slot.host.hidden = true;
         slot.busy = false;
         slot.rollId = null;
-        setTimeout(() => { void playOne(roll,attempt + 1); }, 220 + attempt * 260);
-        return;
+        await new Promise(resolve => setTimeout(resolve,220 + attempt * 260));
+        return runRoll(roll,attempt + 1);
       }
       slot.busy = true;
       slot.rollId = roll.id;
       showResult(slot,roll,true);
       scheduleRelease(slot,FALLBACK_MS);
       setTimeout(() => { void recover([roll.color]); }, 250);
+      return { ok:false, fallback:true };
     }
+  }
+
+  function playOne(roll) {
+    if (!roll?.id) return Promise.resolve({ ok:false, invalid:true });
+    if (playingRolls.has(roll.id)) return playingRolls.get(roll.id);
+    if (playedRolls.has(roll.id)) return Promise.resolve({ ok:true, duplicate:true });
+    rememberPlayed(roll.id);
+    const promise = runRoll(roll).finally(() => playingRolls.delete(roll.id));
+    playingRolls.set(roll.id,promise);
+    return promise;
   }
 
   function normalizeRolls(payload) {
@@ -388,7 +399,7 @@
   }
 
   function play(payload) {
-    normalizeRolls(payload).forEach(roll => { void playOne(roll); });
+    return Promise.all(normalizeRolls(payload).map(roll => playOne(roll)));
   }
 
   function activate(colors = []) {

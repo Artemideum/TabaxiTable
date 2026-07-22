@@ -1375,9 +1375,6 @@ function openCharacterBuilderV2(quickStart = false) {
   const guessedBackground = s.backgroundKey || Object.entries(rules.backgrounds).find(([,value]) => value.name.toLowerCase() === String(s.background).toLowerCase())?.[0] || "criminal";
   let currentStep = "identity";
   let autoStats = quickStart || !s.classKey;
-  let rolled3d6 = null;
-  let rolled3d6Assignments = null;
-  let rolling3d6AbilityKey = "";
 
   $("#game-modal").classList.add("library-open", "builder-modal");
   openModal(quickStart ? "Быстрое создание" : "Настройка персонажа", `
@@ -1400,10 +1397,9 @@ function openCharacterBuilderV2(quickStart = false) {
         <div id="builder-concept" class="builder-concept"></div>
       </section>
       <section class="builder-page hidden" data-builder-page="abilities">
-        <div class="builder-section-head"><div><span class="eyebrow">Автоматический расчёт</span><h3>Характеристики без бухгалтерии</h3></div><div class="builder-ability-actions"><button id="builder-roll-3d6-v2" class="secondary" type="button">🎲 3d6 × 6</button><button id="builder-recommended" class="secondary" type="button">Стандартный массив под класс</button></div></div>
-        <p class="builder-help">Используй стандартный массив либо брось шесть наборов по 3d6. Расовые и уровневые бонусы применятся поверх базовых значений.</p>
-        <div id="builder-3d6-results" class="builder-3d6-results hidden"></div>
-        <div class="ability-builder ability-builder-v2">${Object.entries(abilities).map(([key,name]) => `<label><span>${name}</span><input data-builder-stat="${key}" type="number" min="1" max="30" value="${Number(s.stats[key] || 10)}"><small data-builder-stat-note="${key}">—</small></label>`).join("")}</div>
+        <div class="builder-section-head"><div><span class="eyebrow">Автоматический расчёт</span><h3>Характеристики без бухгалтерии</h3></div><div class="builder-ability-actions"><button id="builder-recommended" class="secondary" type="button">Стандартный массив под класс</button></div></div>
+        <p class="builder-help">Оставь стандартный массив, введи значения вручную или нажми 🎲 у конкретной характеристики — три физических к6 вылетят на стол, а результат запишется после остановки кубов.</p>
+        <div class="ability-builder ability-builder-v2">${Object.entries(abilities).map(([key,name]) => `<label><span>${name}</span><input data-builder-stat="${key}" type="number" min="1" max="30" value="${Number(s.stats[key] || 10)}"><div class="ability-builder-card-footer"><small data-builder-stat-note="${key}">—</small><button class="ability-roll-3d6" data-builder-roll-stat="${key}" type="button" title="Бросить 3d6 для характеристики «${esc(name)}»" aria-label="Бросить 3d6 для характеристики «${esc(name)}»">🎲</button></div></label>`).join("")}</div>
         <div id="builder-stat-summary" class="builder-stat-summary"></div>
       </section>
       <section class="builder-page hidden" data-builder-page="details">
@@ -1440,15 +1436,15 @@ function openCharacterBuilderV2(quickStart = false) {
   };
 
 
-  const wait = milliseconds => new Promise(resolve => setTimeout(resolve,Math.max(0,Number(milliseconds) || 0)));
-
   const roll3d6Set = (abilityKey, abilityName) => new Promise(resolve => {
     socket.emit("scene:dice-roll", {
       x:0, y:0, formula:"3d6", visibility:"private", silent:true,
       label:`${abilityName} · 3d6`
-    }, response => {
+    }, async response => {
       if (!response?.ok) return resolve(null);
-      if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
+      if (response.roll) {
+        try { await window.TT_DICE_PHYSICS?.play?.(response.roll); } catch {}
+      }
       const set = Array.isArray(response.sets) ? response.sets.find(entry => Number(entry?.sides) === 6) : null;
       const dice = Array.isArray(set?.values) ? set.values.map(Number) : Array.isArray(response.dice) ? response.dice.map(Number) : [];
       resolve({
@@ -1460,75 +1456,23 @@ function openCharacterBuilderV2(quickStart = false) {
     });
   });
 
-  const defaultRollAssignments = () => Object.fromEntries(Object.keys(abilities).map((key,index) => [key,index]));
-
-  const classRollAssignments = () => {
-    const { classKey } = currentKeys();
-    const abilityKeys = Object.keys(abilities);
-    const sortedIndexes = rolled3d6.map((entry,index) => ({ index, total:Number(entry.total) || 0 })).sort((a,b) => b.total - a.total || a.index - b.index);
-    const priority = rules.statPriorities[classKey] || abilityKeys;
-    return Object.fromEntries(priority.map((key,index) => [key,sortedIndexes[index]?.index ?? index]));
-  };
-
-  const applyRolledStats = (distributeByClass = false) => {
-    if (!Array.isArray(rolled3d6) || !rolled3d6.length) return;
-    const { raceKey, level } = currentKeys();
-    const build = rules.abilityBuild(currentKeys().classKey, raceKey, level);
-    if (!rolled3d6Assignments) rolled3d6Assignments = defaultRollAssignments();
-    if (distributeByClass) rolled3d6Assignments = classRollAssignments();
-
-    // Сначала очищаем старые подписи. Иначе при перестановке двух результатов
-    // браузер иногда успевал оставить прежний текст у второго select до перерисовки.
-    statInputs().forEach(input => {
-      const note = $(`[data-builder-stat-note="${input.dataset.builderStat}"]`);
-      if (note) note.textContent = "";
-    });
-
-    statInputs().forEach(input => {
-      const key = input.dataset.builderStat;
-      const rollIndex = Number(rolled3d6Assignments[key]);
-      const roll = rolled3d6[rollIndex];
-      if (!roll) return;
-      const raceBonus = Number(build.bonuses[key] || 0);
-      const levelBonus = Number(build.levelBonuses[key] || 0);
-      const bonus = raceBonus + levelBonus;
-      input.value = Math.max(1,Math.min(30,Number(roll.total || 10) + bonus));
-      input.dataset.base = Number(roll.total || 10);
-      input.dataset.bonus = bonus;
-      const additions = [raceBonus ? `+${raceBonus} раса` : "", levelBonus ? `+${levelBonus} уровни` : ""].filter(Boolean).join(" · ");
-      const note = $(`[data-builder-stat-note="${key}"]`);
-      if (note) note.textContent = `${Number(roll.total || 10)} [${(roll.dice || []).join(", ")}]${additions ? ` · ${additions}` : ""}`;
-    });
+  const applySingleRolledStat = (key, roll) => {
+    if (!roll) return;
+    const { classKey, raceKey, level } = currentKeys();
+    const build = rules.abilityBuild(classKey,raceKey,level);
+    const input = $(`[data-builder-stat="${key}"]`);
+    if (!input) return;
+    const raceBonus = Number(build.bonuses[key] || 0);
+    const levelBonus = Number(build.levelBonuses[key] || 0);
+    const bonus = raceBonus + levelBonus;
+    input.value = Math.max(1,Math.min(30,Number(roll.total || 10) + bonus));
+    input.dataset.base = Number(roll.total || 10);
+    input.dataset.bonus = bonus;
+    const additions = [raceBonus ? `+${raceBonus} раса` : "", levelBonus ? `+${levelBonus} уровни` : ""].filter(Boolean).join(" · ");
+    const note = $(`[data-builder-stat-note="${key}"]`);
+    if (note) note.textContent = `${Number(roll.total || 10)} [${(roll.dice || []).join(", ")}]${additions ? ` · ${additions}` : ""}`;
     autoStats = false;
     refreshStatsSummary();
-  };
-
-  const render3d6Results = () => {
-    const root = $("#builder-3d6-results");
-    if (!root || !Array.isArray(rolled3d6)) return;
-    if (!rolled3d6Assignments) rolled3d6Assignments = defaultRollAssignments();
-    const abilityEntries = Object.entries(abilities);
-    const assignedRolls = abilityEntries.map(([key,name]) => {
-      const rollIndex = Number(rolled3d6Assignments[key]);
-      return { key, name, roll:rolled3d6[rollIndex] || null };
-    });
-    const finished = rolled3d6.length === abilityEntries.length && assignedRolls.every(entry => entry.roll);
-    root.classList.remove("hidden");
-    root.innerHTML = `<div class="builder-3d6-head"><div><span class="eyebrow">${finished ? "Результаты 3d6" : "Бросаю характеристики"}</span><strong>${assignedRolls.map(entry => entry.roll ? Number(entry.roll.total) : "—").join(" · ")}</strong><small>${finished ? "Карточки показывают текущее назначение. Значения можно менять местами ниже." : "Три физических к6 бросаются отдельно для каждой характеристики по порядку."}</small></div>${finished ? `<button id="builder-distribute-3d6" class="secondary" type="button">Распределить под класс</button>` : `<span class="builder-3d6-progress">${rolled3d6.length}/6</span>`}</div><div class="builder-3d6-pool">${assignedRolls.map(entry => `<span class="assigned ${rolling3d6AbilityKey === entry.key ? "is-rolling" : ""} ${entry.roll ? "is-ready" : "is-waiting"}" data-builder-3d6-card="${entry.key}"><em>${esc(entry.name)}</em><b>${entry.roll ? Number(entry.roll.total) : rolling3d6AbilityKey === entry.key ? "🎲" : "—"}</b><small>${entry.roll ? entry.roll.dice.join("+") : rolling3d6AbilityKey === entry.key ? "бросок…" : "ожидает"}</small></span>`).join("")}</div>${finished ? `<div class="builder-3d6-assignments">${abilityEntries.map(([key,name]) => `<label><span>${esc(name)}</span><select data-builder-3d6-ability="${key}">${rolled3d6.map((entry,index) => `<option value="${index}" ${Number(rolled3d6Assignments[key]) === index ? "selected" : ""}>${Number(entry.total)} · ${entry.dice.join("+")}</option>`).join("")}</select></label>`).join("")}</div>` : ""}`;
-    $("#builder-distribute-3d6")?.addEventListener("click", () => {
-      applyRolledStats(true);
-      render3d6Results();
-    });
-    $$('[data-builder-3d6-ability]').forEach(select => select.addEventListener("change", () => {
-      const key = select.dataset.builder3d6Ability;
-      const nextIndex = Number(select.value);
-      const previousIndex = Number(rolled3d6Assignments[key]);
-      const occupiedKey = Object.keys(rolled3d6Assignments).find(otherKey => otherKey !== key && Number(rolled3d6Assignments[otherKey]) === nextIndex);
-      rolled3d6Assignments[key] = nextIndex;
-      if (occupiedKey) rolled3d6Assignments[occupiedKey] = previousIndex;
-      applyRolledStats(false);
-      render3d6Results();
-    }));
   };
 
   const refreshSubclasses = () => {
@@ -1669,41 +1613,22 @@ function openCharacterBuilderV2(quickStart = false) {
   $("#builder-name").addEventListener("input", refreshReview);
   statInputs().forEach(input => input.addEventListener("input", () => { autoStats = false; input.dataset.base = Number(input.value || 10) - Number(input.dataset.bonus || 0); refreshStatsSummary(); }));
   $("#builder-recommended").addEventListener("click", applyRecommendedStats);
-  $("#builder-roll-3d6-v2").addEventListener("click", async event => {
-    const button = event.currentTarget;
-    const oldText = button.textContent;
+  $$('[data-builder-roll-stat]').forEach(button => button.addEventListener("click", async () => {
+    const key = button.dataset.builderRollStat;
+    const abilityName = abilities[key] || key.toUpperCase();
+    if (button.disabled) return;
     button.disabled = true;
-    rolled3d6 = [];
-    rolled3d6Assignments = {};
-    rolling3d6AbilityKey = "";
-    render3d6Results();
-    const abilityEntries = Object.entries(abilities);
-    for (let index = 0; index < abilityEntries.length; index += 1) {
-      const [key,name] = abilityEntries[index];
-      rolling3d6AbilityKey = key;
-      button.textContent = `${name}: бросаю…`;
-      render3d6Results();
-      const result = await roll3d6Set(key,name);
-      if (!result) {
-        rolling3d6AbilityKey = "";
-        button.disabled = false;
-        button.textContent = oldText;
-        render3d6Results();
-        return toast(`Не удалось бросить 3d6 для характеристики «${name}». Проверь соединение и попробуй снова`);
-      }
-      rolled3d6.push(result);
-      rolled3d6Assignments[key] = index;
-      applyRolledStats(false);
-      render3d6Results();
-      await wait(index === abilityEntries.length - 1 ? 450 : 1450);
-    }
-    rolling3d6AbilityKey = "";
+    button.classList.add("is-rolling");
+    const oldText = button.textContent;
+    button.textContent = "…";
+    const result = await roll3d6Set(key,abilityName);
     button.disabled = false;
+    button.classList.remove("is-rolling");
     button.textContent = oldText;
-    applyRolledStats(false);
-    render3d6Results();
-    toast(`3d6 × 6 → ${rolled3d6.map(entry => entry.total).join(", ")}`);
-  });
+    if (!result) return toast(`Не удалось бросить 3d6 для характеристики «${abilityName}»`);
+    applySingleRolledStat(key,result);
+    toast(`${abilityName}: ${result.total} [${result.dice.join(" + ")}]`);
+  }));
   $("#builder-instant").addEventListener("click", () => finish(true));
   $("#builder-next").addEventListener("click", () => showStep(currentStep === "identity" ? "abilities" : "details"));
   $("#builder-back").addEventListener("click", () => showStep(currentStep === "details" ? "abilities" : "identity"));
