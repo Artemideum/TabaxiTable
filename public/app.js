@@ -1463,6 +1463,14 @@ function openCharacterBuilderV2(quickStart = false) {
     const build = rules.abilityBuild(currentKeys().classKey, raceKey, level);
     if (!rolled3d6Assignments) rolled3d6Assignments = defaultRollAssignments();
     if (distributeByClass) rolled3d6Assignments = classRollAssignments();
+
+    // Сначала очищаем старые подписи. Иначе при перестановке двух результатов
+    // браузер иногда успевал оставить прежний текст у второго select до перерисовки.
+    statInputs().forEach(input => {
+      const note = $(`[data-builder-stat-note="${input.dataset.builderStat}"]`);
+      if (note) note.textContent = "";
+    });
+
     statInputs().forEach(input => {
       const key = input.dataset.builderStat;
       const rollIndex = Number(rolled3d6Assignments[key]);
@@ -1474,7 +1482,8 @@ function openCharacterBuilderV2(quickStart = false) {
       input.dataset.base = Number(roll.total || 10);
       input.dataset.bonus = bonus;
       const additions = [raceBonus ? `+${raceBonus} раса` : "", levelBonus ? `+${levelBonus} уровни` : ""].filter(Boolean).join(" · ");
-      $(`[data-builder-stat-note="${key}"]`).textContent = `${Number(roll.total || 10)} [${(roll.dice || []).join(", ")}]${additions ? ` · ${additions}` : ""}`;
+      const note = $(`[data-builder-stat-note="${key}"]`);
+      if (note) note.textContent = `${Number(roll.total || 10)} [${(roll.dice || []).join(", ")}]${additions ? ` · ${additions}` : ""}`;
     });
     autoStats = false;
     refreshStatsSummary();
@@ -1497,9 +1506,15 @@ function openCharacterBuilderV2(quickStart = false) {
       const previousIndex = Number(rolled3d6Assignments[key]);
       const occupiedKey = Object.keys(rolled3d6Assignments).find(otherKey => otherKey !== key && Number(rolled3d6Assignments[otherKey]) === nextIndex);
       rolled3d6Assignments[key] = nextIndex;
-      if (occupiedKey) rolled3d6Assignments[occupiedKey] = previousIndex;
+      if (occupiedKey) {
+        rolled3d6Assignments[occupiedKey] = previousIndex;
+        const occupiedSelect = $(`[data-builder-3d6-ability="${occupiedKey}"]`);
+        if (occupiedSelect) occupiedSelect.value = String(previousIndex);
+      }
+      select.value = String(nextIndex);
+      select.blur();
       applyRolledStats(false);
-      render3d6Results();
+      requestAnimationFrame(render3d6Results);
     }));
   };
 
