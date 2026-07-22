@@ -34,11 +34,19 @@ test.after(async () => {
   fs.rmSync(DATA_DIR, { recursive:true, force:true });
 });
 
-function connect() {
+function connect(timeoutMs = 5000) {
   return new Promise((resolve, reject) => {
     const socket = io(`http://127.0.0.1:${PORT}`, { transports:["websocket"], forceNew:true });
-    socket.once("connect", () => resolve(socket));
-    socket.once("connect_error", reject);
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off("connect", onConnect);
+      socket.off("connect_error", onError);
+    };
+    const onConnect = () => { cleanup(); resolve(socket); };
+    const onError = error => { cleanup(); socket.close(); reject(error); };
+    const timeout = setTimeout(() => onError(new Error(`Не удалось подключиться за ${timeoutMs} мс`)), timeoutMs);
+    socket.once("connect", onConnect);
+    socket.once("connect_error", onError);
   });
 }
 
@@ -46,13 +54,25 @@ function emit(socket, event, payload) {
   return new Promise(resolve => socket.emit(event, payload, resolve));
 }
 
-function waitFor(socket, event, predicate) {
-  return new Promise(resolve => {
-    const handler = value => {
-      if (predicate(value)) resolve(value);
-      else socket.once(event, handler);
+function waitFor(socket, event, predicate, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      socket.off(event, handler);
     };
-    socket.once(event, handler);
+    const handler = value => {
+      let matched = false;
+      try { matched = predicate(value); }
+      catch (error) { cleanup(); reject(error); return; }
+      if (!matched) return;
+      cleanup();
+      resolve(value);
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error(`Не дождались события "${event}" за ${timeoutMs} мс`));
+    }, timeoutMs);
+    socket.on(event, handler);
   });
 }
 
@@ -502,18 +522,23 @@ test("комната, лист, броски, история и резервна
     assert.equal((await emit(dm, "scene:settings", { grid:{ columns:30, rows:20, cellSize:48, visible:true, snap:true, type:"square", color:"#d3ad6e", opacity:.3, offsetX:7, offsetY:-5 } })).ok, true);
     await snappingState;
 
+    const freeMoveStart = attachmentRoom.scene.tokens.find(token => token.id === npcToken.id);
+    const expectedFreeX = Math.round((Number(freeMoveStart.x) + .4) * 10) / 10;
+    const expectedFreeY = Math.round((Number(freeMoveStart.y) + .6) * 10) / 10;
     const freeMoveState = waitFor(dm,"room:state",room => {
       const token=room.scene.tokens.find(entry=>entry.id===npcToken.id);
-      return token?.x === 8.4 && token?.y === 9.6;
+      return token?.x === expectedFreeX && token?.y === expectedFreeY;
     });
     assert.equal((await emit(dm,"scene:items-transform",{moves:[{kind:"token",id:npcToken.id,dx:.4,dy:.6}],snap:false})).ok,true);
     const freeMoveRoom=await freeMoveState;
-    assert.equal(freeMoveRoom.scene.tokens.find(token=>token.id===npcToken.id).x,8.4);
-    assert.equal(freeMoveRoom.scene.tokens.find(token=>token.id===npcToken.id).y,9.6);
+    assert.equal(freeMoveRoom.scene.tokens.find(token=>token.id===npcToken.id).x,expectedFreeX);
+    assert.equal(freeMoveRoom.scene.tokens.find(token=>token.id===npcToken.id).y,expectedFreeY);
 
+    const expectedSnappedX = Math.round(expectedFreeX + .6);
+    const expectedSnappedY = Math.round(expectedFreeY + .4);
     const snappedMoveState = waitFor(dm,"room:state",room => {
       const token=room.scene.tokens.find(entry=>entry.id===npcToken.id);
-      return token?.x === 9 && token?.y === 10;
+      return token?.x === expectedSnappedX && token?.y === expectedSnappedY;
     });
     assert.equal((await emit(dm,"scene:items-transform",{moves:[{kind:"token",id:npcToken.id,dx:.6,dy:.4}],snap:true})).ok,true);
     await snappedMoveState;
@@ -595,16 +620,17 @@ test("комната, лист, броски, история и резервна
     assert.equal(rapidRollRoom.scene.diceRoll.id, rapidRoll.rollId);
 
 
-    const formulaRollState = waitFor(dm, "room:state", room => room.scene.diceRoll?.formula === "3к6 +1");
+    const formulaRollState = waitFor(dm, "room:state", room => room.scene.diceRoll?.formula === "3к6+1");
     const formulaRoll = await emit(player, "scene:dice-roll", { x:1, y:2, formula:"3d6+1", visibility:"public" });
+    const formulaRollRoom = await formulaRollState;
     assert.equal(formulaRoll.ok, true);
     assert.equal(formulaRoll.sets.length, 1);
     assert.equal(formulaRoll.sets[0].values.length, 3);
     assert.equal(formulaRoll.modifier, 1);
     assert.equal(formulaRoll.total, formulaRoll.sets[0].values.reduce((sum,value)=>sum+value,1));
     assert.equal(formulaRoll.roll.id, formulaRoll.rollId);
-    assert.equal(formulaRoll.roll.formula, "3к6 +1");
-    await formulaRollState;
+    assert.equal(formulaRoll.roll.formula, "3к6+1");
+    assert.equal(formulaRollRoom.scene.diceRoll.id, formulaRoll.rollId);
     const advantagePhysical = await emit(player,"scene:dice-roll",{formula:"1d20+4",mode:"advantage",visibility:"public"});
     assert.equal(advantagePhysical.ok,true);
     assert.equal(advantagePhysical.mode,"advantage");

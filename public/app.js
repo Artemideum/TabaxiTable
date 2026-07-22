@@ -1,6 +1,7 @@
 const socket = io();
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const SHEET_SCHEMA_VERSION = 11;
 function uuid() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16);
@@ -281,7 +282,7 @@ function syncCharacterMechanics(sheet) {
     });
   });
   sheet.xp = Math.max(0, Number(sheet.xp) || 0);
-  sheet.schemaVersion = 8;
+  sheet.schemaVersion = SHEET_SCHEMA_VERSION;
   if (sheet.autoArmorClass) sheet.ac = calculateAc(sheet);
   return sheet;
 }
@@ -1874,140 +1875,6 @@ function openLevelUpWizard() {
     else applyLevel(Math.floor(cls.hitDie / 2) + 1);
   });
   renderTarget();
-}
-
-function openCharacterBuilder() {
-  const s = currentSheet();
-  const statPriority = {
-    barbarian:["str","con","dex","wis","cha","int"], bard:["cha","dex","con","wis","int","str"], cleric:["wis","con","str","dex","cha","int"],
-    druid:["wis","con","dex","int","cha","str"], fighter:["str","con","dex","wis","cha","int"], monk:["dex","wis","con","str","int","cha"],
-    paladin:["str","cha","con","wis","dex","int"], ranger:["dex","wis","con","str","int","cha"], rogue:["dex","con","cha","wis","int","str"],
-    sorcerer:["cha","con","dex","wis","int","str"], warlock:["cha","con","dex","wis","int","str"], wizard:["int","con","dex","wis","cha","str"]
-  };
-  const guessedClass = s.classKey || Object.entries(rules.classes).find(([,value]) => value.name.toLowerCase() === String(s.className).toLowerCase())?.[0] || "rogue";
-  const guessedRace = s.raceKey || Object.entries(rules.races).find(([,value]) => value.name.toLowerCase() === String(s.race).toLowerCase())?.[0] || "custom";
-  $("#game-modal").classList.add("library-open");
-  openModal("Мастер персонажа", `
-    <div class="builder-intro"><strong>Безопасная автоматизация</strong><span>Существующие заметки, предметы, атаки и заклинания останутся на месте.</span></div>
-    <div class="builder-grid">
-      <label>Класс<select id="builder-class">${Object.entries(rules.classes).map(([key,value]) => `<option value="${key}" ${key === guessedClass ? "selected" : ""}>${value.name} · к${value.hitDie}</option>`).join("")}</select></label>
-      <label>Раса<select id="builder-race">${Object.entries(rules.races).map(([key,value]) => `<option value="${key}" ${key === guessedRace ? "selected" : ""}>${value.name}</option>`).join("")}</select></label>
-      <label>Уровень<input id="builder-level" type="number" min="1" max="20" value="${Number(s.level || 1)}"></label>
-      <label>Имя класса вручную<input id="builder-custom-class" value="${esc(s.className || rules.classes[guessedClass]?.name || "")}"></label>
-      <label>Имя расы вручную<input id="builder-custom-race" value="${esc(s.race || rules.races[guessedRace]?.name || "")}"></label>
-      <label>Бонус инициативы<input id="builder-initiative" type="number" value="${Number(s.initiativeBonus || 0)}"></label>
-    </div>
-    <div class="section-actions builder-stat-actions"><h3 class="panel-title">Характеристики</h3><button id="builder-standard" class="secondary" type="button">Стандартный массив</button><button id="builder-roll-3d6" class="secondary" type="button">3d6 × 6</button><button id="builder-tens" class="secondary" type="button">Все по 10</button></div>
-    <div class="ability-builder">${Object.entries(abilities).map(([key,name]) => `<label>${name}<input data-builder-stat="${key}" type="number" min="1" max="30" value="${Number(s.stats[key] || 10)}"><small>${signed(modifier(s.stats[key]))}</small></label>`).join("")}</div>
-    <h3 class="panel-title">Автоматизация</h3>
-    <div class="automation-options">
-      <label class="condition-chip"><input id="builder-prof" type="checkbox" ${s.autoProficiency !== false ? "checked" : ""}>Бонус мастерства по уровню</label>
-      <label class="condition-chip"><input id="builder-slots" type="checkbox" ${s.autoSpellSlots !== false ? "checked" : ""}>Ячейки по классу и уровню</label>
-      <label class="condition-chip"><input id="builder-ac" type="checkbox" ${s.autoArmorClass ? "checked" : ""}>КД по надетой броне</label>
-      <label class="condition-chip"><input id="builder-saves" type="checkbox" checked>Классовые спасброски</label>
-      <label class="condition-chip"><input id="builder-hp" type="checkbox" ${!s.classKey ? "checked" : ""}>Пересчитать максимум HP по среднему</label>
-      <label class="condition-chip"><input id="builder-init-adv" type="checkbox" ${s.initiativeAdvantage ? "checked" : ""}>Преимущество инициативы</label>
-    </div>
-    <h3 class="panel-title">Навыки <span id="builder-skill-count"></span></h3>
-    <div class="builder-skills">${skills.map(([key,name]) => `<label><input type="checkbox" data-builder-skill="${key}" ${s.skillProficiencies.includes(key) ? "checked" : ""}>${name}</label>`).join("")}</div>
-    <div id="builder-preview" class="read-only"></div>
-    <div class="modal-actions"><button id="builder-apply" class="primary">Применить</button><button id="builder-cancel" class="secondary">Отмена</button></div>`);
-
-  const refreshPreview = () => {
-    const classKey = $("#builder-class").value;
-    const cls = rules.classes[classKey];
-    const race = rules.races[$("#builder-race").value];
-    const level = Math.max(1, Math.min(20, Number($("#builder-level").value || 1)));
-    const con = modifier($('[data-builder-stat="con"]').value);
-    const slots = rules.slotsFor(classKey, level);
-    const stats = Object.fromEntries($$('[data-builder-stat]').map(input => [input.dataset.builderStat, Number(input.value)]));
-    const pointBuy = rules.pointBuyTotal(stats);
-    const skillRule = rules.classSkills[classKey];
-    const selectedSkills = $$('[data-builder-skill]:checked').length;
-    $("#builder-skill-count").textContent = `· выбрано ${selectedSkills}${skillRule ? ` · класс даёт ${skillRule.count}` : ""}`;
-    $$('[data-builder-skill]').forEach(input => input.closest("label").classList.toggle("recommended", Boolean(skillRule?.options.includes(input.dataset.builderSkill))));
-    const warning = pointBuy === null ? `<div class="builder-warning"><b>Нестандартный набор</b><span>Значения вышли за диапазон 8–15. Применить всё равно можно.</span></div>` : pointBuy > 27 ? `<div class="builder-warning"><b>Лимит превышен на ${pointBuy - 27}</b><span>Стандартный лимит — 27. Применить всё равно можно.</span></div>` : "";
-    $("#builder-preview").innerHTML = `<strong>${cls.name} ${level}</strong> · мастерство ${signed(rules.proficiency(level))} · кость хитов к${cls.hitDie} · средние HP ${rules.fixedHp(cls.hitDie, level, con)} · КД ${calculateAc({ ...s, classKey, stats, autoArmorClass:true })} · скорость ${race.speed} · ячейки ${slots.some(Boolean) ? slots.map((n,i)=>n ? `${i+1}:${n}` : "").filter(Boolean).join(" / ") : "нет"}<br><span class="${pointBuy !== null && pointBuy > 27 ? "danger-text" : ""}">Покупка характеристик: ${pointBuy === null ? "значения вне диапазона 8–15" : `${pointBuy}/27 очков`}</span>${warning}`;
-  };
-  $("#builder-class").addEventListener("change", () => { $("#builder-custom-class").value = rules.classes[$("#builder-class").value].name; refreshPreview(); });
-  $("#builder-race").addEventListener("change", () => { $("#builder-custom-race").value = rules.races[$("#builder-race").value].name; refreshPreview(); });
-  $("#builder-level").addEventListener("input", refreshPreview);
-  $$('[data-builder-stat]').forEach(input => input.addEventListener("input", () => { input.nextElementSibling.textContent = signed(modifier(input.value)); refreshPreview(); }));
-  $$('[data-builder-skill]').forEach(input => input.addEventListener("change", refreshPreview));
-  $("#builder-standard").addEventListener("click", () => {
-    const priority = statPriority[$("#builder-class").value] || Object.keys(abilities);
-    [15,14,13,12,10,8].forEach((value,index) => {
-      const input = $(`[data-builder-stat="${priority[index]}"]`);
-      input.value = value; input.nextElementSibling.textContent = signed(modifier(value));
-    });
-    refreshPreview();
-  });
-  $("#builder-tens").addEventListener("click", () => { $$('[data-builder-stat]').forEach(input => { input.value = 10; input.nextElementSibling.textContent = "+0"; }); refreshPreview(); });
-  $("#builder-roll-3d6").addEventListener("click", () => {
-    const values = $$('[data-builder-stat]').map(() => {
-      const dice = Array.from({ length:3 }, () => Math.floor(Math.random() * 6) + 1);
-      return { total:dice.reduce((sum,value) => sum + value,0), dice };
-    });
-    $$('[data-builder-stat]').forEach((input,index) => {
-      input.value = values[index].total;
-      input.nextElementSibling.textContent = signed(modifier(values[index].total));
-    });
-    refreshPreview();
-    toast(`3d6 → ${values.map(entry => `${entry.total} [${entry.dice.join(",")}]`).join(" · ")}`);
-  });
-  $("#builder-cancel").addEventListener("click", closeModal);
-  $("#builder-apply").addEventListener("click", () => {
-    const next = structuredClone(currentSheet());
-    const classKey = $("#builder-class").value;
-    const raceKey = $("#builder-race").value;
-    const cls = rules.classes[classKey];
-    const race = rules.races[raceKey];
-    const level = Math.max(1, Math.min(20, Number($("#builder-level").value || 1)));
-    next.stats = { ...next.stats };
-    $$('[data-builder-stat]').forEach(input => next.stats[input.dataset.builderStat] = Math.max(1, Math.min(30, Number(input.value || 10))));
-    next.classKey = classKey; next.raceKey = raceKey;
-    next.className = $("#builder-custom-class").value.trim() || cls.name;
-    next.race = $("#builder-custom-race").value.trim() || race.name;
-    next.level = level; next.hitDieSize = cls.hitDie; next.hitDiceMax = level;
-    next.hitDiceCurrent = Math.min(level, Math.max(0, Number(next.hitDiceCurrent || level)));
-    next.autoProficiency = $("#builder-prof").checked;
-    next.autoSpellSlots = $("#builder-slots").checked;
-    next.autoArmorClass = $("#builder-ac").checked;
-    next.initiativeBonus = Number($("#builder-initiative").value || 0);
-    next.initiativeAdvantage = $("#builder-init-adv").checked;
-    if (next.autoProficiency) next.proficiency = rules.proficiency(level);
-    if ($("#builder-saves").checked) next.saveProficiencies = [...cls.saves];
-    next.skillProficiencies = $$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill);
-    if (cls.spellAbility) next.spellcastingAbility = cls.spellAbility;
-    next.armorProficiencies = cls.armor;
-    next.weaponProficiencies = cls.weapons;
-    next.size = race.size; next.speed = race.speed; next.darkvision = race.darkvision;
-    next.ancestryTraits = race.traits;
-    if ($("#builder-hp").checked) {
-      const hp = rules.fixedHp(cls.hitDie, level, modifier(next.stats.con));
-      const ratio = Number(next.hpMax || 0) ? Number(next.hpCurrent || 0) / Number(next.hpMax) : 1;
-      next.hpMax = hp; next.hpCurrent = Math.max(0, Math.min(hp, Math.round(hp * ratio)));
-    }
-    if (next.autoSpellSlots) {
-      const totals = rules.slotsFor(classKey, level);
-      next.spellSlots = Array.from({length:9}, (_,i) => {
-        const old = next.spellSlots?.find(slot => Number(slot.level) === i+1);
-        const total = Number(totals[i] || 0);
-        return { level:i+1, total, used:Math.min(total, Number(old?.used || 0)) };
-      });
-    }
-    const automaticResources = cls.resources(level, next);
-    automaticResources.forEach(source => {
-      const existing = next.resources.find(item => item.name === source.name);
-      if (existing) {
-        const spent = Math.max(0, Number(existing.max || 0) - Number(existing.current || 0));
-        existing.max = source.max; existing.current = Math.max(0, source.max - spent); existing.reset = source.reset; existing.automatic = true;
-      } else next.resources.push({ id:uuid(), ...source, current:source.max, automatic:true });
-    });
-    if (next.autoArmorClass) next.ac = calculateAc(next);
-    closeModal(); saveNow(next, "Персонаж настроен", "Мастер персонажа"); renderSheet();
-  });
-  refreshPreview();
 }
 
 function toggleInspiration() {

@@ -15,6 +15,8 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
+const SHEET_SCHEMA_VERSION = 11;
+const SCENE_SCHEMA_VERSION = 10;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(ASSET_DIR, { recursive: true });
@@ -334,7 +336,7 @@ function normalizeAttachment(source) {
 
 function defaultScene(name = "Главная сцена") {
   return {
-    schemaVersion: 10,
+    schemaVersion: SCENE_SCHEMA_VERSION,
     id: id(),
     name: cleanText(name, 60) || "Главная сцена",
     folder: "",
@@ -505,7 +507,7 @@ function normalizeScene(source, players = {}) {
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
-    schemaVersion: 10,
+    schemaVersion: SCENE_SCHEMA_VERSION,
     id: cleanText(incoming.id, 80) || base.id,
     name: cleanText(incoming.name, 60) || base.name,
     folder: cleanText(incoming.folder,60),
@@ -620,8 +622,8 @@ function ensureRoomVtt(room) {
   room.scene = room.scenes.find(scene => scene.id === room.activeSceneId) || room.scenes[0];
 }
 
-function activeScene(room) {
-  ensureRoomVtt(room);
+function activeScene(room, roomIsNormalized = false) {
+  if (!roomIsNormalized) ensureRoomVtt(room);
   return normalizeScene(room.scenes.find(scene => scene.id === room.activeSceneId) || room.scenes[0], room.players || {});
 }
 
@@ -780,8 +782,8 @@ function attachmentWouldCycle(scene,childKind,childId,parentKind,parentId) {
   return false;
 }
 
-function sceneSummaries(room, viewerId = "") {
-  ensureRoomVtt(room);
+function sceneSummaries(room, viewerId = "", roomIsNormalized = false) {
+  if (!roomIsNormalized) ensureRoomVtt(room);
   const isDm = viewerId === room.dmId;
   return room.scenes.filter(scene => isDm || scene.id === room.activeSceneId && scene.published !== false).map(scene => ({
     id: scene.id,
@@ -797,9 +799,27 @@ function sceneSummaries(room, viewerId = "") {
   }));
 }
 
-function assetUsageCount(room, assetId) {
-  ensureRoomVtt(room);
-  return room.scenes.reduce((sum, scene) => sum + scene.tokens.filter(token => token.assetId === assetId).length + scene.objects.filter(object => object.assetId === assetId).length, 0);
+function assetUsageCounts(room, roomIsNormalized = false) {
+  if (!roomIsNormalized) ensureRoomVtt(room);
+  const counts = new Map();
+  const countItem = item => {
+    if (!item.assetId) return;
+    counts.set(item.assetId, (counts.get(item.assetId) || 0) + 1);
+  };
+  room.scenes.forEach(scene => {
+    scene.tokens.forEach(countItem);
+    scene.objects.forEach(countItem);
+  });
+  return counts;
+}
+
+function assetUsageCount(room, assetId, roomIsNormalized = false) {
+  if (!roomIsNormalized) ensureRoomVtt(room);
+  return room.scenes.reduce((sum, scene) => (
+    sum
+    + scene.tokens.filter(token => token.assetId === assetId).length
+    + scene.objects.filter(object => object.assetId === assetId).length
+  ), 0);
 }
 
 function nextScenePosition(scene) {
@@ -975,7 +995,7 @@ function initiativeOrder(scene) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 11,
+    schemaVersion: SHEET_SCHEMA_VERSION,
     characterName: playerName,
     diceColor: "#d3ad6e",
     vttUiMode: "veteran",
@@ -1264,7 +1284,7 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 11;
+  normalized.schemaVersion = SHEET_SCHEMA_VERSION;
   normalized.diceColor = normalizeDiceColor(incoming.diceColor, base.diceColor);
   normalized.vttUiMode = incoming.vttUiMode === "assistant" ? "assistant" : "veteran";
   const quick = incoming.vttQuickSheet && typeof incoming.vttQuickSheet === "object" ? incoming.vttQuickSheet : {};
@@ -1326,8 +1346,9 @@ function publicRoom(room, viewerId = "") {
     const { sheetHistory: _privateHistory, ...publicPlayer } = player;
     players[playerId] = publicPlayer;
   });
-  const scene = activeScene(room);
+  const scene = activeScene(room, true);
   const isDm = viewerId === room.dmId;
+  const assetUsage = isDm ? assetUsageCounts(room, true) : null;
   const canSeeSceneRoll = roll => {
     const visibility = ["private","gm"].includes(roll?.visibility) ? roll.visibility : "public";
     if (roll?.privateToDm) return isDm;
@@ -1383,8 +1404,8 @@ function publicRoom(room, viewerId = "") {
     }).map(card => isDm ? card : ({ ...card, targetAc:0 })).slice(-100),
     scene,
     activeSceneId: room.activeSceneId,
-    scenes: sceneSummaries(room, viewerId),
-    assets: isDm ? room.assets.map(asset => ({ ...asset, usageCount: assetUsageCount(room, asset.id) })) : [],
+    scenes: sceneSummaries(room, viewerId, true),
+    assets: isDm ? room.assets.map(asset => ({ ...asset, usageCount: assetUsage.get(asset.id) || 0 })) : [],
     encounterTemplates:isDm ? room.encounterTemplates : [],
     diagnostics:isDm ? {
       autoBackupAt:Number(lastAutoBackupAt.get(room.code)||0),
@@ -1432,7 +1453,7 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
   const extension = { "image/png":"png", "image/jpeg":"jpg", "image/webp":"webp", "image/gif":"gif" }[mimeType];
   const hash = crypto.createHash("sha256").update(buffer).digest("hex");
   const duplicate = room.assets.find(asset => asset.hash === hash && asset.category === category);
-  if (duplicate) return res.json({ ok:true, asset:{ ...duplicate, usageCount:assetUsageCount(room, duplicate.id) }, duplicate:true });
+  if (duplicate) return res.json({ ok:true, asset:{ ...duplicate, usageCount:assetUsageCount(room, duplicate.id, true) }, duplicate:true });
   const assetId = id();
   const filename = `${assetId}.${extension}`;
   const directory = path.join(ASSET_DIR, code);
@@ -1474,7 +1495,7 @@ app.patch("/api/rooms/:code/assets/:assetId", async (req, res) => {
   asset.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag => cleanText(tag,30)).filter(Boolean))].slice(0,20) : asset.tags;
   saveRooms();
   await emitRoom(code);
-  res.json({ ok:true, asset:{ ...asset, usageCount:assetUsageCount(room, asset.id) } });
+  res.json({ ok:true, asset:{ ...asset, usageCount:assetUsageCount(room, asset.id, true) } });
 });
 
 app.delete("/api/rooms/:code/assets/:assetId", async (req, res) => {
@@ -1486,7 +1507,7 @@ app.delete("/api/rooms/:code/assets/:assetId", async (req, res) => {
   const assetId = cleanText(req.params.assetId, 80);
   const asset = room.assets.find(entry => entry.id === assetId);
   if (!asset) return res.status(404).json({ ok:false, error:"Ресурс не найден" });
-  const usageCount = assetUsageCount(room, assetId);
+  const usageCount = assetUsageCount(room, assetId, true);
   const force = req.query.force === "1";
   if (usageCount && !force) return res.status(409).json({ ok:false, error:`Ресурс используется на сценах: ${usageCount}`, usageCount });
   if (force) {
@@ -2355,41 +2376,30 @@ io.on("connection", (socket) => {
     const scene = activeScene(room);
     const isDm = room.dmId === clientId;
     const safeMoves = Array.isArray(moves) ? moves.slice(0,500) : [];
-    const applicable = safeMoves.filter(move => {
-      if (move?.kind === "token") {
-        const token = scene.tokens.find(entry => entry.id === cleanText(move.id,80));
-        return token && (isDm || token.playerId === clientId) && (!token.locked || isDm);
-      }
-      if (move?.kind === "object") return isDm && scene.objects.some(entry => entry.id === cleanText(move.id,80) && !entry.locked);
-      if (move?.kind === "annotation") {
-        const annotation = scene.annotations.find(entry => entry.id === cleanText(move.id,80));
-        return annotation && (isDm || annotation.ownerId === clientId) && (!annotation.locked || isDm);
-      }
-      return false;
-    });
+    const applicable = safeMoves.map(move => {
+      const kind = ["token","object","annotation"].includes(move?.kind) ? move.kind : "";
+      const item = sceneItemByRef(scene,kind,move?.id);
+      if (!item) return null;
+      if (kind === "token" && (isDm || item.playerId === clientId) && (!item.locked || isDm)) return { move, kind, item };
+      if (kind === "object" && isDm && !item.locked) return { move, kind, item };
+      if (kind === "annotation" && (isDm || item.ownerId === clientId) && (!item.locked || isDm)) return { move, kind, item };
+      return null;
+    }).filter(Boolean);
     if (!applicable.length) return reply({ ok:false, error:"Нет объектов, которые можно переместить" });
     rememberScene(room, scene);
     const useSnap = snap === undefined ? scene.grid.snap !== false : Boolean(snap);
     const coordinate = value => useSnap ? Math.max(-500,Math.min(500,Math.round(Number(value)||0))) : sceneFreeCoordinate(value);
-    const explicitKeys=new Set(applicable.map(move=>sceneItemKey(move.kind,move.id)));
-    applicable.forEach(move => {
+    const explicitKeys = new Set(applicable.map(({ kind, item }) => sceneItemKey(kind,item.id)));
+    applicable.forEach(({ move, kind, item }) => {
       const dx = Number(move.dx) || 0, dy = Number(move.dy) || 0;
-      if (move.kind === "token") {
-        const token = scene.tokens.find(entry => entry.id === cleanText(move.id,80));
-        const oldX=Number(token.x||0),oldY=Number(token.y||0);
-        token.x = coordinate(move.x === undefined ? token.x + dx : move.x);
-        token.y = coordinate(move.y === undefined ? token.y + dy : move.y);
-        propagateAttachedTranslation(scene,"token",token.id,token.x-oldX,token.y-oldY,explicitKeys);
-      } else if (move.kind === "object") {
-        const object = scene.objects.find(entry => entry.id === cleanText(move.id,80));
-        const oldX=Number(object.x||0),oldY=Number(object.y||0);
-        object.x = coordinate(move.x === undefined ? object.x + dx : move.x);
-        object.y = coordinate(move.y === undefined ? object.y + dy : move.y);
-        propagateAttachedTranslation(scene,"object",object.id,object.x-oldX,object.y-oldY,explicitKeys);
+      if (kind === "token" || kind === "object") {
+        const oldX = Number(item.x || 0), oldY = Number(item.y || 0);
+        item.x = coordinate(move.x === undefined ? item.x + dx : move.x);
+        item.y = coordinate(move.y === undefined ? item.y + dy : move.y);
+        propagateAttachedTranslation(scene,kind,item.id,item.x-oldX,item.y-oldY,explicitKeys);
       } else {
-        const annotation = scene.annotations.find(entry => entry.id === cleanText(move.id,80));
-        translateAnnotation(annotation, dx, dy, scene, useSnap);
-        propagateAttachedTranslation(scene,"annotation",annotation.id,dx,dy,explicitKeys);
+        translateAnnotation(item,dx,dy,scene,useSnap);
+        propagateAttachedTranslation(scene,"annotation",item.id,dx,dy,explicitKeys);
       }
     });
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, moved:applicable.length });
