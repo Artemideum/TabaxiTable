@@ -79,8 +79,8 @@ test("комната, лист, броски, история и резервна
     const itemSystemScript = await fetch(`http://127.0.0.1:${PORT}/item-system.js`).then(response => response.text());
     assert.match(itemSystemScript, /TT_ITEM_SYSTEM/);
     const appScript = await fetch(`http://127.0.0.1:${PORT}/app.js`).then(response => response.text());
-    assert.match(appScript, /data-builder-3d6-ability/);
-    assert.match(appScript, /rolled3d6Assignments/);
+    assert.match(appScript, /data-builder-roll-stat/);
+    assert.match(appScript, /roll3d6Set/);
     const vttScript = await fetch(`http://127.0.0.1:${PORT}/vtt.js`).then(response => response.text());
     assert.match(vttScript, /TT_VTT/);
     assert.match(vttScript, /scene:asset-place/);
@@ -100,6 +100,16 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /data-vtt-die-add/);
     assert.match(vttScript, /scene:token-hp/);
     assert.match(vttScript, /TT_DICE_PHYSICS/);
+    assert.match(vttScript, /scene:fog-add/);
+    assert.match(vttScript, /scene:encounter-save/);
+    assert.match(vttScript, /scene:items-copy-to-scene/);
+    assert.match(vttScript, /room:diagnostics/);
+    assert.match(vttScript, /vtt-character-spell/);
+    assert.match(vttScript, /data-vtt-fog-shape/);
+    assert.match(vttScript, /data-vtt-pin-save/);
+    assert.match(vttScript, /npcCharacterPanelMarkup/);
+    assert.match(vttScript, /openNpcSheetEditor/);
+    assert.match(vttScript, /data-vtt-npc-formula/);
     assert.doesNotMatch(vttScript, /vtt-table-die/);
     assert.doesNotMatch(vttScript, /vtt-hotbar-slots/);
     assert.match(vttScript, /ui\.leftPanel === panel \? null : panel/);
@@ -122,20 +132,25 @@ test("комната, лист, броски, история и резервна
     assert.match(dicePhysics, /terms\.push\("1d100","1d10"\)/);
     assert.match(dicePhysics, /WebGLRenderingContext/);
     assert.ok(dicePhysics.includes('return `${terms.join("+")}@${forced.join(",")}`;'));
-    assert.match(dicePhysics, /playOne\(roll, attempt = 0\)/);
+    assert.match(dicePhysics, /runRoll\(roll, attempt = 0\)/);
     assert.match(dicePhysics, /destroySlotBox/);
     assert.match(dicePhysics, /forceContextLoss/);
     assert.match(dicePhysics, /visibilitychange/);
+    assert.match(dicePhysics, /setQuality/);
+    assert.match(dicePhysics, /function status/);
+    assert.match(dicePhysics, /setMaterial/);
     const diceVendor = await fetch(`http://127.0.0.1:${PORT}/vendor/dice-box-threejs.es.js`).then(response => response.text());
     assert.ok(diceVendor.length > 500000);
 
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 10);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 11);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 6);
+    assert.equal(created.room.scene.schemaVersion, 8);
     assert.deepEqual(created.room.scene.annotations, []);
+    assert.deepEqual(created.room.scene.fog.operations, []);
+    assert.equal(created.room.scene.fog.enabled, true);
     assert.equal(created.room.scene.tokens.length, 0);
     assert.equal(created.room.scenes.length, 1);
     assert.equal(created.room.scenes[0].active, true);
@@ -145,6 +160,9 @@ test("комната, лист, броски, история и резервна
     assert.equal(created.room.players["test-dm"].sheet.autoArmorClass, true);
     assert.equal(created.room.players["test-dm"].sheet.passivePerceptionBonus, 0);
     assert.equal(created.room.players["test-dm"].sheet.diceColor, "#d3ad6e");
+    assert.deepEqual(created.room.players["test-dm"].sheet.vttQuickSheet.sections, ["overview","combat","checks","spells"]);
+    assert.deepEqual(created.room.players["test-dm"].sheet.dicePresets, []);
+    assert.deepEqual(created.room.encounterTemplates, []);
     assert.equal(created.room.players["test-dm"].sheet.combatLoadout.sets.length, 3);
     assert.equal(created.room.players["test-dm"].sheet.combatLoadout.sets[0].quickSlots.length, 5);
     assert.equal("sheetHistory" in created.room.players["test-dm"], false);
@@ -163,6 +181,8 @@ test("комната, лист, броски, история и резервна
     sheet.xp = 6500;
     sheet.passivePerceptionBonus = 3;
     sheet.diceColor = "#3366cc";
+    sheet.vttQuickSheet = { sections:["overview","combat","checks","spells","notes"], pinnedSkills:["stealth"], pinnedSaves:["dex"], pinnedAttacks:["bow"], pinnedSpells:["acid"] };
+    sheet.dicePresets = [{ id:"preset-one", name:"Скрытность", formula:"1d20+7", visibility:"private" }];
     sheet.attacksList.push({ id:"bow", name:"Длинный лук +1", bonus:"[DEX]+[PROF]+1", damage:"1d8+[DEX]+1+5d6", damageType:"колющий", actionCost:"action", rollMode:"inherit", attackParts:[{ id:"dex", type:"ability", value:"dex" },{ id:"prof", type:"proficiency", value:"prof" },{ id:"magic", type:"flat", value:"1" }], damageParts:[{ id:"die", type:"dice", count:1, sides:8 },{ id:"damage-dex", type:"ability", value:"dex" },{ id:"sneak", type:"sneak" }] });
     sheet.resources.push({ id:"arrows", name:"Стрелы", current:19, max:20, reset:"none" });
     sheet.inventoryList.push({ id:"cloak", name:"Плащ летучей мыши", quantity:1, weight:3, equipped:true, attuned:true, magical:true });
@@ -184,10 +204,12 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 10);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 11);
     assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
     assert.equal(updatedRoom.players["test-player"].sheet.passivePerceptionBonus, 3);
     assert.equal(updatedRoom.players["test-player"].sheet.diceColor, "#3366cc");
+    assert.ok(updatedRoom.players["test-player"].sheet.vttQuickSheet.sections.includes("notes"));
+    assert.equal(updatedRoom.players["test-player"].sheet.dicePresets[0].formula, "1d20+7");
     assert.deepEqual(updatedRoom.players["test-player"].sheet.classes.map(entry => [entry.key, entry.level]), [["rogue",1]]);
     assert.equal(updatedRoom.players["test-player"].sheet.levelProgression.length, 1);
     assert.equal(updatedRoom.players["test-player"].sheet.inventoryList[0].attuned, true);
@@ -303,6 +325,33 @@ test("комната, лист, броски, история и резервна
     assert.ok((await hiddenForDm).scene.tokens.some(token => token.name === "Скрытый гоблин"));
     assert.equal((await hiddenForPlayer).scene.tokens.some(token => token.name === "Скрытый гоблин"), false);
 
+    const npcAdded = await emit(dm, "scene:token-add", { name:"Гоблин-шаман", initiativeBonus:1 });
+    assert.equal(npcAdded.ok, true);
+    const npcToken = npcAdded.scene.tokens.find(token => token.name === "Гоблин-шаман");
+    assert.ok(npcToken?.npcSheet);
+    const npcSheet = {
+      stats:{ str:{ value:14, public:true }, dex:{ value:16, public:false }, con:{ value:12, public:true }, int:{ value:10, public:false }, wis:{ value:13, public:true }, cha:{ value:8, public:false } },
+      saves:[{ id:"npc-save-public", name:"Ловкость", formula:"1d20+3", public:true },{ id:"npc-save-private", name:"Мудрость", formula:"1d20+1", public:false }],
+      checks:[{ id:"npc-check-public", name:"Скрытность", formula:"1d20+5", public:true },{ id:"npc-check-private", name:"Анализ", formula:"1d20+0", public:false }],
+      attacks:[{ id:"npc-attack-public", name:"Кинжал", attackFormula:"1d20+5", damageFormula:"1d4+3", damageType:"колющий", public:true },{ id:"npc-attack-private", name:"Тайное пламя", attackFormula:"1d20+4", damageFormula:"2d6", damageType:"огонь", public:false }],
+      formulas:[{ id:"npc-formula-public", name:"Перезарядка", formula:"1d6", public:true },{ id:"npc-formula-private", name:"Секрет", formula:"3d8+2", public:false }]
+    };
+    const npcDmState = waitFor(dm, "room:state", room => room.scene.tokens.find(token => token.id === npcToken.id)?.npcSheet?.checks?.length === 2);
+    const npcPlayerState = waitFor(player, "room:state", room => room.scene.tokens.find(token => token.id === npcToken.id)?.npcSheet?.checks?.length === 1);
+    assert.equal((await emit(dm, "scene:token-update", { tokenId:npcToken.id, npcSheet })).ok, true);
+    const npcDmRoom = await npcDmState;
+    const npcPlayerRoom = await npcPlayerState;
+    const dmNpc = npcDmRoom.scene.tokens.find(token => token.id === npcToken.id);
+    const publicNpc = npcPlayerRoom.scene.tokens.find(token => token.id === npcToken.id);
+    assert.equal(dmNpc.npcSheet.stats.dex.value, 16);
+    assert.equal(dmNpc.npcSheet.attacks.length, 2);
+    assert.equal(publicNpc.npcSheet.stats.str.value, 14);
+    assert.equal("dex" in publicNpc.npcSheet.stats, false);
+    assert.deepEqual(publicNpc.npcSheet.checks.map(entry => entry.id), ["npc-check-public"]);
+    assert.deepEqual(publicNpc.npcSheet.attacks.map(entry => entry.id), ["npc-attack-public"]);
+    assert.deepEqual(publicNpc.npcSheet.formulas.map(entry => entry.id), ["npc-formula-public"]);
+    assert.equal((await emit(player, "scene:token-update", { tokenId:npcToken.id, npcSheet:{ stats:{} } })).ok, false);
+
     const hiddenRollForDm = waitFor(dm, "room:state", room => room.rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"));
     const hiddenRollForPlayer = waitFor(player, "room:state", room => room.scene.name === "Подземелье");
     assert.equal((await emit(dm, "initiative:roll", { tokenId:hiddenToken.id })).ok, true);
@@ -314,12 +363,13 @@ test("комната, лист, броски, история и резервна
     const uploadedAsset = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
       method:"POST",
       headers:{ "content-type":"application/json", "x-client-id":"test-dm" },
-      body:JSON.stringify({ name:"Красный гоблин", fileName:"goblin.png", category:"token", dataUrl:tinyPng, width:1, height:1 })
+      body:JSON.stringify({ name:"Красный гоблин", fileName:"goblin.png", category:"token", folder:"Противники", tags:["гоблин"], dataUrl:tinyPng, width:1, height:1 })
     }).then(response => response.json());
     assert.equal(uploadedAsset.ok, true);
     assert.match(uploadedAsset.asset.url, new RegExp(`/assets/${created.code}/`));
     const assetRoom = await assetState;
     assert.equal(assetRoom.assets[0].usageCount, 0);
+    assert.equal(assetRoom.assets[0].folder, "Противники");
     const assetFile = await fetch(`http://127.0.0.1:${PORT}${uploadedAsset.asset.url}`);
     assert.equal(assetFile.status, 200);
     assert.equal(assetFile.headers.get("content-type"), "image/png");
@@ -335,12 +385,13 @@ test("комната, лист, броски, история и резервна
 
     const placedTokenIds = placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.id);
     const batchTokenState = waitFor(dm, "room:state", room => placedTokenIds.every(id => room.scene.tokens.some(token => token.id === id && token.initiative === 12 && token.badge === "Отряд" && token.locked)));
-    const batchTokenUpdate = await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:12, badge:"Отряд", badgeColor:"#d3ad6e", locked:true, hp:8, hpMax:8 } });
+    const batchTokenUpdate = await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:12, badge:"Отряд", badgeColor:"#d3ad6e", locked:true, hp:8, hpMax:8, size:1.5, opacity:.75, rotation:30, vision:90, color:"#884422" } });
     assert.equal(batchTokenUpdate.ok, true);
     assert.equal(batchTokenUpdate.updated, 3);
     assert.equal((await emit(player, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:99 } })).ok, false);
     const batchedRoom = await batchTokenState;
     assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).hp === 8));
+    assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).size === 1.5));
     const batchInitiativeState = waitFor(dm, "room:state", room => placedTokenIds.every(id => {
       const value = room.scene.tokens.find(token => token.id === id)?.initiative;
       return Number.isInteger(value) && value >= 3 && value <= 22;
@@ -348,9 +399,29 @@ test("комната, лист, броски, история и резервна
     assert.equal((await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, rollInitiative:true })).ok, true);
     await batchInitiativeState;
 
+    const fogState = waitFor(dm, "room:state", room => room.scene.fog.operations.length === 1);
+    assert.equal((await emit(dm,"scene:fog-add",{ mode:"cover",kind:"rect",x:0,y:0,x2:4,y2:3 })).ok,true);
+    assert.equal((await fogState).scene.fog.operations[0].mode,"cover");
+    assert.equal((await emit(player,"scene:fog-add",{ mode:"cover",kind:"rect",x:0,y:0,x2:1,y2:1 })).ok,false);
+    assert.equal((await emit(dm,"scene:fog-clear",{ mode:"last" })).ok,true);
+
+    const encounterSaved = await emit(dm,"scene:encounter-save",{ tokenIds:placedTokenIds,name:"Гоблинский дозор",tags:["лес"] });
+    assert.equal(encounterSaved.ok,true);
+    assert.equal(encounterSaved.template.tokens.length,3);
+    const encounterPlaced = await emit(dm,"scene:encounter-place",{ templateId:encounterSaved.template.id,x:10,y:10 });
+    assert.equal(encounterPlaced.ok,true);
+    assert.equal(encounterPlaced.created.length,3);
+
+    await new Promise(resolve => setTimeout(resolve,250));
+    const diagnostics = await emit(dm,"room:diagnostics",{});
+    assert.equal(diagnostics.ok,true);
+    assert.ok(diagnostics.diagnostics.scenes >= 1);
+    assert.equal(diagnostics.diagnostics.backupAvailable,true);
+    assert.equal((await emit(player,"room:diagnostics",{})).ok,false);
+
     const blockedDelete = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets/${uploadedAsset.asset.id}`, { method:"DELETE", headers:{ "x-client-id":"test-dm" } });
     assert.equal(blockedDelete.status, 409);
-    assert.equal((await blockedDelete.json()).usageCount, 3);
+    assert.equal((await blockedDelete.json()).usageCount, 6);
 
     const forbiddenUpload = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
       method:"POST", headers:{ "content-type":"application/json", "x-client-id":"test-player" },
@@ -491,12 +562,17 @@ test("комната, лист, броски, история и резервна
     const sceneCreated = await emit(dm, "scene:create", { name:"Тайная лаборатория", activate:false });
     assert.equal(sceneCreated.ok, true);
     await sceneCreatedState;
+    const renamedScene = await emit(dm,"scene:rename",{ sceneId:sceneCreated.scene.id,name:"Тайная лаборатория",folder:"Подземелье",tags:["секрет"] });
+    assert.equal(renamedScene.ok,true);
+    const copiedToScene = await emit(dm,"scene:items-copy-to-scene",{ refs:[{kind:"token",id:placedTokenIds[0]}], targetSceneId:sceneCreated.scene.id });
+    assert.equal(copiedToScene.ok,true);
+    assert.equal(copiedToScene.copied,1);
     const activatedForPlayer = waitFor(player, "room:state", room => room.scene.name === "Тайная лаборатория");
     assert.equal((await emit(dm, "scene:activate", { sceneId:sceneCreated.scene.id })).ok, true);
     const laboratoryRoom = await activatedForPlayer;
     assert.equal(laboratoryRoom.scenes.length, 1);
     assert.equal(laboratoryRoom.assets.length, 0);
-    assert.equal(laboratoryRoom.scene.tokens.length, 0);
+    assert.equal(laboratoryRoom.scene.tokens.length, 1);
 
     const copied = await emit(dm, "scene:duplicate", { sceneId:sceneCreated.scene.id, name:"Лаборатория — копия", activate:false });
     assert.equal(copied.ok, true);

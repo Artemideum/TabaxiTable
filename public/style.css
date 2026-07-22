@@ -1341,3 +1341,16 @@ button:active:not(:disabled) { transform: translateY(1px); }
 
 @media (max-width:520px) {
 }
+
+/* 2.1 dice quality-of-life */
+.dice-formula-roll { grid-template-columns:minmax(0,1fr) auto auto; }
+.dice-presets-section { margin-top:14px; padding-top:14px; border-top:1px solid #33271e; }
+.dice-presets-section > div:first-child { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.dice-presets { display:grid; gap:7px; margin-top:10px; }
+.dice-presets article { display:grid; grid-template-columns:minmax(0,1fr) 34px; gap:6px; }
+.dice-presets article > button:first-child { display:grid; gap:2px; min-width:0; text-align:left; }
+.dice-presets strong,.dice-presets small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.dice-presets small { color:var(--muted); font-size:9px; }
+.dice-history-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:12px 14px 0; }
+.dice-history-filters select { min-width:0; }
+@media(max-width:620px){ .dice-formula-roll{grid-template-columns:1fr 1fr}.dice-formula-roll label{grid-column:1/-1}.dice-history-filters{grid-template-columns:1fr} }

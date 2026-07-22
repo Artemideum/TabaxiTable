@@ -28,7 +28,9 @@ const state = {
   mapSelectedTokenId: "",
   currentView: "sheet",
   editMode: localStorage.getItem("tt-edit-mode") === "1",
-  resuming: false
+  resuming: false,
+  rollPlayerFilter: "all",
+  rollTypeFilter: "all"
 };
 const rules = window.TT_RULES;
 const itemSystem = window.TT_ITEM_SYSTEM;
@@ -357,7 +359,7 @@ $("#join-form").addEventListener("submit", event => {
   socket.emit("room:join", { ...data, clientId: state.clientId }, enterResponse);
 });
 function openQuickGuide(firstVisit = false) {
-  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.0" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группу рамкой и менять её параметры одним действием.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
+  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.1" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группы, сохранять встречи и вручную скрывать карту туманом войны.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
   $("#quick-guide-close")?.addEventListener("click", () => { localStorage.setItem("tt-2-tour","1"); closeModal(); });
 }
 
@@ -2927,10 +2929,25 @@ function renderDiceTray() {
   const modifier = $("#dice-tray-modifier",root);
   if (modifier && document.activeElement !== modifier) modifier.value = tray.state.modifier;
   const color = $("#dice-player-color",root);
-  const ownColor = state.room?.players?.[state.clientId]?.sheet?.diceColor || "#d3ad6e";
+  const ownSheet = state.room?.players?.[state.clientId]?.sheet || {};
+  const ownColor = ownSheet.diceColor || "#d3ad6e";
   if (color && document.activeElement !== color) color.value = ownColor;
+  const presets = $("#dice-presets",root);
+  if (presets) presets.innerHTML = (ownSheet.dicePresets || []).length
+    ? ownSheet.dicePresets.map(preset => `<article><button type="button" data-dice-preset-roll="${esc(preset.id)}"><strong>${esc(preset.name)}</strong><small>${preset.visibility === "private" ? "🔒 " : ""}${esc(preset.formula)}</small></button><button type="button" data-dice-preset-remove="${esc(preset.id)}" title="Удалить">×</button></article>`).join("")
+    : `<div class="read-only">Сохрани любимую формулу — атака, лечение или любой домашний бросок.</div>`;
   root.querySelectorAll("[data-dice-tray-add]").forEach(button => button.addEventListener("click",()=>{ tray.add(button.dataset.diceTrayAdd,1); renderDiceTray(); }));
   root.querySelectorAll("[data-dice-tray-sub]").forEach(button => button.addEventListener("click",()=>{ tray.add(button.dataset.diceTraySub,-1); renderDiceTray(); }));
+  root.querySelectorAll("[data-dice-preset-roll]").forEach(button => button.addEventListener("click",()=>{
+    const preset=(ownSheet.dicePresets||[]).find(entry=>entry.id===button.dataset.dicePresetRoll);
+    if (!preset) return;
+    tray.setVisibility(preset.visibility);
+    rollPhysicalFormula(preset.formula);
+  }));
+  root.querySelectorAll("[data-dice-preset-remove]").forEach(button => button.addEventListener("click",async()=>{
+    const dicePresets=(ownSheet.dicePresets||[]).filter(entry=>entry.id!==button.dataset.dicePresetRemove);
+    await vttSavePreferences({ dicePresets }); renderDiceTray();
+  }));
 }
 
 function rollPhysicalDice(selection = window.TT_DICE_TRAY?.selection?.(), modifier = window.TT_DICE_TRAY?.state?.modifier || 0) {
@@ -2958,9 +2975,21 @@ $("#dice-tray-modifier")?.addEventListener("input",event=>{ window.TT_DICE_TRAY?
 $("#dice-tray-visibility")?.addEventListener("click",()=>{ window.TT_DICE_TRAY?.setVisibility(window.TT_DICE_TRAY?.state?.visibility === "private" ? "public" : "private"); renderDiceTray(); });
 $("#dice-tray-roll")?.addEventListener("click",()=>rollPhysicalDice());
 $("#dice-physical-formula")?.addEventListener("submit", event => { event.preventDefault(); rollPhysicalFormula(new FormData(event.currentTarget).get("formula")); });
+$("#dice-save-preset")?.addEventListener("click", async()=>{
+  const formula=String($("#dice-physical-formula [name=formula]")?.value||"").trim();
+  if (!formula) return toast("Сначала введи формулу");
+  const name=prompt("Название пресета",formula);
+  if (!name) return;
+  const sheet=state.room?.players?.[state.clientId]?.sheet||{};
+  const dicePresets=[...(sheet.dicePresets||[]),{ id:uuid(),name:name.trim(),formula,visibility:window.TT_DICE_TRAY?.state?.visibility||"public" }].slice(-20);
+  await vttSavePreferences({ dicePresets }); renderDiceTray();
+});
+$("#dice-clear-visuals")?.addEventListener("click",()=>window.TT_DICE_PHYSICS?.clear?.());
 $("#dice-tray-reset")?.addEventListener("click",()=>{ window.TT_DICE_TRAY?.reset(); renderDiceTray(); });
 $("#dice-tray-clear")?.addEventListener("click",()=>{ window.TT_DICE_TRAY?.clear(); renderDiceTray(); });
 $("#dice-player-color")?.addEventListener("change",async event=>{ await vttSavePreferences({ diceColor:event.currentTarget.value }); renderDiceTray(); });
+$("#roll-player-filter")?.addEventListener("change",event=>{ state.rollPlayerFilter=event.currentTarget.value; renderRolls(); });
+$("#roll-type-filter")?.addEventListener("change",event=>{ state.rollTypeFilter=event.currentTarget.value; renderRolls(); });
 
 function buildVttCharacterModels() {
   return Object.fromEntries(Object.entries(state.room?.players || {}).map(([playerId, player]) => {
@@ -3010,6 +3039,10 @@ function buildVttCharacterModels() {
       const bonus = getSkillBonus(sheet,key);
       return { key, name, ability, bonus, proficient:(sheet.skillProficiencies || []).includes(key), expertise:(sheet.expertise || []).includes(key), formula:`1к20${bonus ? signed(bonus) : ""}` };
     });
+    const spellModels=(sheet.spellsList||[]).filter(spell=>Number(spell.level||0)===0||spell.prepared).map(spell=>{
+      const formula=spellRollFormula(spell,Number(spell.level)||0,sheet);
+      return { id:spell.id,name:spell.name||"Заклинание",level:Number(spell.level||0),school:spell.school||"",prepared:Boolean(spell.prepared),concentration:Boolean(spell.concentration),formula:String(formula||"").replace(/d/gi,"к"),kind:spellRollKind(spell) };
+    }).filter(spell=>spell.formula).slice(0,40);
     return [playerId, {
       playerId,
       name:sheet.characterName || player.name,
@@ -3036,6 +3069,10 @@ function buildVttCharacterModels() {
       attacks:attackList,
       equipment,
       quickItems,
+      spells:spellModels,
+      quickSheet:sheet.vttQuickSheet || { sections:["overview","combat","checks","spells"] },
+      notes:(sheet.notesList||[]).slice(0,8).map(note=>({ id:note.id,title:note.title||note.name||"Заметка",text:note.text||note.description||"" })),
+      goals:(sheet.goalsList||[]).slice(0,8).map(goal=>({ id:goal.id,title:goal.title||goal.name||"Цель",text:goal.text||goal.description||"" })),
       combatSetName:set.name || "Боевой комплект",
       conditions:[...(sheet.conditions || [])],
       concentration:sheet.concentrationSpellName || "",
@@ -3085,6 +3122,8 @@ function vttSavePreferences(patch = {}) {
   if (patch.uiMode) sheet.vttUiMode = patch.uiMode === "assistant" ? "assistant" : "veteran";
   if (Array.isArray(patch.hotbar)) sheet.vttHotbar = patch.hotbar.slice(0,10);
   if (/^#[0-9a-f]{6}$/i.test(String(patch.diceColor || ""))) sheet.diceColor = patch.diceColor;
+  if (patch.quickSheet && typeof patch.quickSheet === "object") sheet.vttQuickSheet = patch.quickSheet;
+  if (Array.isArray(patch.dicePresets)) sheet.dicePresets = patch.dicePresets.slice(0,20);
   state.room.players[state.clientId].sheet = sheet;
   return new Promise(resolve => socket.emit("sheet:update", { sheet, reason:"Настройки виртуального стола" }, response => {
     if (!response?.ok) toast(response?.error || "Не удалось сохранить панель действий");
@@ -3116,22 +3155,36 @@ function renderMap() {
 }
 function renderRolls() {
   if (!state.room) return;
-  const rolls = [...(state.room.rollLog || [])].sort((a,b) => Number(b.at || 0) - Number(a.at || 0));
+  const all=[...(state.room.rollLog || [])].sort((a,b) => Number(b.at || 0) - Number(a.at || 0));
+  const playerSelect=$("#roll-player-filter");
+  const typeSelect=$("#roll-type-filter");
+  if (playerSelect) {
+    const names=[...new Set(all.map(item=>item.player).filter(Boolean))];
+    playerSelect.innerHTML=`<option value="all">Все игроки</option>${names.map(name=>`<option value="${esc(name)}" ${state.rollPlayerFilter===name?"selected":""}>${esc(name)}</option>`).join("")}`;
+  }
+  if (typeSelect) typeSelect.value=state.rollTypeFilter;
+  const rolls=all.filter(item=>state.rollPlayerFilter==="all"||item.player===state.rollPlayerFilter).filter(item=>{
+    if (state.rollTypeFilter==="all") return true;
+    if (state.rollTypeFilter==="private") return item.visibility==="private"||item.visibility==="gm"||item.privateToDm;
+    if (state.rollTypeFilter==="physical") return String(item.label||"").includes("на столе");
+    if (state.rollTypeFilter==="critical") return item.natural===20||item.natural===1;
+    return true;
+  });
   $("#roll-log").innerHTML = rolls.length ? rolls.map(item => {
     const privateRoll = item.visibility === "private" || item.visibility === "gm" || item.privateToDm;
     const repeatSelection = diceTraySelectionFromRoll(item);
     const repeat = repeatSelection.length ? `<button type="button" class="roll-repeat" data-repeat-roll="${esc(item.id)}" title="Собрать этот набор снова">↻</button>` : "";
     return `<div class="roll ${item.natural === 20 ? "critical" : item.natural === 1 ? "fumble" : ""} ${privateRoll ? "private-roll" : ""}"><div><strong>${privateRoll ? "🔒 " : ""}${esc(item.player)}</strong><br><span>${esc(item.label)}${item.activity ? ` · ${esc(item.activity)}` : ` · [${(item.dice || []).join(", ")}]${item.modifier ? ` ${signed(item.modifier)}` : ""}${item.mode === "advantage" ? " · преимущество" : item.mode === "disadvantage" ? " · помеха" : ""}`}</span></div><b>${item.total === null ? "✦" : item.total}</b>${repeat}</div>`;
-  }).join("") : `<div class="read-only">Здесь появятся броски всей партии.</div>`;
+  }).join("") : `<div class="read-only">По этому фильтру бросков нет.</div>`;
   $$('[data-repeat-roll]', $("#roll-log")).forEach(button => button.addEventListener("click",()=>{
-    const item = rolls.find(entry => entry.id === button.dataset.repeatRoll);
+    const item = all.find(entry => entry.id === button.dataset.repeatRoll);
     const selection = diceTraySelectionFromRoll(item);
     if (!selection.length) return;
     window.TT_DICE_TRAY?.apply(selection,Number(item.modifier)||0,item.visibility);
-    renderDiceTray();
-    rollPhysicalDice(selection,Number(item.modifier)||0);
+    renderDiceTray(); rollPhysicalDice(selection,Number(item.modifier)||0);
   }));
 }
+
 function switchView(view) {
   state.currentView = ["sheet","dice","map"].includes(view) ? view : "sheet";
   const mapActive = state.currentView === "map";

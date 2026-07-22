@@ -3,8 +3,15 @@
 
   const DISPLAY_MS = 9000;
   const FALLBACK_MS = 4500;
-  const MAX_SLOTS = 4;
-  const PREWARM_SLOTS = 2;
+  const QUALITY_KEY = "tt-dice-quality";
+  const MATERIAL_KEY = "tt-dice-material";
+  const QUALITY = {
+    low:{ maxSlots:2, prewarm:1, shadows:false, baseScale:72, iterationLimit:700, gravity:430 },
+    medium:{ maxSlots:4, prewarm:2, shadows:true, baseScale:88, iterationLimit:1100, gravity:470 },
+    high:{ maxSlots:5, prewarm:2, shadows:true, baseScale:96, iterationLimit:1700, gravity:500 }
+  };
+  let quality = ["low","medium","high"].includes(localStorage.getItem(QUALITY_KEY)) ? localStorage.getItem(QUALITY_KEY) : "medium";
+  let material = ["none","metal","wood","glass"].includes(localStorage.getItem(MATERIAL_KEY)) ? localStorage.getItem(MATERIAL_KEY) : "none";
   const PLAYED_MEMORY_MS = 60000;
   const PREWARM_START_MS = 700;
 
@@ -14,6 +21,7 @@
   let slotSequence = 0;
   let warming = false;
   let lastRecoveryAt = 0;
+  let lastError = "";
   const slots = [];
   const playedRolls = new Map();
   const playingRolls = new Map();
@@ -105,7 +113,7 @@
       background:[shadeHex(base,.18),base,shadeHex(base,-.18),shadeHex(base,.36)],
       outline:shadeHex(base,-.55),
       texture:"none",
-      material:"plastic"
+      material
     };
   }
 
@@ -197,15 +205,15 @@
       const box = new DiceBox(`#${slot.host.id}`, {
         assetPath:"/vendor/",
         sounds:false,
-        shadows:true,
+        shadows:QUALITY[quality].shadows,
         theme_surface:"green-felt",
         theme_customColorset:colorsetFor(color),
-        theme_material:"plastic",
-        gravity_multiplier:480,
+        theme_material:material,
+        gravity_multiplier:QUALITY[quality].gravity,
         light_intensity:0.85,
-        baseScale:92,
+        baseScale:QUALITY[quality].baseScale,
         strength:1.25,
-        iterationLimit:1200
+        iterationLimit:QUALITY[quality].iterationLimit
       });
       await promiseWithTimeout(box.initialize(), 10000, "dice initialization");
       slot.box = box;
@@ -231,7 +239,7 @@
     const box = await initializeSlot(slot,desired);
     if (!slotHealthy(slot)) throw new Error("WebGL context unavailable");
     if (slot.configuredColor !== desired) {
-      await promiseWithTimeout(box.updateConfig({ theme_customColorset:colorsetFor(desired), theme_material:"plastic" }), 6000, "dice colors");
+      await promiseWithTimeout(box.updateConfig({ theme_customColorset:colorsetFor(desired), theme_material:material }), 6000, "dice colors");
       slot.configuredColor = desired;
     }
     return box;
@@ -259,7 +267,7 @@
     try {
       const palette = (Array.isArray(colors) ? colors : []).map(safeColor).filter(Boolean);
       if (!palette.length) palette.push("#d3ad6e");
-      while (slots.length < PREWARM_SLOTS) createSlot();
+      while (slots.length < QUALITY[quality].prewarm) createSlot();
       for (let index = 0; index < slots.length; index += 1) {
         const slot = slots[index];
         if (slot.box || slot.initPromise) continue;
@@ -323,7 +331,7 @@
     let slot = slots.find(entry => !entry.busy && entry.box && entry.configuredColor === desired);
     if (!slot) slot = slots.find(entry => !entry.busy && !entry.box && !entry.initPromise);
     if (!slot) slot = slots.find(entry => !entry.busy);
-    if (!slot && slots.length < MAX_SLOTS) slot = createSlot();
+    if (!slot && slots.length < QUALITY[quality].maxSlots) slot = createSlot();
     if (!slot) {
       slot = [...slots].sort((a,b) => a.startedAt - b.startedAt)[0];
       releaseSlot(slot);
@@ -360,6 +368,7 @@
       scheduleRelease(slot,DISPLAY_MS);
       return { ok:true, fallback:false };
     } catch (error) {
+      lastError = String(error?.message || error || "Неизвестная ошибка");
       console.error("Не удалось воспроизвести физический бросок", error);
       if (slot.rollId !== roll.id) return { ok:false, interrupted:true };
       destroySlotBox(slot);
@@ -420,7 +429,44 @@
     slots.forEach(releaseSlot);
   }
 
-  window.TT_DICE_PHYSICS = { play, activate, deactivate, clear, prewarm, recover, displayMs:DISPLAY_MS };
+  function status() {
+    return {
+      quality,
+      material,
+      active,
+      unavailable,
+      slots:slots.length,
+      healthy:slots.filter(slotHealthy).length,
+      busy:slots.filter(slot => slot.busy).length,
+      lastError
+    };
+  }
+
+  async function setQuality(value) {
+    const next = ["low","medium","high"].includes(value) ? value : "medium";
+    if (next === quality) return status();
+    quality = next;
+    try { localStorage.setItem(QUALITY_KEY,quality); } catch {}
+    slots.forEach(slot => destroySlotBox(slot));
+    while (slots.length > QUALITY[quality].maxSlots) slots.pop()?.host?.remove();
+    lastError = "";
+    await recover();
+    return status();
+  }
+
+
+  async function setMaterial(value) {
+    const next = ["none","metal","wood","glass"].includes(value) ? value : "none";
+    if (next === material) return status();
+    material = next;
+    try { localStorage.setItem(MATERIAL_KEY,material); } catch {}
+    slots.forEach(slot => destroySlotBox(slot));
+    lastError = "";
+    await recover();
+    return status();
+  }
+
+  window.TT_DICE_PHYSICS = { play, activate, deactivate, clear, prewarm, recover, status, setQuality, setMaterial, displayMs:DISPLAY_MS };
   setTimeout(() => { void loadModule().catch(() => {}); },PREWARM_START_MS);
   window.addEventListener("pageshow", () => { if (active) void recover(); });
   document.addEventListener("visibilitychange", () => { if (!document.hidden && active) void recover(); });

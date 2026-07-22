@@ -14,9 +14,11 @@ const STRICT_PORT = process.argv.includes("--strictPort");
 const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
+const BACKUP_DIR = path.join(DATA_DIR, "backups");
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(ASSET_DIR, { recursive: true });
+fs.mkdirSync(BACKUP_DIR, { recursive: true });
 
 function readRooms() {
   try {
@@ -29,12 +31,25 @@ function readRooms() {
 const rooms = readRooms();
 let saveTimer;
 const sceneHistories = new Map();
+const lastAutoBackupAt = new Map();
 function saveRooms() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     const temporary = `${DATA_FILE}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(rooms, null, 2));
     fs.renameSync(temporary, DATA_FILE);
+    const now = Date.now();
+    Object.entries(rooms).forEach(([code, room]) => {
+      if (now - Number(lastAutoBackupAt.get(code) || 0) < 5 * 60 * 1000) return;
+      try {
+        const backup = structuredClone(room);
+        Object.values(backup.players || {}).forEach(player => { delete player.sheetHistory; player.online = false; });
+        fs.writeFileSync(path.join(BACKUP_DIR, `${code}.json`), JSON.stringify(backup, null, 2));
+        lastAutoBackupAt.set(code, now);
+      } catch (error) {
+        console.error(`Не удалось создать автокопию ${code}:`, error.message);
+      }
+    });
   }, 150);
 }
 
@@ -80,6 +95,54 @@ const TABLE_DIE_SIDES = [4,6,8,10,12,20,100];
 const MAX_TABLE_DICE = 24;
 const MAX_ACTIVE_TABLE_ROLLS = 20;
 const ACTIVE_TABLE_ROLL_MS = 20000;
+const NPC_ABILITY_KEYS = ["str","dex","con","int","wis","cha"];
+
+function defaultNpcSheet() {
+  return {
+    stats:Object.fromEntries(NPC_ABILITY_KEYS.map(key => [key,{ value:10, public:false }])),
+    saves:[], checks:[], attacks:[], formulas:[]
+  };
+}
+
+function normalizeNpcFormulaEntry(source, kind = "formula") {
+  const item = source && typeof source === "object" ? source : {};
+  const base = {
+    id:cleanText(item.id,80) || id(),
+    name:cleanText(item.name,60) || (kind === "save" ? "Спасбросок" : kind === "check" ? "Проверка" : kind === "attack" ? "Атака" : "Формула"),
+    public:Boolean(item.public)
+  };
+  if (kind === "attack") return { ...base, attackFormula:cleanText(item.attackFormula,120), damageFormula:cleanText(item.damageFormula,120), damageType:cleanText(item.damageType,40) };
+  return { ...base, formula:cleanText(item.formula,120) || "1d20" };
+}
+
+function normalizeNpcSheet(source) {
+  const raw = source && typeof source === "object" ? source : {};
+  const statsRaw = raw.stats && typeof raw.stats === "object" ? raw.stats : {};
+  const stats = Object.fromEntries(NPC_ABILITY_KEYS.map(key => {
+    const entry = statsRaw[key];
+    const object = entry && typeof entry === "object" ? entry : { value:entry };
+    return [key,{ value:Math.max(1,Math.min(30,Number(object.value)||10)), public:Boolean(object.public) }];
+  }));
+  const list = (value,kind,max=40) => (Array.isArray(value) ? value : []).slice(0,max).map(entry => normalizeNpcFormulaEntry(entry,kind));
+  return {
+    stats,
+    saves:list(raw.saves,"save",30),
+    checks:list(raw.checks,"check",50),
+    attacks:list(raw.attacks,"attack",30),
+    formulas:list(raw.formulas,"formula",50)
+  };
+}
+
+function publicNpcSheet(source) {
+  const sheet = normalizeNpcSheet(source);
+  return {
+    stats:Object.fromEntries(Object.entries(sheet.stats).filter(([,entry]) => entry.public)),
+    saves:sheet.saves.filter(entry => entry.public),
+    checks:sheet.checks.filter(entry => entry.public),
+    attacks:sheet.attacks.filter(entry => entry.public),
+    formulas:sheet.formulas.filter(entry => entry.public)
+  };
+}
 
 function normalizeDiceColor(value, fallback = "#d3ad6e") {
   return /^#[0-9a-f]{6}$/i.test(String(value || "")) ? String(value) : fallback;
@@ -212,11 +275,57 @@ function normalizeCombatLoadout(source, inventory, itemIdAliases = new Map()) {
   };
 }
 
+function normalizeFog(source, coordinate = value => Math.max(-500, Math.min(500, Number(value) || 0))) {
+  const incoming = source && typeof source === "object" ? source : {};
+  const operations = (Array.isArray(incoming.operations) ? incoming.operations : []).slice(-1500).map(raw => {
+    const mode = raw?.mode === "reveal" ? "reveal" : "cover";
+    const kind = ["rect","circle","draw"].includes(raw?.kind) ? raw.kind : "rect";
+    const points = Array.isArray(raw?.points) ? raw.points.slice(0,1200).map(point => ({ x:coordinate(point?.x), y:coordinate(point?.y) })) : [];
+    return {
+      id:cleanText(raw?.id,80) || id(), mode, kind,
+      x:coordinate(raw?.x), y:coordinate(raw?.y), x2:coordinate(raw?.x2), y2:coordinate(raw?.y2),
+      points,
+      strokeWidth:Math.max(.2,Math.min(50,Number(raw?.strokeWidth)||2)),
+      at:Math.max(0,Number(raw?.at)||Date.now())
+    };
+  }).filter(entry => entry.kind !== "draw" || entry.points.length > 1);
+  return { enabled:incoming.enabled !== false, opacity:Math.max(.2,Math.min(1,Number(incoming.opacity)||.94)), operations };
+}
+
+function normalizeEncounterTemplates(source) {
+  return (Array.isArray(source) ? source : []).slice(0,100).map(raw => ({
+    id:cleanText(raw?.id,80) || id(),
+    name:cleanText(raw?.name,80) || "Группа противников",
+    tags:Array.isArray(raw?.tags) ? [...new Set(raw.tags.map(tag => cleanText(tag,30)).filter(Boolean))].slice(0,20) : [],
+    createdAt:Math.max(0,Number(raw?.createdAt)||Date.now()),
+    tokens:(Array.isArray(raw?.tokens) ? raw.tokens : []).slice(0,100).map(token => ({
+      ...token,
+      id:cleanText(token?.id,80) || id(), playerId:"",
+      name:cleanText(token?.name,60) || "NPC",
+      imageUrl:cleanText(token?.imageUrl,1000), assetId:cleanText(token?.assetId,80),
+      x:Number(token?.x)||0, y:Number(token?.y)||0,
+      size:Math.max(.25,Math.min(12,Number(token?.size)||1)),
+      rotation:Math.max(-3600,Math.min(3600,Number(token?.rotation)||0)),
+      opacity:Math.max(.05,Math.min(1,Number(token?.opacity)||1)),
+      color:/^#[0-9a-f]{6}$/i.test(token?.color) ? token.color : "#9f7842",
+      vision:Math.max(0,Math.min(10000,Number(token?.vision)||0)),
+      initiativeBonus:Math.max(-100,Math.min(100,Number(token?.initiativeBonus)||0)),
+      badge:cleanText(token?.badge,32), badgeColor:/^#[0-9a-f]{6}$/i.test(token?.badgeColor) ? token.badgeColor : "#f4c875",
+      hpMax:Math.max(1,Math.min(1000000,Number(token?.hpMax)||1)), hp:Math.max(0,Math.min(1000000,Number(token?.hp)||0)),
+      tempHp:Math.max(0,Math.min(1000000,Number(token?.tempHp)||0)), ac:Math.max(0,Math.min(1000,Number(token?.ac)||10)),
+      conditions:Array.isArray(token?.conditions) ? token.conditions.filter(value => COMBAT_CONDITIONS.includes(value)).slice(0,30) : [],
+      concentration:cleanText(token?.concentration,120), npcSheet:normalizeNpcSheet(token?.npcSheet), hidden:Boolean(token?.hidden), locked:false, z:Number(token?.z)||100
+    }))
+  })).filter(template => template.tokens.length);
+}
+
 function defaultScene(name = "Главная сцена") {
   return {
-    schemaVersion: 6,
+    schemaVersion: 8,
     id: id(),
     name: cleanText(name, 60) || "Главная сцена",
+    folder: "",
+    tags: [],
     published: true,
     backgroundUrl: "",
     backgroundColor: "#17120e",
@@ -235,6 +344,7 @@ function defaultScene(name = "Главная сцена") {
     tokens: [],
     objects: [],
     annotations: [],
+    fog: { enabled:true, opacity:.94, operations:[] },
     ping: null,
     diceRoll: null,
     diceRolls: [],
@@ -306,7 +416,8 @@ function normalizeScene(source, players = {}) {
       concentration: player ? "" : cleanText(raw?.concentration, 120),
       deathSuccess: Math.max(0, Math.min(3, Number(player ? sheet.deathSuccess : raw?.deathSuccess) || 0)),
       deathFail: Math.max(0, Math.min(3, Number(player ? sheet.deathFail : raw?.deathFail) || 0)),
-      stable: Boolean(raw?.stable)
+      stable: Boolean(raw?.stable),
+      npcSheet: player ? null : normalizeNpcSheet(raw?.npcSheet)
     };
   }).filter(Boolean);
   const objectIds = new Set();
@@ -375,9 +486,11 @@ function normalizeScene(source, players = {}) {
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
-    schemaVersion: 6,
+    schemaVersion: 8,
     id: cleanText(incoming.id, 80) || base.id,
     name: cleanText(incoming.name, 60) || base.name,
+    folder: cleanText(incoming.folder,60),
+    tags: Array.isArray(incoming.tags) ? [...new Set(incoming.tags.map(tag => cleanText(tag,30)).filter(Boolean))].slice(0,20) : [],
     published: incoming.published !== false,
     backgroundUrl: cleanText(incoming.backgroundUrl, 1000),
     backgroundColor: /^#[0-9a-f]{6}$/i.test(incoming.backgroundColor) ? incoming.backgroundColor : base.backgroundColor,
@@ -385,6 +498,7 @@ function normalizeScene(source, players = {}) {
     tokens,
     objects,
     annotations,
+    fog: normalizeFog(incoming.fog, normalizeFreeCoordinate),
     ping,
     diceRoll,
     diceRolls,
@@ -431,6 +545,7 @@ function normalizeAsset(raw, roomCodeValue = "") {
     width: Math.max(0, Math.min(20000, Number(raw.width) || 0)),
     height: Math.max(0, Math.min(20000, Number(raw.height) || 0)),
     defaultSize: Math.max(0.25, Math.min(30, Number(raw.defaultSize) || (category === "map" ? 20 : 1))),
+    folder: cleanText(raw.folder,60),
     tags: Array.isArray(raw.tags) ? [...new Set(raw.tags.map(tag => cleanText(tag, 30)).filter(Boolean))].slice(0, 20) : [],
     hash: cleanText(raw.hash, 128),
     createdAt: Math.max(0, Number(raw.createdAt) || Date.now())
@@ -459,6 +574,7 @@ function ensureRoomVtt(room) {
   if (!room.scenes.length) room.scenes = [defaultScene()];
   room.activeSceneId = ids.has(cleanText(room.activeSceneId, 80)) ? cleanText(room.activeSceneId, 80) : room.scenes[0].id;
   room.assets = normalizeAssets(room.assets, room.code);
+  room.encounterTemplates = normalizeEncounterTemplates(room.encounterTemplates);
   room.combatRequests = (Array.isArray(room.combatRequests) ? room.combatRequests : []).slice(-100).map(raw => ({
     id:cleanText(raw?.id,80) || id(), requesterId:cleanText(raw?.requesterId,80), tokenId:cleanText(raw?.tokenId,80),
     kind:["damage","healing","temp"].includes(raw?.kind) ? raw.kind : "damage", amount:Math.max(0,Math.min(1000000,Number(raw?.amount)||0)),
@@ -559,6 +675,8 @@ function sceneSummaries(room, viewerId = "") {
   return room.scenes.filter(scene => isDm || scene.id === room.activeSceneId && scene.published !== false).map(scene => ({
     id: scene.id,
     name: scene.name,
+    folder:scene.folder || "",
+    tags:Array.isArray(scene.tags) ? scene.tags : [],
     published: scene.published !== false,
     active: scene.id === room.activeSceneId,
     tokenCount: scene.tokens.filter(token => isDm || !token.hidden).length,
@@ -746,11 +864,13 @@ function initiativeOrder(scene) {
 
 function defaultSheet(playerName) {
   return {
-    schemaVersion: 10,
+    schemaVersion: 11,
     characterName: playerName,
     diceColor: "#d3ad6e",
     vttUiMode: "veteran",
     vttHotbar: Array(10).fill(null),
+    vttQuickSheet: { sections:["overview","combat","checks","spells"], pinnedSkills:[], pinnedSaves:[], pinnedAttacks:[], pinnedSpells:[] },
+    dicePresets: [],
     classKey: "",
     subclassKey: "",
     raceKey: "",
@@ -1033,9 +1153,22 @@ function normalizeSheet(sheet, playerName) {
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
-  normalized.schemaVersion = 10;
+  normalized.schemaVersion = 11;
   normalized.diceColor = normalizeDiceColor(incoming.diceColor, base.diceColor);
   normalized.vttUiMode = incoming.vttUiMode === "assistant" ? "assistant" : "veteran";
+  const quick = incoming.vttQuickSheet && typeof incoming.vttQuickSheet === "object" ? incoming.vttQuickSheet : {};
+  const validSections = ["overview","combat","checks","spells","notes"];
+  normalized.vttQuickSheet = {
+    sections:(Array.isArray(quick.sections) ? quick.sections : base.vttQuickSheet.sections).filter((value,index,array)=>validSections.includes(value)&&array.indexOf(value)===index),
+    pinnedSkills:(Array.isArray(quick.pinnedSkills) ? quick.pinnedSkills : []).map(value=>cleanText(value,40)).filter(Boolean).slice(0,12),
+    pinnedSaves:(Array.isArray(quick.pinnedSaves) ? quick.pinnedSaves : []).map(value=>cleanText(value,40)).filter(Boolean).slice(0,6),
+    pinnedAttacks:(Array.isArray(quick.pinnedAttacks) ? quick.pinnedAttacks : []).map(value=>cleanText(value,80)).filter(Boolean).slice(0,12),
+    pinnedSpells:(Array.isArray(quick.pinnedSpells) ? quick.pinnedSpells : []).map(value=>cleanText(value,80)).filter(Boolean).slice(0,12)
+  };
+  if (!normalized.vttQuickSheet.sections.length) normalized.vttQuickSheet.sections = [...base.vttQuickSheet.sections];
+  normalized.dicePresets = (Array.isArray(incoming.dicePresets) ? incoming.dicePresets : []).slice(0,20).map(raw=>({
+    id:cleanText(raw?.id,80)||id(), name:cleanText(raw?.name,50)||"Бросок", formula:cleanText(raw?.formula,100)||"1d20", visibility:raw?.visibility === "private" ? "private" : "public"
+  }));
   normalized.vttHotbar = Array.from({ length:10 }, (_, index) => {
     const raw = Array.isArray(incoming.vttHotbar) ? incoming.vttHotbar[index] : null;
     if (!raw || typeof raw !== "object") return null;
@@ -1097,6 +1230,7 @@ function publicRoom(room, viewerId = "") {
     scene.tokens = scene.tokens.filter(token => !token.hidden).map(token => {
       if (token.playerId) return token;
       const { ac: _secretAc, ...publicToken } = token;
+      publicToken.npcSheet = publicNpcSheet(token.npcSheet);
       return publicToken;
     });
     scene.objects = scene.objects.filter(object => !object.hidden);
@@ -1128,7 +1262,15 @@ function publicRoom(room, viewerId = "") {
     scene,
     activeSceneId: room.activeSceneId,
     scenes: sceneSummaries(room, viewerId),
-    assets: isDm ? room.assets.map(asset => ({ ...asset, usageCount: assetUsageCount(room, asset.id) })) : []
+    assets: isDm ? room.assets.map(asset => ({ ...asset, usageCount: assetUsageCount(room, asset.id) })) : [],
+    encounterTemplates:isDm ? room.encounterTemplates : [],
+    diagnostics:isDm ? {
+      autoBackupAt:Number(lastAutoBackupAt.get(room.code)||0),
+      roomBytes:Buffer.byteLength(JSON.stringify(room)),
+      assetBytes:(room.assets||[]).reduce((sum,asset)=>sum+Number(asset.bytes||0),0),
+      scenes:(room.scenes||[]).length,
+      assets:(room.assets||[]).length
+    } : null
   };
 }
 
@@ -1184,6 +1326,7 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
     width:Number(req.body?.width) || 0,
     height:Number(req.body?.height) || 0,
     defaultSize:Number(req.body?.defaultSize) || (category === "map" ? 20 : 1),
+    folder:cleanText(req.body?.folder,60),
     tags:Array.isArray(req.body?.tags) ? req.body.tags : [],
     hash,
     createdAt:Date.now()
@@ -1205,6 +1348,7 @@ app.patch("/api/rooms/:code/assets/:assetId", async (req, res) => {
   asset.name = cleanText(req.body?.name ?? asset.name, 80) || asset.name;
   asset.category = ["token", "map", "prop"].includes(req.body?.category) ? req.body.category : asset.category;
   asset.defaultSize = Math.max(0.25, Math.min(30, Number(req.body?.defaultSize) || asset.defaultSize));
+  asset.folder = cleanText(req.body?.folder ?? asset.folder,60);
   asset.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag => cleanText(tag,30)).filter(Boolean))].slice(0,20) : asset.tags;
   saveRooms();
   await emitRoom(code);
@@ -1262,6 +1406,7 @@ io.on("connection", (socket) => {
       scenes: [],
       activeSceneId: "",
       assets: [],
+      encounterTemplates: [],
       createdAt: Date.now()
     };
     ensureRoomVtt(rooms[code]);
@@ -1329,6 +1474,32 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok: true, sheet: player.sheet });
   });
 
+  socket.on("room:diagnostics", (_payload, reply = () => {}) => {
+    const { code,clientId }=socket.data||{}; const room=rooms[code];
+    if (!room || room.dmId!==clientId) return reply({ ok:false,error:"Только ведущий открывает диагностику" });
+    ensureRoomVtt(room);
+    const backupPath=path.join(BACKUP_DIR,`${code}.json`);
+    reply({ ok:true, diagnostics:{
+      code,players:Object.keys(room.players||{}).length,online:Object.values(room.players||{}).filter(player=>player.online).length,
+      scenes:room.scenes.length,assets:room.assets.length,assetBytes:room.assets.reduce((sum,asset)=>sum+Number(asset.bytes||0),0),
+      roomBytes:Buffer.byteLength(JSON.stringify(room)),rolls:(room.rollLog||[]).length,encounters:room.encounterTemplates.length,
+      autoBackupAt:Number(lastAutoBackupAt.get(code)||0),backupAvailable:fs.existsSync(backupPath)
+    }});
+  });
+
+  socket.on("room:restore-auto-backup", (_payload, reply = () => {}) => {
+    const { code,clientId }=socket.data||{}; const room=rooms[code];
+    if (!room || room.dmId!==clientId) return reply({ ok:false,error:"Только ведущий восстанавливает кампанию" });
+    try {
+      const backup=JSON.parse(fs.readFileSync(path.join(BACKUP_DIR,`${code}.json`),"utf8"));
+      backup.code=code; backup.dmId=clientId;
+      Object.values(backup.players||{}).forEach(player=>player.online=false);
+      if (backup.players?.[clientId]) { backup.players[clientId].online=true; backup.players[clientId].role="dm"; }
+      rooms[code]=backup; ensureRoomVtt(rooms[code]);
+      saveRooms(); emitRoom(code); reply({ ok:true });
+    } catch { reply({ ok:false,error:"Автоматическая копия не найдена" }); }
+  });
+
   socket.on("room:backup", (_payload, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
@@ -1365,6 +1536,7 @@ io.on("connection", (socket) => {
     room.scenes = Array.isArray(backup.scenes) ? backup.scenes.map(scene => normalizeScene(scene, restoredPlayers)) : [normalizeScene(backup.scene, restoredPlayers)];
     room.activeSceneId = cleanText(backup.activeSceneId, 80) || room.scenes[0]?.id || "";
     room.assets = normalizeAssets(backup.assets || room.assets, room.code);
+    room.encounterTemplates = normalizeEncounterTemplates(backup.encounterTemplates);
     room.combatRequests = Array.isArray(backup.combatRequests) ? backup.combatRequests : [];
     ensureRoomVtt(room);
     room.rollLog = Array.isArray(backup.rollLog) ? backup.rollLog.slice(-100).map(entry => ({
@@ -1428,7 +1600,7 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("scene:rename", ({ sceneId, name, published } = {}, reply = () => {}) => {
+  socket.on("scene:rename", ({ sceneId, name, published, folder, tags } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет сцены" });
@@ -1436,6 +1608,8 @@ io.on("connection", (socket) => {
     const scene = room.scenes.find(entry => entry.id === cleanText(sceneId,80));
     if (!scene) return reply({ ok:false, error:"Сцена не найдена" });
     scene.name = cleanText(name,60) || scene.name;
+    if (folder !== undefined) scene.folder = cleanText(folder,60);
+    if (tags !== undefined) scene.tags = Array.isArray(tags) ? [...new Set(tags.map(tag=>cleanText(tag,30)).filter(Boolean))].slice(0,20) : String(tags||"").split(",").map(tag=>cleanText(tag,30)).filter(Boolean).slice(0,20);
     if (scene.id !== room.activeSceneId && published !== undefined) scene.published = Boolean(published);
     scene.updatedAt = Date.now();
     if (scene.id === room.activeSceneId) room.scene = scene;
@@ -1618,7 +1792,7 @@ io.on("connection", (socket) => {
       initiative:null,
       hpMax:Math.max(1,Math.min(1000000,Number(player ? sheet.hpMax : payload.hpMax)||1)), hp:Math.max(0,Math.min(1000000,Number(player ? sheet.hpCurrent : payload.hp)||0)),
       tempHp:Math.max(0,Math.min(1000000,Number(player ? sheet.hpTemp : payload.tempHp)||0)), ac:Math.max(0,Math.min(1000,Number(player ? sheet.ac : payload.ac)||10)),
-      conditions:[], concentration:"", deathSuccess:0, deathFail:0, stable:false
+      conditions:[], concentration:"", deathSuccess:0, deathFail:0, stable:false, npcSheet:player ? null : defaultNpcSheet()
     });
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true, scene:activeScene(room) });
@@ -1634,7 +1808,7 @@ io.on("connection", (socket) => {
     Object.entries(room.players).forEach(([playerId, player]) => {
       if (sceneTokenForPlayer(scene, playerId)) return;
       const position = nextScenePosition(scene), sheet = player.sheet || {};
-      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false });
+      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false, npcSheet:null });
       added += 1;
     });
     setActiveScene(room, scene);
@@ -1685,8 +1859,12 @@ io.on("connection", (socket) => {
       if (payload.ac !== undefined) token.ac = Math.max(0,Math.min(1000,Number(payload.ac)||10));
       if (payload.concentration !== undefined) token.concentration = cleanText(payload.concentration,120);
       if (Array.isArray(payload.conditions)) token.conditions = [...new Set(payload.conditions.map(value => cleanText(value,40)).filter(value => COMBAT_CONDITIONS.includes(value)))];
+      if (isDm && payload.npcSheet !== undefined) token.npcSheet = normalizeNpcSheet(payload.npcSheet);
     }
-    if (isDm) { token.hidden = Boolean(payload.hidden); token.locked = Boolean(payload.locked); }
+    if (isDm) {
+      if (payload.hidden !== undefined) token.hidden = Boolean(payload.hidden);
+      if (payload.locked !== undefined) token.locked = Boolean(payload.locked);
+    }
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
@@ -1712,6 +1890,12 @@ io.on("connection", (socket) => {
       if (has("hpMax")) token.hpMax = Math.max(1,Math.min(1000000,Number(patch.hpMax)||1));
       if (has("hp")) token.hp = Math.max(0,Math.min(Number(token.hpMax)||1,Number(patch.hp)||0));
       if (has("tempHp")) token.tempHp = Math.max(0,Math.min(1000000,Number(patch.tempHp)||0));
+      if (has("size")) token.size = Math.max(.25,Math.min(12,Number(patch.size)||1));
+      if (has("rotation")) token.rotation = Math.max(-3600,Math.min(3600,Number(patch.rotation)||0));
+      if (has("opacity")) token.opacity = Math.max(.05,Math.min(1,Number(patch.opacity)||1));
+      if (has("vision")) token.vision = Math.max(0,Math.min(10000,Number(patch.vision)||0));
+      if (has("z")) token.z = Math.max(-1000,Math.min(1000,Number(patch.z)||100));
+      if (has("color") && /^#[0-9a-f]{6}$/i.test(String(patch.color||""))) token.color = patch.color;
       if (token.playerId && room.players?.[token.playerId]?.sheet && (has("hp") || has("hpMax") || has("tempHp"))) {
         const sheet = room.players[token.playerId].sheet;
         sheet.hpMax = token.hpMax;
@@ -1731,6 +1915,70 @@ io.on("connection", (socket) => {
     }
     setActiveScene(room,scene); saveRooms(); emitRoom(code);
     reply({ ok:true, updated:tokens.length });
+  });
+
+  socket.on("scene:fog-add", (payload = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет туман" });
+    const scene = activeScene(room);
+    rememberScene(room,scene);
+    const operation = normalizeFog({ operations:[{ ...payload, id:id(), at:Date.now() }] }, sceneFreeCoordinate).operations[0];
+    if (!operation) return reply({ ok:false, error:"Не удалось создать область тумана" });
+    scene.fog = normalizeFog(scene.fog,sceneFreeCoordinate);
+    scene.fog.operations.push(operation);
+    scene.fog.operations = scene.fog.operations.slice(-1500);
+    if (payload.enabled !== undefined) scene.fog.enabled = Boolean(payload.enabled);
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true, operation });
+  });
+
+  socket.on("scene:fog-clear", ({ mode = "last" } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет туман" });
+    const scene = activeScene(room); rememberScene(room,scene);
+    scene.fog = normalizeFog(scene.fog,sceneFreeCoordinate);
+    if (mode === "all") scene.fog.operations = [];
+    else scene.fog.operations.pop();
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:encounter-save", ({ tokenIds, name, tags } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий сохраняет группы" });
+    const scene = activeScene(room);
+    const ids = new Set((Array.isArray(tokenIds)?tokenIds:[]).map(value=>cleanText(value,80)));
+    const selected = scene.tokens.filter(token=>ids.has(token.id)&&!token.playerId).slice(0,100);
+    if (!selected.length) return reply({ ok:false, error:"Выбери хотя бы одного NPC" });
+    const minX=Math.min(...selected.map(token=>token.x)), minY=Math.min(...selected.map(token=>token.y));
+    const template = normalizeEncounterTemplates([{ id:id(), name:cleanText(name,80)||`Группа ${room.encounterTemplates.length+1}`, tags:Array.isArray(tags)?tags:String(tags||"").split(","), createdAt:Date.now(), tokens:selected.map(token=>({ ...structuredClone(token), x:token.x-minX, y:token.y-minY, initiative:null })) }])[0];
+    room.encounterTemplates.push(template); room.encounterTemplates=room.encounterTemplates.slice(-100);
+    saveRooms(); emitRoom(code); reply({ ok:true, template });
+  });
+
+  socket.on("scene:encounter-place", ({ templateId, x=0, y=0 } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room=rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false,error:"Только ведущий размещает группы" });
+    ensureRoomVtt(room);
+    const template=room.encounterTemplates.find(entry=>entry.id===cleanText(templateId,80));
+    if (!template) return reply({ ok:false,error:"Шаблон не найден" });
+    const scene=activeScene(room); rememberScene(room,scene);
+    const created=template.tokens.map(source=>{
+      const token={ ...structuredClone(source), id:id(), playerId:"", x:sceneCoordinate(scene,Number(x)+Number(source.x||0)), y:sceneCoordinate(scene,Number(y)+Number(source.y||0)), initiative:null, locked:false };
+      scene.tokens.push(token); return token.id;
+    });
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true, created });
+  });
+
+  socket.on("scene:encounter-delete", ({ templateId } = {}, reply = () => {}) => {
+    const { code, clientId }=socket.data||{}; const room=rooms[code];
+    if (!room || room.dmId!==clientId) return reply({ ok:false,error:"Только ведущий удаляет группы" });
+    const before=room.encounterTemplates.length;
+    room.encounterTemplates=room.encounterTemplates.filter(entry=>entry.id!==cleanText(templateId,80));
+    if (before===room.encounterTemplates.length) return reply({ ok:false,error:"Шаблон не найден" });
+    saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
   socket.on("scene:token-hp", ({ tokenId, hp, hpMax, tempHp } = {}, reply = () => {}) => {
@@ -1972,6 +2220,24 @@ io.on("connection", (socket) => {
       return reply({ ok:false, error:"Объекты не найдены" });
     }
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, created });
+  });
+
+  socket.on("scene:items-copy-to-scene", ({ refs, targetSceneId } = {}, reply = () => {}) => {
+    const { code, clientId }=socket.data||{}; const room=rooms[code];
+    if (!room || room.dmId!==clientId) return reply({ ok:false,error:"Только ведущий копирует между сценами" });
+    ensureRoomVtt(room);
+    const source=activeScene(room), target=room.scenes.find(scene=>scene.id===cleanText(targetSceneId,80));
+    if (!target || target.id===source.id) return reply({ ok:false,error:"Выбери другую сцену" });
+    const safe=Array.isArray(refs)?refs.slice(0,500):[]; let copied=0;
+    safe.forEach(ref=>{
+      const refId=cleanText(ref?.id,80);
+      if (ref?.kind==="token") { const item=source.tokens.find(entry=>entry.id===refId); if(item){ target.tokens.push({ ...structuredClone(item),id:id(),playerId:"",initiative:null,locked:false }); copied++; } }
+      if (ref?.kind==="object") { const item=source.objects.find(entry=>entry.id===refId); if(item){ target.objects.push({ ...structuredClone(item),id:id(),locked:false }); copied++; } }
+      if (ref?.kind==="annotation") { const item=source.annotations.find(entry=>entry.id===refId); if(item){ target.annotations.push({ ...structuredClone(item),id:id(),ownerId:clientId,locked:false }); copied++; } }
+    });
+    if (!copied) return reply({ ok:false,error:"Нечего копировать" });
+    const index=room.scenes.findIndex(scene=>scene.id===target.id); room.scenes[index]=normalizeScene({ ...target,updatedAt:Date.now() },room.players);
+    saveRooms(); emitRoom(code); reply({ ok:true,copied });
   });
 
   socket.on("scene:items-remove", ({ refs } = {}, reply = () => {}) => {
