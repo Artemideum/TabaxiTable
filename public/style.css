@@ -1354,3 +1354,34 @@ button:active:not(:disabled) { transform: translateY(1px); }
 .dice-history-filters { display:grid; grid-template-columns:1fr 1fr; gap:8px; padding:12px 14px 0; }
 .dice-history-filters select { min-width:0; }
 @media(max-width:620px){ .dice-formula-roll{grid-template-columns:1fr 1fr}.dice-formula-roll label{grid-column:1/-1}.dice-history-filters{grid-template-columns:1fr} }
+
+/* 2.1.4: explicit death-save controls */
+.death-save-card {
+  display:grid;
+  gap:10px;
+  padding:12px;
+  border:1px solid #4a3729;
+  border-radius:13px;
+  background:#110d0a;
+}
+.death-save-row { display:grid; grid-template-columns:minmax(100px,1fr) repeat(3,34px); align-items:center; gap:7px; }
+.death-save-row > span { color:#b9aa97; font-weight:800; }
+.death-save-row button {
+  width:34px;
+  height:34px;
+  padding:0;
+  border:1px solid #5d4634;
+  border-radius:50%;
+  color:transparent;
+  background:#17120f;
+}
+.death-save-row.successes button.active { border-color:#70b979; background:#70b979; box-shadow:0 0 12px #70b97955; }
+.death-save-row.failures button.active { border-color:#cf6258; background:#cf6258; box-shadow:0 0 12px #cf625855; }
+.death-save-card > button { min-height:40px; }
+.death-stable { padding:8px 10px; border:1px solid #4c694d; border-radius:9px; color:#9bd4a0; background:#142016; text-align:center; font-weight:800; }
+.death-save-card > div { display:grid; gap:8px; }
+.death-save-row { grid-template-columns:minmax(100px,1fr) minmax(132px,auto); }
+.death-save-row > div { display:grid; grid-template-columns:repeat(3,34px); gap:7px; }
+.death-save-row button { color:#a99a88; }
+.death-save-row.success button.filled { border-color:#70b979; color:#0d160f; background:#70b979; box-shadow:0 0 12px #70b97955; }
+.death-save-row.fail button.filled { border-color:#cf6258; color:#1c0c0b; background:#cf6258; box-shadow:0 0 12px #cf625855; }

@@ -86,6 +86,9 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /scene:asset-place/);
     assert.match(vttScript, /scene:annotation-add/);
     assert.match(vttScript, /scene:items-transform/);
+    assert.match(vttScript, /vtt-context-menu/);
+    assert.match(vttScript, /data-vtt-context-action/);
+    assert.match(vttScript, /movementSnap/);
     assert.match(vttScript, /scene:history-undo/);
     assert.match(vttScript, /beginMarquee/);
     assert.match(vttScript, /scene:dice-roll/);
@@ -99,6 +102,10 @@ test("комната, лист, броски, история и резервна
     assert.match(vttScript, /vtt-dice-formula-form/);
     assert.match(vttScript, /data-vtt-die-add/);
     assert.match(vttScript, /scene:token-hp/);
+    assert.match(vttScript, /scene:item-attach/);
+    assert.match(vttScript, /data-vtt-use-item/);
+    assert.match(vttScript, /data-vtt-death-save/);
+    assert.match(vttScript, /vtt-token-quick-hp/);
     assert.match(vttScript, /TT_DICE_PHYSICS/);
     assert.match(vttScript, /scene:fog-add/);
     assert.match(vttScript, /scene:encounter-save/);
@@ -147,7 +154,7 @@ test("комната, лист, броски, история и резервна
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 11);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 8);
+    assert.equal(created.room.scene.schemaVersion, 10);
     assert.deepEqual(created.room.scene.annotations, []);
     assert.deepEqual(created.room.scene.fog.operations, []);
     assert.equal(created.room.scene.fog.enabled, true);
@@ -312,6 +319,9 @@ test("комната, лист, броски, история и резервна
     const initiative = await emit(player, "initiative:roll", { tokenId:playerToken.id });
     assert.equal(initiative.ok, true);
     assert.ok(initiative.total >= 5 && initiative.total <= 24);
+    assert.ok(initiative.roll?.sets?.[0]?.values?.length >= 1);
+    assert.equal(initiative.roll.total, initiative.total);
+    assert.equal(initiative.roll.modifier, 4);
     const initiativeRoom = await initiativeUpdate;
     assert.equal(initiativeRoom.scene.initiative.active, true);
     assert.equal(initiativeRoom.scene.initiative.currentTokenId, playerToken.id);
@@ -352,6 +362,26 @@ test("комната, лист, броски, история и резервна
     assert.deepEqual(publicNpc.npcSheet.formulas.map(entry => entry.id), ["npc-formula-public"]);
     assert.equal((await emit(player, "scene:token-update", { tokenId:npcToken.id, npcSheet:{ stats:{} } })).ok, false);
 
+    const tokenDisplayDmState = waitFor(dm, "room:state", room => room.scene.tokens.find(token => token.id === npcToken.id)?.showAc === true);
+    const tokenDisplayPlayerState = waitFor(player, "room:state", room => room.scene.tokens.find(token => token.id === npcToken.id)?.showAc === true);
+    assert.equal((await emit(dm, "scene:token-update", { tokenId:npcToken.id, showName:false, showHp:false, showAc:true, ac:17 })).ok, true);
+    const tokenDisplayDmRoom = await tokenDisplayDmState;
+    const tokenDisplayPlayerRoom = await tokenDisplayPlayerState;
+    assert.equal(tokenDisplayDmRoom.scene.tokens.find(token => token.id === npcToken.id).showName, false);
+    assert.equal(tokenDisplayPlayerRoom.scene.tokens.find(token => token.id === npcToken.id).ac, 17);
+
+    const transformedNpcState = waitFor(dm, "room:state", room => {
+      const token=room.scene.tokens.find(entry=>entry.id===npcToken.id);
+      return token?.size === 2 && token?.rotation === 45;
+    });
+    assert.equal((await emit(dm,"scene:item-transform-update",{kind:"token",id:npcToken.id,size:2,rotation:45,x:8,y:9})).ok,true);
+    const transformedNpcRoom=await transformedNpcState;
+    assert.equal(transformedNpcRoom.scene.tokens.find(token=>token.id===npcToken.id).x,8);
+    assert.equal(transformedNpcRoom.scene.tokens.find(token=>token.id===npcToken.id).size,2);
+    const persistedSizeState=waitFor(dm,"room:state",room=>{const token=room.scene.tokens.find(entry=>entry.id===npcToken.id);return token?.badge==="Большой"&&token?.size===2;});
+    assert.equal((await emit(dm,"scene:token-update",{tokenId:npcToken.id,badge:"Большой"})).ok,true);
+    assert.equal((await persistedSizeState).scene.tokens.find(token=>token.id===npcToken.id).size,2);
+
     const hiddenRollForDm = waitFor(dm, "room:state", room => room.rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"));
     const hiddenRollForPlayer = waitFor(player, "room:state", room => room.scene.name === "Подземелье");
     assert.equal((await emit(dm, "initiative:roll", { tokenId:hiddenToken.id })).ok, true);
@@ -381,6 +411,13 @@ test("комната, лист, броски, история и резервна
     const placedRoom = await placedState;
     assert.equal(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).length, 3);
     assert.deepEqual(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.name), ["Красный гоблин 1","Красный гоблин 2","Красный гоблин 3"]);
+    const attachedChild=placedRoom.scene.tokens.find(token=>token.assetId===uploadedAsset.asset.id);
+    const childStart={x:attachedChild.x,y:attachedChild.y};
+    assert.equal((await emit(dm,"scene:item-attach",{childKind:"token",childId:attachedChild.id,parentKind:"token",parentId:npcToken.id})).ok,true);
+    const attachmentMoveState=waitFor(dm,"room:state",room=>{const child=room.scene.tokens.find(token=>token.id===attachedChild.id);return child?.x===childStart.x+0.5&&child?.y===childStart.y+0.5;});
+    assert.equal((await emit(dm,"scene:token-move",{tokenId:npcToken.id,x:8.5,y:9.5,snap:false})).ok,true);
+    const attachmentRoom=await attachmentMoveState;
+    assert.deepEqual(attachmentRoom.scene.tokens.find(token=>token.id===attachedChild.id).attachment,{parentKind:"token",parentId:npcToken.id});
     assert.equal(placedRoom.assets.find(asset => asset.id === uploadedAsset.asset.id).usageCount, 3);
 
     const placedTokenIds = placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.id);
@@ -447,6 +484,16 @@ test("комната, лист, броски, история и резервна
     assert.equal((await emit(dm, "scene:object-move", { objectId:mapObject.id, x:3, y:4 })).ok, true);
     const movedMapRoom = await movedMapState;
     assert.equal(movedMapRoom.scene.objects.find(object => object.id === mapObject.id).rotation, 15);
+    const partialObjectState = waitFor(dm, "room:state", room => room.scene.objects.find(object => object.id === mapObject.id)?.hidden === true);
+    assert.equal((await emit(dm,"scene:object-update",{objectId:mapObject.id,hidden:true})).ok,true);
+    const partialObjectRoom = await partialObjectState;
+    const partiallyUpdatedObject = partialObjectRoom.scene.objects.find(object => object.id === mapObject.id);
+    assert.equal(partiallyUpdatedObject.rotation,15);
+    assert.equal(partiallyUpdatedObject.width,24);
+    assert.equal(partiallyUpdatedObject.height,14);
+    assert.equal(partiallyUpdatedObject.opacity,.8);
+    assert.equal(partiallyUpdatedObject.z,-50);
+    assert.equal((await emit(dm,"scene:object-update",{objectId:mapObject.id,hidden:false})).ok,true);
     const duplicatedObject = await emit(dm, "scene:object-duplicate", { objectId:mapObject.id });
     assert.equal(duplicatedObject.ok, true);
     assert.ok(duplicatedObject.objectId);
@@ -454,6 +501,22 @@ test("комната, лист, броски, история и резервна
     const snappingState = waitFor(dm, "room:state", room => room.scene.grid.snap === true && room.scene.grid.type === "square" && room.scene.grid.offsetX === 7);
     assert.equal((await emit(dm, "scene:settings", { grid:{ columns:30, rows:20, cellSize:48, visible:true, snap:true, type:"square", color:"#d3ad6e", opacity:.3, offsetX:7, offsetY:-5 } })).ok, true);
     await snappingState;
+
+    const freeMoveState = waitFor(dm,"room:state",room => {
+      const token=room.scene.tokens.find(entry=>entry.id===npcToken.id);
+      return token?.x === 8.4 && token?.y === 9.6;
+    });
+    assert.equal((await emit(dm,"scene:items-transform",{moves:[{kind:"token",id:npcToken.id,dx:.4,dy:.6}],snap:false})).ok,true);
+    const freeMoveRoom=await freeMoveState;
+    assert.equal(freeMoveRoom.scene.tokens.find(token=>token.id===npcToken.id).x,8.4);
+    assert.equal(freeMoveRoom.scene.tokens.find(token=>token.id===npcToken.id).y,9.6);
+
+    const snappedMoveState = waitFor(dm,"room:state",room => {
+      const token=room.scene.tokens.find(entry=>entry.id===npcToken.id);
+      return token?.x === 9 && token?.y === 10;
+    });
+    assert.equal((await emit(dm,"scene:items-transform",{moves:[{kind:"token",id:npcToken.id,dx:.6,dy:.4}],snap:true})).ok,true);
+    await snappedMoveState;
 
     const playerLineState = waitFor(dm, "room:state", room => room.scene.annotations.some(annotation => annotation.name === "Линия игрока"));
     const playerLine = await emit(player, "scene:annotation-add", { kind:"line", name:"Линия игрока", x:0, y:0, x2:2, y2:2, color:"#44ccff", strokeWidth:3 });
@@ -500,9 +563,12 @@ test("комната, лист, броски, история и резервна
     assert.equal((await emit(dm, "scene:history-redo", {})).ok, true);
     await redoState;
 
-    const pingState = waitFor(player, "room:state", room => room.scene.ping?.by === "Мастер");
-    assert.equal((await emit(dm, "scene:ping", { x:3, y:4, color:"#ffcc00" })).ok, true);
-    assert.equal((await pingState).scene.ping.color, "#ffcc00");
+    const pingState = waitFor(player, "room:state", room => room.scene.ping?.by === "Мастер" && room.scene.ping?.x === 3.5 && room.scene.ping?.y === 4.5);
+    assert.equal((await emit(dm, "scene:ping", { x:3.5, y:4.5, color:"#ffcc00" })).ok, true);
+    const pingRoom=await pingState;
+    assert.equal(pingRoom.scene.ping.color, "#ffcc00");
+    assert.equal(pingRoom.scene.ping.x,3.5);
+    assert.equal(pingRoom.scene.ping.y,4.5);
 
     const tableDieState = waitFor(dm, "room:state", room => room.scene.diceRoll?.by === "Плут" && room.scene.diceRoll?.sets?.some(set => set.sides === 20));
     const tableDie = await emit(player, "scene:dice-roll", { x:6, y:7, dice:[{ sides:20, count:2 },{ sides:6, count:3 }], modifier:4 });
@@ -539,6 +605,11 @@ test("комната, лист, броски, история и резервна
     assert.equal(formulaRoll.roll.id, formulaRoll.rollId);
     assert.equal(formulaRoll.roll.formula, "3к6 +1");
     await formulaRollState;
+    const advantagePhysical = await emit(player,"scene:dice-roll",{formula:"1d20+4",mode:"advantage",visibility:"public"});
+    assert.equal(advantagePhysical.ok,true);
+    assert.equal(advantagePhysical.mode,"advantage");
+    assert.equal(advantagePhysical.sets[0].values.length,2);
+    assert.equal(advantagePhysical.total,Math.max(...advantagePhysical.sets[0].values)+4);
     const unsupportedPhysical = await emit(player, "scene:dice-roll", { formula:"2d137+1" });
     assert.equal(unsupportedPhysical.ok, false);
 
@@ -557,6 +628,14 @@ test("комната, лист, броски, история и резервна
     assert.ok(dmPrivateRoom.scene.diceRolls.some(entry => entry.id === privateRoll.rollId));
     assert.equal(observerPrivateRoom.scene.diceRolls.some(entry => entry.id === privateRoll.rollId), false);
     assert.equal(observerPrivateRoom.rollLog.some(entry => entry.visibility === "private" && entry.playerId === "test-player"), false);
+
+    const downState=waitFor(dm,"room:state",room=>room.scene.tokens.find(token=>token.id===playerToken.id)?.hp===0);
+    assert.equal((await emit(player,"scene:token-hp",{tokenId:playerToken.id,hp:0,hpMax:10,tempHp:0})).ok,true);
+    await downState;
+    const deathSave=await emit(player,"combat:death-save",{tokenId:playerToken.id,visibility:"public"});
+    assert.equal(deathSave.ok,true);
+    assert.equal(deathSave.roll?.sets?.[0]?.sides,20);
+    assert.equal(deathSave.roll?.label,`Спасбросок от смерти · Шёпот`);
 
     const sceneCreatedState = waitFor(dm, "room:state", room => room.scenes.some(scene => scene.name === "Тайная лаборатория"));
     const sceneCreated = await emit(dm, "scene:create", { name:"Тайная лаборатория", activate:false });

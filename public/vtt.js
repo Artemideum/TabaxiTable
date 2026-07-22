@@ -25,7 +25,10 @@
     characterPage: ["overview","combat","checks","spells","notes"].includes(savedUi.characterPage) ? savedUi.characterPage : "overview",
     characterChecksPage: ["saves","skills-a","skills-b"].includes(savedUi.characterChecksPage) ? savedUi.characterChecksPage : "saves",
     fogShape: ["rect","circle","draw"].includes(savedUi.fogShape) ? savedUi.fogShape : "rect",
-    diceFormula: "3d6+1"
+    diceFormula: "3d6+1",
+    movementSnap: typeof savedUi.movementSnap === "boolean" ? savedUi.movementSnap : null,
+    transformRef: null,
+    contextMenu: null
   };
   let assetFilter = "all";
   let assetSearch = "";
@@ -41,7 +44,7 @@
   const roundTenth = value => Math.round((Number(value) || 0) * 10) / 10;
   const esc = value => String(value ?? "").replace(/[&<>'"]/g, character => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[character]);
   const bonusText = value => `${Number(value) >= 0 ? "+" : ""}${Number(value) || 0}`;
-  const saveUiState = () => { try { localStorage.setItem(UI_STORAGE_KEY,JSON.stringify({ rightPanel:ui.rightPanel, characterPage:ui.characterPage, characterChecksPage:ui.characterChecksPage, fogShape:ui.fogShape })); } catch {} };
+  const saveUiState = () => { try { localStorage.setItem(UI_STORAGE_KEY,JSON.stringify({ rightPanel:ui.rightPanel, characterPage:ui.characterPage, characterChecksPage:ui.characterChecksPage, fogShape:ui.fogShape, movementSnap:ui.movementSnap !== false })); } catch {} };
   const sceneKey = room => `${room.code}:${room.scene?.id || room.activeSceneId || "main"}`;
   const refKey = ref => `${ref.kind}:${ref.id}`;
   const uniqueRefs = refs => [...new Map((refs || []).filter(ref => ref?.kind && ref?.id).map(ref => [refKey(ref), { kind:ref.kind, id:ref.id }])).values()];
@@ -190,6 +193,22 @@
     return selection.some(ref => ref.kind === kind && ref.id === id);
   }
 
+  function transformRefMatches(kind, id) {
+    return ui.transformRef?.kind === kind && ui.transformRef?.id === id;
+  }
+
+  function clearTransformMode() {
+    ui.transformRef = null;
+  }
+
+  function closeContextMenu() {
+    ui.contextMenu = null;
+  }
+
+  function movementSnaps() {
+    return ui.movementSnap !== false;
+  }
+
   function assetCard(asset) {
     const categoryLabel = { token:"Токен", map:"Карта", prop:"Объект" }[asset.category] || "Ресурс";
     return `<article class="vtt-asset-card" draggable="true" data-vtt-asset="${esc(asset.id)}">
@@ -199,15 +218,24 @@
     </article>`;
   }
 
+  function transformHandlesMarkup(kind, id, enabled) {
+    if (!enabled) return "";
+    const edges = kind === "object" ? ["nw","n","ne","e","se","s","sw","w"] : ["nw","ne","se","sw"];
+    return `<span class="vtt-transform-handles" aria-hidden="true">${edges.map(edge => `<span class="vtt-transform-handle is-${edge}" data-vtt-resize-handle="${edge}" data-vtt-transform-kind="${kind}" data-vtt-transform-id="${esc(id)}"></span>`).join("")}<span class="vtt-rotate-line"></span><span class="vtt-rotate-handle" data-vtt-rotate-handle data-vtt-transform-kind="${kind}" data-vtt-transform-id="${esc(id)}">↻</span></span>`;
+  }
+
   function objectMarkup(object, metrics, selection, isDm) {
     const position = itemPosition(metrics, object.x, object.y, object.width, object.height);
     const movable = isDm && !object.locked;
-    return `<button type="button" class="vtt-scene-object ${object.type === "map" ? "is-map" : "is-prop"} ${object.hidden ? "is-hidden" : ""} ${object.locked ? "is-locked" : ""} ${selectionHas(selection, "object", object.id) ? "is-selected" : ""}"
+    const selected = selectionHas(selection, "object", object.id);
+    const transforming = transformRefMatches("object",object.id);
+    return `<button type="button" class="vtt-scene-object ${object.type === "map" ? "is-map" : "is-prop"} ${object.hidden ? "is-hidden" : ""} ${object.locked ? "is-locked" : ""} ${selected ? "is-selected" : ""} ${transforming ? "is-transforming" : ""}"
       data-vtt-object="${esc(object.id)}" data-vtt-movable="${movable ? "1" : "0"}"
       style="left:${position.left}px;top:${position.top}px;width:${Number(object.width || 1) * metrics.cell}px;height:${Number(object.height || 1) * metrics.cell}px;--rotation:${Number(object.rotation) || 0}deg;--opacity:${Number(object.opacity) || 1};--z:${Number(object.z) || 0}"
       title="${esc(object.name)}">
       ${object.imageUrl ? `<img src="${esc(object.imageUrl)}" alt="">` : `<span>${esc(object.name)}</span>`}
       <strong>${esc(object.name)}</strong>
+      ${transformHandlesMarkup("object",object.id,selected&&isDm&&ui.tool==="select"&&transformRefMatches("object",object.id))}
     </button>`;
   }
 
@@ -220,16 +248,83 @@
     const tempHp = Math.max(0, Number(token.tempHp) || 0);
     const hpPercent = Math.max(0, Math.min(100, hp / hpMax * 100));
     const badge = String(token.badge || "").trim();
-    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selectionHas(selection, "token", token.id) ? "is-selected" : ""} ${token.id === currentId ? "is-current" : ""} ${hp <= 0 ? "is-down" : ""}"
+    const selected = selectionHas(selection, "token", token.id);
+    const canTransform = isDm;
+    const transforming = transformRefMatches("token",token.id);
+    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selected ? "is-selected" : ""} ${transforming ? "is-transforming" : ""} ${token.id === currentId ? "is-current" : ""} ${hp <= 0 ? "is-down" : ""}"
       data-vtt-token="${esc(token.id)}" data-vtt-movable="${movable && (!token.locked || isDm) ? "1" : "0"}"
       style="left:${position.left}px;top:${position.top}px;width:${size * metrics.cell}px;height:${size * metrics.cell}px;--rotation:${Number(token.rotation) || 0}deg;--opacity:${Number(token.opacity) || 1};--z:${Number(token.z) || 100};--color:${esc(token.color || "#9f7842")};--badge-color:${esc(token.badgeColor || "#f4c875")}"
-      title="${esc(token.name)} · HP ${hp}/${hpMax}${tempHp ? ` +${tempHp}` : ""}">
+      title="${esc(token.name)} · HP ${hp}/${hpMax}${tempHp ? ` +${tempHp}` : ""} · КД ${Number(token.ac || 0)}">
       ${badge ? `<em class="vtt-token-badge">${esc(badge)}</em>` : ""}
+      ${token.showName !== false ? `<strong class="vtt-token-name">${esc(token.name)}</strong>` : ""}
       <i>${token.imageUrl ? `<img src="${esc(token.imageUrl)}" alt="">` : `<span>${esc((token.name || "?")[0].toUpperCase())}</span>`}</i>
-      <strong>${esc(token.name)}</strong>
-      <span class="vtt-token-hp"><i style="width:${hpPercent}%"></i><em>${hp}/${hpMax}${tempHp ? ` +${tempHp}` : ""}</em></span>
+      ${token.showHp !== false ? `<span class="vtt-token-hp"><i style="width:${hpPercent}%"></i><em>${hp}/${hpMax}${tempHp ? ` +${tempHp}` : ""}</em></span>` : ""}
+      ${token.showAc ? `<span class="vtt-token-ac" title="Класс доспеха">◈ ${Number(token.ac || 0)}</span>` : ""}
       ${token.initiative !== null && token.initiative !== undefined ? `<b>${Number(token.initiative)}</b>` : ""}
+      ${transformHandlesMarkup("token",token.id,selected&&canTransform&&ui.tool==="select"&&transformRefMatches("token",token.id))}
     </button>`;
+  }
+
+  function tokenQuickHpMarkup(scene, metrics, selection, isDm, clientId) {
+    if (!Array.isArray(selection) || selection.length !== 1 || selection[0].kind !== "token" || ui.tool !== "select" || ui.transformRef) return "";
+    const token=(scene.tokens||[]).find(item=>item.id===selection[0].id);
+    if (!token || !(isDm || token.playerId===clientId)) return "";
+    const size=Number(token.size)||1, position=itemPosition(metrics,token.x,token.y,size,size);
+    const left=position.left+size*metrics.cell/2, top=position.top-10;
+    const hp=Number(token.hp||0), hpMax=Number(token.hpMax||1);
+    const death=hp<=0?`<div class="vtt-token-death-saves"><span title="Успехи">${[0,1,2].map(index=>`<i class="${index<Number(token.deathSuccess||0)?"filled":""}"></i>`).join("")}</span><button type="button" data-vtt-token-death-save="${esc(token.id)}" title="Спасбросок от смерти">🎲</button><span class="fails" title="Провалы">${[0,1,2].map(index=>`<i class="${index<Number(token.deathFail||0)?"filled":""}"></i>`).join("")}</span></div>`:"";
+    return `<div class="vtt-token-quick-hp" style="left:${left}px;top:${top}px" data-vtt-token-quick-hp="${esc(token.id)}"><div class="vtt-token-hp-actions"><button type="button" data-vtt-token-hp-delta="-1" title="Урон 1 · Shift: 5">−</button><button type="button" data-vtt-token-hp-prompt title="Ввести урон или лечение"><strong><span>${hp}</span><i>/</i><span>${hpMax}</span></strong></button><button type="button" data-vtt-token-hp-delta="1" title="Лечение 1 · Shift: 5">＋</button></div>${death}</div>`;
+  }
+
+  function contextMenuMarkup(room, isDm, clientId) {
+    const menu = ui.contextMenu;
+    if (!menu) return "";
+    const refs = uniqueRefs(Array.isArray(menu.refs) && menu.refs.length ? menu.refs : menu.ref ? [menu.ref] : []);
+    const groupEntries = refs.map(ref => resolveRef(room.scene,ref)).filter(Boolean);
+    const entry = menu.ref ? resolveRef(room.scene, menu.ref) : null;
+    const button = (action, label, extra = "") => `<button type="button" data-vtt-context-action="${action}" ${extra}>${label}</button>`;
+    let content = "";
+    if (groupEntries.length > 1) {
+      const tokensOnly = groupEntries.every(item => item.kind === "token");
+      content = `<div class="vtt-context-title"><small>Группа</small><strong>Выбрано: ${groupEntries.length}</strong></div>
+        ${tokensOnly && isDm ? button("group-settings","⚙ Параметры токенов") + button("group-initiative","⚔ Бросить инициативу") : ""}
+        ${button("inspector","◆ Открыть инспектор")}
+        ${isDm ? button("duplicate","⧉ Дублировать группу") + button("delete","Удалить группу",'class="danger-action"') : ""}`;
+    } else if (!entry) {
+      content = `<div class="vtt-context-title"><small>Игровое поле</small><strong>Быстрые действия</strong></div>
+        ${button("toggle-snap", movementSnaps() ? "◫ Движение по сетке" : "⌁ Свободное движение")}
+        ${button("measure", "↗ Начать измерение")}${button("ping", "◎ Поставить указатель")}
+        ${button("tools", "⌘ Открыть инструменты")}${isDm ? button("library", "▧ Открыть ресурсы") : ""}`;
+    } else if (entry.kind === "token") {
+      const token = entry.value;
+      const canEdit = isDm || token.playerId === clientId;
+      content = `<div class="vtt-context-title"><small>${token.playerId ? "Персонаж" : "NPC"}</small><strong>${esc(token.name)}</strong></div>
+        ${token.playerId ? button("open-character", "☷ Быстрый лист") : button("open-npc", "☷ Лист NPC")}
+        ${canEdit ? button("initiative", "⚔ Бросить инициативу") : ""}
+        ${isDm ? button("transform", "⌖ Трансформировать") + button("attach", token.attachment ? "⛓ Изменить привязку" : "⛓ Прикрепить к…") + (token.attachment ? button("detach","Разорвать привязку") : "") : ""}
+        ${canEdit ? button("settings", "⚙ Настроить") : ""}
+        ${canEdit ? `<div class="vtt-context-submenu">${button("toggle-name", token.showName !== false ? "Скрыть имя" : "Показать имя")}${button("toggle-hp", token.showHp !== false ? "Скрыть HP" : "Показать HP")}${button("toggle-ac", token.showAc ? "Скрыть КД" : "Показать КД")}</div>` : ""}
+        ${isDm ? `<div class="vtt-context-submenu">${button("toggle-hidden", token.hidden ? "Показать токен" : "Скрыть токен")}${button("toggle-locked", token.locked ? "Разблокировать" : "Заблокировать")}</div>${button("duplicate", "⧉ Дублировать")}${button("delete", "Удалить", 'class="danger-action"')}` : ""}`;
+    } else if (entry.kind === "object") {
+      const object = entry.value;
+      content = `<div class="vtt-context-title"><small>${object.type === "map" ? "Карта" : "Объект"}</small><strong>${esc(object.name)}</strong></div>
+        <div class="vtt-context-submenu">${button("toggle-snap", movementSnaps() ? "◫ По сетке" : "⌁ Свободно")}${button("measure", "↗ Линейка")}${button("ping", "◎ Указатель")}${button("tools", "⌘ Инструменты")}</div>
+        ${isDm ? `${button("transform", "⌖ Трансформировать")}${button("attach", object.attachment ? "⛓ Изменить привязку" : "⛓ Прикрепить к…")}${object.attachment ? button("detach","Разорвать привязку") : ""}${button("settings", "⚙ Настроить")}
+        <div class="vtt-context-submenu">${button("toggle-hidden", object.hidden ? "Показать" : "Скрыть")}${button("toggle-locked", object.locked ? "Разблокировать" : "Заблокировать")}</div>
+        ${button("duplicate", "⧉ Дублировать")}${button("delete", "Удалить", 'class="danger-action"')}` : ""}`;
+    } else {
+      const annotation = entry.value;
+      const canEdit = isDm || annotation.ownerId === clientId;
+      content = `<div class="vtt-context-title"><small>Рисунок</small><strong>${esc(annotation.name || annotation.kind || "Объект")}</strong></div>
+        <div class="vtt-context-submenu">${button("toggle-snap", movementSnaps() ? "◫ По сетке" : "⌁ Свободно")}${button("measure", "↗ Линейка")}${button("ping", "◎ Указатель")}${button("tools", "⌘ Инструменты")}</div>
+        ${isDm ? `${button("attach", annotation.attachment ? "⛓ Изменить привязку" : "⛓ Прикрепить к…")}${annotation.attachment ? button("detach","Разорвать привязку") : ""}` : ""}
+        ${canEdit ? button("settings", "⚙ Настроить") : ""}
+        ${isDm ? `<div class="vtt-context-submenu">${button("toggle-hidden", annotation.hidden ? "Показать" : "Скрыть")}${button("toggle-locked", annotation.locked ? "Разблокировать" : "Заблокировать")}</div>
+        ${button("duplicate", "⧉ Дублировать")}${button("delete", "Удалить", 'class="danger-action"')}` : ""}`;
+    }
+    const left = clamp(menu.x,8,Math.max(8,window.innerWidth-270));
+    const top = clamp(menu.y,8,Math.max(8,window.innerHeight-540));
+    return `<div class="vtt-context-menu" role="menu" style="left:${Math.round(left)}px;top:${Math.round(top)}px" data-vtt-context-menu>${content}</div>`;
   }
 
   function annotationPoints(annotation, metrics) {
@@ -382,7 +477,8 @@
   function toolsPanel(grid, selectionCount, isDm, diceColor = "#d3ad6e") {
     const tray = window.TT_DICE_TRAY;
     const diceBuilder = tray ? `<div class="vtt-dice-picker"><div class="vtt-dice-picker-head"><span>Горсть кубиков</span><label>Мой цвет<input id="vtt-dice-color" type="color" value="${esc(diceColor)}"></label></div><div class="vtt-dice-steppers">${tray.SIDES.map(sides => { const count = Number(tray.state.counts[sides] || 0); return `<article class="${count ? "active" : ""}"><strong>к${sides}</strong><div><button type="button" data-vtt-die-sub="${sides}" ${count ? "" : "disabled"}>−</button><b>${count}</b><button type="button" data-vtt-die-add="${sides}" ${tray.totalCount() >= tray.MAX_DICE ? "disabled" : ""}>＋</button></div></article>`; }).join("")}</div><div class="vtt-dice-total"><span><small>Бросок</small><strong>${esc(tray.formula())}</strong></span><label>Мод.<input id="vtt-dice-modifier" type="number" min="-999" max="999" value="${Number(tray.state.modifier || 0)}"></label></div><form class="vtt-dice-formula" id="vtt-dice-formula-form"><input id="vtt-dice-formula-input" name="formula" value="${esc(ui.diceFormula)}" placeholder="3d6+1"><button class="primary" type="submit">Бросить формулу</button></form><div class="vtt-dice-actions"><button id="vtt-dice-visibility" type="button" aria-pressed="${String(tray.state.visibility === "private")}" class="${tray.state.visibility === "private" ? "active" : ""}">${tray.state.visibility === "private" ? "🔒 Закрыто" : "🌐 Всем"}</button><button id="vtt-dice-reset" type="button">к20</button><button id="vtt-dice-clear" type="button">Очистить</button></div><small>${tray.state.visibility === "private" ? "Закрытый бросок видят только ты и ГМ." : "Набери набор и нажми на поле либо введи формулу."}</small></div>` : "";
-    return `<div class="vtt-panel-head"><div><span class="eyebrow">Стол</span><h3>Инструменты</h3></div><b>${grid.snap === false ? "свободно" : "сетка"}</b></div>
+    return `<div class="vtt-panel-head"><div><span class="eyebrow">Стол</span><h3>Инструменты</h3></div><b>${movementSnaps() ? "сетка" : "свободно"}</b></div>
+      <button id="vtt-movement-mode" class="vtt-movement-mode ${movementSnaps() ? "active" : ""}" type="button"><span>${movementSnaps() ? "◫" : "⌁"}</span><div><strong>${movementSnaps() ? "Движение по сетке" : "Свободное движение"}</strong><small>Переключает только перемещение и трансформацию</small></div></button>
       <div class="vtt-tool-options"><label>Цвет<input id="vtt-tool-color" type="color" value="${esc(ui.color)}"></label><label>Заливка<input id="vtt-tool-fill" type="color" value="${esc(ui.fill)}"></label><label>Толщина<input id="vtt-tool-width" type="number" min="1" max="20" value="${Number(ui.strokeWidth)}"></label></div>
       <div class="vtt-tool-help"><strong>${toolLabel(ui.tool)}</strong><p>${toolHelp(ui.tool)}</p></div>
       ${ui.tool === "dice" ? diceBuilder : ""}
@@ -390,7 +486,7 @@
       ${isDm ? `<div class="vtt-history-actions"><button id="vtt-undo">↶ Отменить</button><button id="vtt-redo">↷ Повторить</button></div>` : ""}
       ${selectionCount > 1 && isDm ? `<div class="vtt-panel-subtitle">Выравнивание</div><div class="vtt-align-grid"><button data-vtt-align="left">⇤</button><button data-vtt-align="h-center">↔</button><button data-vtt-align="right">⇥</button><button data-vtt-align="top">⇡</button><button data-vtt-align="v-center">↕</button><button data-vtt-align="bottom">⇣</button><button data-vtt-align="distribute-h">⋯</button><button data-vtt-align="distribute-v">⋮</button></div>` : ""}
       ${isDm ? `<div class="vtt-fog-actions"><button id="vtt-fog-undo">Убрать последнюю область</button><button class="danger-action" id="vtt-fog-clear">Очистить туман</button></div>` : ""}
-      <div class="vtt-shortcuts"><span><kbd>V</kbd> выбор</span><span><kbd>H</kbd> рука</span><span><kbd>M</kbd> линейка</span><span><kbd>Del</kbd> удалить</span><span><kbd>Ctrl D</kbd> копия</span><span><kbd>K</kbd> кубик</span><span><kbd>Shift S</kbd> лист</span>${isDm ? `<span><kbd>Ctrl Z</kbd> отмена</span>` : ""}</div>`;
+      <div class="vtt-shortcuts"><span><kbd>V</kbd> выбор</span><span><kbd>ПКМ</kbd> меню</span><span><kbd>H</kbd> рука</span><span><kbd>M</kbd> линейка</span><span><kbd>Del</kbd> удалить</span><span><kbd>Ctrl D</kbd> копия</span><span><kbd>K</kbd> кубик</span><span><kbd>Shift S</kbd> лист</span>${isDm ? `<span><kbd>Ctrl Z</kbd> отмена</span>` : ""}</div>`;
   }
 
   function toolLabel(tool) {
@@ -399,7 +495,7 @@
 
   function toolHelp(tool) {
     return ({
-      select:"Клик — выбрать. Shift/Ctrl — добавить. Потяни по пустому месту — рамка выделения.",
+      select:"Клик — выбрать и двигать. ПКМ — быстрые действия. ПКМ → Трансформировать включает размер и поворот.",
       pan:"Тяни поле мышью. Средняя кнопка и Пробел работают в любом режиме.",
       measure:"Проведи между точками — получишь расстояние в футах.",
       line:"Проведи постоянную линию на сцене.", rect:"Растяни прямоугольную область.", circle:"Начни из центра и задай радиус.", cone:"Начни из вершины и укажи направление.", draw:"Рисуй свободной линией.", text:"Нажми на поле и введи подпись.", ping:"Нажми на поле, чтобы показать точку всей партии.", dice:"Выбери многогранник и брось его кликом прямо на игровое поле.", "fog-cover":"Скрой область прямоугольником, кругом или свободной кистью.", "fog-reveal":"Открой область прямоугольником, кругом или свободной кистью."
@@ -421,12 +517,15 @@
     const room = ctx.room;
     const scene = room.scene;
     const grid = scene.grid || {};
+    if (ui.movementSnap === null) ui.movementSnap = grid.snap !== false;
     const cell = Number(grid.cellSize || 52);
     const metrics = gridMetrics(grid, cell);
     const isDm = room.dmId === ctx.clientId;
     const validSelection = getSelection(room).filter(ref => resolveRef(scene, ref));
     setSelection(room, validSelection);
     const selection = getSelection(room);
+    if (ui.transformRef && !resolveRef(scene, ui.transformRef)) ui.transformRef = null;
+    if (ui.contextMenu?.ref && !resolveRef(scene, ui.contextMenu.ref)) ui.contextMenu = null;
     const entries = selectedEntries(room);
     const order = sceneOrder(scene);
     const current = order.find(token => token.id === scene.initiative?.currentTokenId);
@@ -452,6 +551,7 @@
           ${(scene.objects || []).sort((a,b)=>Number(a.z||0)-Number(b.z||0)).map(object => objectMarkup(object, metrics, selection, isDm)).join("")}
           <svg class="vtt-annotation-layer" viewBox="0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}">${(scene.annotations || []).sort((a,b)=>Number(a.z||50)-Number(b.z||50)).map(annotation => annotationMarkup(annotation, metrics, selection)).join("")}</svg>
           ${(scene.tokens || []).sort((a,b)=>Number(a.z||100)-Number(b.z||100)).map(token => tokenMarkup(token, metrics, selection, scene.initiative?.currentTokenId, isDm, ctx.clientId)).join("")}
+          ${tokenQuickHpMarkup(scene,metrics,selection,isDm,ctx.clientId)}
           ${fogMarkup(scene,metrics,isDm)}
           ${measurementMarkup(room, metrics)}
           <svg id="vtt-draft-layer" class="vtt-draft-layer" viewBox="0 0 ${WORLD_WIDTH} ${WORLD_HEIGHT}"></svg>
@@ -478,8 +578,9 @@
 
       ${leftContent ? `<aside class="vtt-floating-panel vtt-panel-left">${leftContent}</aside>` : ""}
       ${rightContent ? `<aside class="vtt-floating-panel vtt-panel-right ${ui.rightPanel === "initiative" ? "vtt-initiative-panel" : ui.rightPanel === "character" ? "vtt-character-panel" : ""}">${rightContent}</aside>` : ""}
+      ${contextMenuMarkup(room,isDm,ctx.clientId)}
 
-      <footer class="vtt-bottom-dock"><div><button id="vtt-zoom-out">−</button><button id="vtt-zoom-value">82%</button><button id="vtt-zoom-in">＋</button><button id="vtt-camera-reset" title="К центру">⌂</button></div><div><button id="vtt-clear-measure" class="${getMeasurement(room) ? "active" : ""}" title="Очистить линейку">↗</button><span>${grid.snap === false ? "Свободное движение" : `Привязка · ${cell}px`}</span><span id="vtt-cursor-position">0 : 0</span></div></footer>
+      <footer class="vtt-bottom-dock"><div><button id="vtt-zoom-out">−</button><button id="vtt-zoom-value">82%</button><button id="vtt-zoom-in">＋</button><button id="vtt-camera-reset" title="К центру">⌂</button></div><div><button id="vtt-clear-measure" class="${getMeasurement(room) ? "active" : ""}" title="Очистить линейку">↗</button><button id="vtt-movement-snap" class="${movementSnaps() ? "active" : ""}" type="button" title="Переключить свободное движение и привязку">${movementSnaps() ? `◫ Сетка · ${cell}px` : "⌁ Свободно"}</button><span id="vtt-cursor-position">0 : 0</span></div></footer>
       <input id="vtt-file-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple hidden>
     </div>`;
 
@@ -531,24 +632,31 @@
     const prefs=character.quickSheet||{sections:["overview","combat","checks","spells"]};
     const sections=(prefs.sections||[]).filter(value=>["overview","combat","checks","spells","notes"].includes(value));
     const page=sections.includes(ui.characterPage)?ui.characterPage:sections[0]||"overview";
-    const rollButton=(formula,label,content,className="")=>`<button type="button" class="${className}" data-vtt-character-formula="${esc(formula)}" data-vtt-character-label="${esc(label)}" ${canRoll?"":"disabled"}>${content}</button>`;
+    const rollButton=(formula,label,content,className="")=>formula?`<button type="button" class="${className}" data-vtt-character-formula="${esc(formula)}" data-vtt-character-label="${esc(label)}" ${canRoll?"":"disabled"}>${content}</button>`:`<div class="${className} is-readonly">${content}</div>`;
     const abilities=(character.abilities||[]).map(entry=>rollButton(entry.formula,`Проверка: ${entry.name}`,`<small>${esc(String(entry.key).toUpperCase())}</small><strong>${Number(entry.value)}</strong><b>${bonusText(entry.modifier)}</b>`,`vtt-character-ability`)).join("");
     const saves=[...(character.saves||[])].sort((a,b)=>(prefs.pinnedSaves||[]).includes(b.key)-(prefs.pinnedSaves||[]).includes(a.key));
     const skills=[...(character.skills||[])].sort((a,b)=>(prefs.pinnedSkills||[]).includes(b.key)-(prefs.pinnedSkills||[]).includes(a.key));
     const attacks=[...(character.attacks||[])].sort((a,b)=>(prefs.pinnedAttacks||[]).includes(b.id)-(prefs.pinnedAttacks||[]).includes(a.id));
-    const spells=[...(character.spells||[])].sort((a,b)=>(prefs.pinnedSpells||[]).includes(b.id)-(prefs.pinnedSpells||[]).includes(a.id));
+    const spells=[...(character.spells||[])].sort((a,b)=>(prefs.pinnedSpells||[]).includes(b.id)-(prefs.pinnedSpells||[]).includes(a.id)||Number(a.level)-Number(b.level));
     const saveMarkup=saves.map(entry=>rollButton(entry.formula,`Спасбросок: ${entry.name}`,`<i>${(prefs.pinnedSaves||[]).includes(entry.key)?"★":entry.proficient?"◆":"·"}</i><em>${esc(entry.name)}</em><b>${bonusText(entry.bonus)}</b>`,entry.proficient?"proficient":"")).join("");
-    const skillMarkup=skills.map(entry=>rollButton(entry.formula,`Навык: ${entry.name}`,`<i>${(prefs.pinnedSkills||[]).includes(entry.key)?"★":entry.expertise?"✦":entry.proficient?"◆":"·"}</i><em>${esc(entry.name)}</em><small>${esc(String(entry.ability||"").toUpperCase())}</small><b>${bonusText(entry.bonus)}</b>`,entry.expertise?"expertise":entry.proficient?"proficient":"")).join("");
+    const skillRow=entry=>rollButton(entry.formula,`Навык: ${entry.name}`,`<i>${(prefs.pinnedSkills||[]).includes(entry.key)?"★":entry.expertise?"✦":entry.proficient?"◆":"·"}</i><em>${esc(entry.name)}</em><small>${esc(String(entry.ability||"").toUpperCase())}</small><b>${bonusText(entry.bonus)}</b>`,entry.expertise?"expertise":entry.proficient?"proficient":"");
     const attackMarkup=attacks.map(attack=>`<article><div><strong>${(prefs.pinnedAttacks||[]).includes(attack.id)?"★ ":""}${esc(attack.name)}</strong><small>${esc(attack.damageType||"Атака")}</small></div>${rollButton(attack.attackFormula,`Атака: ${attack.name}`,esc(attack.attackFormula),"vtt-formula-button")}${attack.damageFormula?rollButton(attack.damageFormula,`Урон: ${attack.name}`,esc(attack.damageFormula),"vtt-formula-button damage"):""}</article>`).join("");
     const equipment=(character.equipment||[]).map(item=>`<article><span>${esc(item.icon||"◇")}</span><div><small>${esc(item.slotLabel)}</small><strong>${esc(item.name)}</strong></div>${Number(item.quantity)>1?`<b>${Number(item.quantity)}</b>`:""}</article>`).join("");
-    const spellMarkup=spells.map(spell=>rollButton(spell.formula,`${spell.kind==="healing"?"Лечение":"Заклинание"}: ${spell.name}`,`<i>${(prefs.pinnedSpells||[]).includes(spell.id)?"★":spell.concentration?"◉":"✧"}</i><em>${esc(spell.name)}</em><small>${spell.level?`${spell.level} ур.`:"заговор"}</small><b>${esc(spell.formula)}</b>`,"vtt-character-spell")).join("");
+    const consumables=(character.consumables||[]).map(item=>`<article class="vtt-character-consumable"><span>${esc(item.icon||"✚")}</span><div><strong>${esc(item.name)}</strong><small>${Number(item.quantity)} шт.${item.useFormula?` · ${esc(item.useFormula)}`:""}</small></div><button type="button" data-vtt-use-item="${esc(item.id)}" ${canRoll&&Number(item.quantity)>0?"":"disabled"}>Использовать</button></article>`).join("");
+    const resources=(character.resources||[]).map(item=>`<article class="vtt-character-resource"><div><strong>${esc(item.name)}</strong><small>${Number(item.current)}/${Number(item.max)}</small></div><button type="button" data-vtt-resource-change="${esc(item.id)}" data-delta="-1" ${canRoll&&Number(item.current)>0?"":"disabled"}>−</button><progress max="${Math.max(1,Number(item.max))}" value="${Number(item.current)}"></progress><button type="button" data-vtt-resource-change="${esc(item.id)}" data-delta="1" ${canRoll&&Number(item.current)<Number(item.max)?"":"disabled"}>＋</button></article>`).join("");
+    const features=(character.combatFeatures||[]).map(item=>rollButton(item.formula,item.name,`<i>✦</i><em>${esc(item.name)}</em><small>${esc(item.note||"")}</small><b>${esc(item.formula)}</b>`,`vtt-character-spell`)).join("");
+    const slots=[...(character.spellSlots||[]),...(character.pactSlots?[{...character.pactSlots,pact:true}]:[])].map(slot=>`<article class="vtt-character-slot"><strong>${slot.pact?`Д${Number(slot.level)}`:Number(slot.level)}</strong><div>${Array.from({length:Number(slot.total)},(_,index)=>`<i class="${index<Number(slot.used)?"used":""}"></i>`).join("")}</div><small>${Number(slot.remaining)} осталось</small>${canRoll?`<button data-vtt-slot-change="${Number(slot.level)}" data-delta="-1" ${slot.used>0?"":"disabled"} ${slot.pact?'data-pact="1"':''}>−</button><button data-vtt-slot-change="${Number(slot.level)}" data-delta="1" ${slot.remaining>0?"":"disabled"} ${slot.pact?'data-pact="1"':''}>＋</button>`:""}</article>`).join("");
+    const spellMarkup=spells.map(spell=>`<article class="vtt-character-spell-row"><div><i>${(prefs.pinnedSpells||[]).includes(spell.id)?"★":spell.concentration?"◉":"✧"}</i><span><strong>${esc(spell.name)}</strong><small>${spell.level?`${spell.level} ур.`:"заговор"}${spell.ritual?" · ритуал":""}</small></span></div>${spell.formula?rollButton(spell.formula,`${spell.kind==="healing"?"Лечение":"Заклинание"}: ${spell.name}`,esc(spell.formula),"vtt-formula-button"):""}<button type="button" data-vtt-cast-spell="${esc(spell.id)}" ${canRoll?"":"disabled"}>Сотворить</button></article>`).join("");
     const tabs=sections.map(section=>`<button type="button" data-vtt-character-page="${section}" class="${page===section?"active":""}">${({overview:"Обзор",combat:"Бой",checks:"Проверки",spells:"Магия",notes:"Заметки"})[section]}</button>`).join("");
-    const overview=`<div class="vtt-character-vitals"><article><small>HP</small><strong>${Number(character.hp)}/${Number(character.hpMax)}${Number(character.tempHp)?` +${Number(character.tempHp)}`:""}</strong></article><article><small>КД</small><strong>${Number(character.ac)}</strong></article><article><small>Скорость</small><strong>${Number(character.speed)} фт.</strong></article><article><small>Инициатива</small><strong>${bonusText(character.initiativeBonus)}</strong></article><article><small>Мастерство</small><strong>${bonusText(character.proficiency)}</strong></article><article><small>Пассивка</small><strong>${Number(character.passivePerception)}</strong></article></div><div class="vtt-character-abilities">${abilities}</div>`;
-    const combat=`${attackMarkup?`<section class="vtt-character-section"><h4>Атаки и формулы</h4><div class="vtt-character-attacks">${attackMarkup}</div></section>`:""}${equipment?`<section class="vtt-character-section"><h4>${esc(character.combatSetName||"Боевой комплект")}</h4><div class="vtt-character-equipment">${equipment}</div></section>`:""}`;
-    const checks=`<section class="vtt-character-section"><h4>Закреплённые и спасброски</h4><div class="vtt-character-checks">${saveMarkup}</div></section><section class="vtt-character-section"><h4>Навыки</h4><div class="vtt-character-checks skills">${skillMarkup}</div></section>`;
-    const magic=`<section class="vtt-character-section"><h4>Подготовленные заклинания</h4><div class="vtt-character-checks spells">${spellMarkup||`<div class="vtt-empty-side">Нет заклинаний с формулой.</div>`}</div></section>`;
+    const death=Number(character.hp)<=0?`<section class="vtt-character-section vtt-death-saves"><h4>Спасброски от смерти</h4><div><span>Успехи</span>${Array.from({length:3},(_,i)=>`<i class="success ${i<Number(character.deathSuccess)?"filled":""}">✓</i>`).join("")}<span>Провалы</span>${Array.from({length:3},(_,i)=>`<i class="fail ${i<Number(character.deathFail)?"filled":""}">×</i>`).join("")}</div><button type="button" data-vtt-death-save="${esc(token?.id||"")}" ${canRoll&&token&&!character.stable?"":"disabled"}>🎲 Спасбросок${character.stable?" · стабилен":""}</button></section>`:"";
+    const overview=`<div class="vtt-character-vitals"><article><small>HP</small><strong>${Number(character.hp)}/${Number(character.hpMax)}${Number(character.tempHp)?` +${Number(character.tempHp)}`:""}</strong></article><article><small>КД</small><strong>${Number(character.ac)}</strong></article><article><small>Скорость</small><strong>${Number(character.speed)} фт.</strong></article><article><small>Инициатива</small><strong>${bonusText(character.initiativeBonus)}</strong></article><article><small>Мастерство</small><strong>${bonusText(character.proficiency)}</strong></article><article><small>Пассивка</small><strong>${Number(character.passivePerception)}</strong></article></div><div class="vtt-character-abilities">${abilities}</div>${death}`;
+    const combat=`${attackMarkup?`<section class="vtt-character-section"><h4>Атаки и формулы</h4><div class="vtt-character-attacks">${attackMarkup}</div></section>`:""}${features?`<section class="vtt-character-section"><h4>Боевые особенности</h4><div class="vtt-character-checks spells">${features}</div></section>`:""}${resources?`<section class="vtt-character-section"><h4>Ресурсы и заряды</h4><div class="vtt-character-resources">${resources}</div></section>`:""}${consumables?`<section class="vtt-character-section"><h4>Расходники</h4><div class="vtt-character-consumables">${consumables}</div></section>`:""}${equipment?`<section class="vtt-character-section"><h4>${esc(character.combatSetName||"Боевой комплект")}</h4><div class="vtt-character-equipment">${equipment}</div></section>`:""}`;
+    const checkPage=["saves","skills-a","skills-b"].includes(ui.characterChecksPage)?ui.characterChecksPage:"saves", skillMiddle=Math.ceil(skills.length/2);
+    const checkTabs=`<nav class="vtt-character-check-tabs"><button data-vtt-character-checks-page="saves" class="${checkPage==="saves"?"active":""}">Спасы</button><button data-vtt-character-checks-page="skills-a" class="${checkPage==="skills-a"?"active":""}">Навыки 1</button><button data-vtt-character-checks-page="skills-b" class="${checkPage==="skills-b"?"active":""}">Навыки 2</button></nav>`;
+    const checkContent=checkPage==="saves"?`<section class="vtt-character-section"><h4>Спасброски</h4><div class="vtt-character-checks">${saveMarkup}</div></section>`:`<section class="vtt-character-section"><h4>Навыки</h4><div class="vtt-character-checks skills">${(checkPage==="skills-a"?skills.slice(0,skillMiddle):skills.slice(skillMiddle)).map(skillRow).join("")}</div></section>`;
+    const magic=`${slots?`<section class="vtt-character-section"><h4>Ячейки заклинаний</h4><div class="vtt-character-slots">${slots}</div></section>`:""}<section class="vtt-character-section"><h4>Подготовленные заклинания</h4><div class="vtt-character-spells">${spellMarkup||`<div class="vtt-empty-side">Подготовленных заклинаний нет.</div>`}</div></section>`;
     const notes=`<section class="vtt-character-section"><h4>Цели</h4><div class="vtt-character-notes">${(character.goals||[]).map(item=>`<article><strong>${esc(item.title)}</strong><p>${esc(item.text||"")}</p></article>`).join("")||"—"}</div></section><section class="vtt-character-section"><h4>Заметки</h4><div class="vtt-character-notes">${(character.notes||[]).map(item=>`<article><strong>${esc(item.title)}</strong><p>${esc(item.text||"")}</p></article>`).join("")||"—"}</div></section>`;
-    const content={overview,combat,checks,spells:magic,notes}[page]||overview;
+    const content={overview,combat,checks:`${checkTabs}${checkContent}`,spells:magic,notes}[page]||overview;
     return `<div class="vtt-character-sheet"><div class="vtt-panel-head"><div><span class="eyebrow">Быстрый просмотр</span><h3>Лист персонажа</h3></div><div class="vtt-character-head-actions"><b>${Number(character.level||1)} ур.</b>${canRoll?`<button data-vtt-character-settings title="Настроить быстрый лист">⚙</button>`:""}</div></div>${isDm&&list.length>1?`<div class="vtt-character-switcher">${list.map(entry=>`<button data-vtt-character-player="${esc(entry.playerId)}" class="${entry.playerId===character.playerId?"active":""}">${entry.portraitUrl?`<img src="${esc(entry.portraitUrl)}">`:`<span>${esc((entry.name||"?")[0])}</span>`}</button>`).join("")}</div>`:""}<header class="vtt-character-hero">${character.portraitUrl?`<img src="${esc(character.portraitUrl)}">`:`<span>${esc((character.name||"?")[0])}</span>`}<div><strong>${esc(character.name)}</strong><small>${esc(character.classSummary||"Искатель приключений")}</small></div></header><nav class="vtt-character-tabs">${tabs}</nav><div class="vtt-character-page" data-page="${page}">${content}${!canRoll?`<p class="vtt-character-readonly">Броски доступны владельцу персонажа.</p>`:""}</div><div class="vtt-character-actions">${token?`<button data-vtt-character-focus="${esc(token.id)}">◎ Найти токен</button>`:""}<button class="primary" data-vtt-open-full-sheet="${esc(character.playerId)}">Открыть полный лист</button></div></div>`;
   }
 
@@ -633,6 +741,12 @@
       saveUiState();
       render(root,ctx);
     }, { signal }));
+    root.querySelectorAll(".vtt-character-page").forEach(page => {
+      page.addEventListener("wheel", event => {
+        event.stopPropagation();
+      }, { signal, passive:true });
+      page.addEventListener("pointerdown", event => event.stopPropagation(), { signal });
+    });
     root.querySelector("[data-vtt-open-full-sheet]")?.addEventListener("click", event => ctx.actions?.openSheet?.(event.currentTarget.dataset.vttOpenFullSheet), { signal });
     root.querySelector("[data-vtt-character-settings]")?.addEventListener("click",()=>openQuickSheetSettings(ctx,ctx.characters?.[ctx.clientId]),{signal});
     root.querySelectorAll("[data-vtt-character-formula]").forEach(button => button.addEventListener("click", () => {
@@ -640,15 +754,26 @@
       const visibility = window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public";
       ctx.actions?.roll?.(button.dataset.vttCharacterFormula,button.dataset.vttCharacterLabel || button.dataset.vttCharacterFormula,visibility,"normal");
     }, { signal }));
+    root.querySelectorAll("[data-vtt-use-item]").forEach(button=>button.addEventListener("click",()=>{if(button.disabled)return;const visibility=window.TT_DICE_TRAY?.state?.visibility==="private"?"private":"public";const own=(scene.tokens||[]).find(token=>token.playerId===ctx.clientId);ctx.actions?.useItem?.(button.dataset.vttUseItem,own?.id||"",visibility);},{signal}));
+    root.querySelectorAll("[data-vtt-resource-change]").forEach(button=>button.addEventListener("click",()=>ctx.actions?.changeResource?.(button.dataset.vttResourceChange,Number(button.dataset.delta)||0),{signal}));
+    root.querySelectorAll("[data-vtt-slot-change]").forEach(button=>button.addEventListener("click",()=>ctx.actions?.changeSpellSlot?.(Number(button.dataset.vttSlotChange),Number(button.dataset.delta)||0,button.dataset.pact==="1"),{signal}));
+    root.querySelectorAll("[data-vtt-cast-spell]").forEach(button=>button.addEventListener("click",()=>{if(!button.disabled)ctx.actions?.castSpell?.(button.dataset.vttCastSpell);},{signal}));
+    root.querySelectorAll("[data-vtt-death-save]").forEach(button=>button.addEventListener("click",()=>{if(button.disabled)return;const visibility=window.TT_DICE_TRAY?.state?.visibility==="private"?"private":"public";ctx.actions?.deathSave?.(button.dataset.vttDeathSave,visibility);},{signal}));
     root.querySelectorAll("[data-vtt-npc-edit]").forEach(button=>button.addEventListener("click",()=>{const token=(scene.tokens||[]).find(entry=>entry.id===button.dataset.vttNpcEdit);openNpcSheetEditor(ctx,token);},{signal}));
     root.querySelectorAll("[data-vtt-open-npc]").forEach(button=>button.addEventListener("click",()=>{ui.rightPanel="character";saveUiState();render(root,ctx);},{signal}));
     root.querySelectorAll("[data-vtt-npc-formula]").forEach(button=>button.addEventListener("click",()=>{if(button.disabled)return;const point=cameraCenterGrid();emit(ctx,"scene:dice-roll",{...point,formula:button.dataset.vttNpcFormula,label:button.dataset.vttNpcLabel,visibility:button.dataset.vttNpcVisibility==="public"?"public":"private"}).then(response=>{if(response.ok&&response.roll)window.TT_DICE_PHYSICS?.play?.(response.roll);});},{signal}));
     root.querySelectorAll("[data-vtt-tool]").forEach(button => button.addEventListener("click", () => {
       const nextTool = button.dataset.vttTool;
+      clearTransformMode();
+      closeContextMenu();
       ui.tool = nextTool === "ping" && ui.tool === "ping" ? "select" : nextTool;
       if (["dice","fog-cover","fog-reveal"].includes(ui.tool)) ui.leftPanel = "tools";
       render(root, ctx);
     }, { signal }));
+    const toggleMovementSnap = () => { ui.movementSnap = !movementSnaps(); saveUiState(); closeContextMenu(); render(root,ctx); };
+    root.querySelector("#vtt-movement-mode")?.addEventListener("click", toggleMovementSnap, { signal });
+    root.querySelector("#vtt-movement-snap")?.addEventListener("click", toggleMovementSnap, { signal });
+
     root.querySelectorAll("[data-vtt-die-add]").forEach(button => button.addEventListener("click", () => { window.TT_DICE_TRAY?.add(button.dataset.vttDieAdd,1); render(root,ctx); }, { signal }));
     root.querySelectorAll("[data-vtt-die-sub]").forEach(button => button.addEventListener("click", () => { window.TT_DICE_TRAY?.add(button.dataset.vttDieSub,-1); render(root,ctx); }, { signal }));
     root.querySelector("#vtt-dice-modifier")?.addEventListener("change", event => { window.TT_DICE_TRAY?.setModifier(event.currentTarget.value); render(root,ctx); }, { signal });
@@ -667,6 +792,60 @@
         if (response.ok && response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
       });
     }, { signal });
+
+    root.querySelectorAll("[data-vtt-context-action]").forEach(button => button.addEventListener("click", async () => {
+      const action = button.dataset.vttContextAction;
+      const ref = ui.contextMenu?.ref || null;
+      const refs = uniqueRefs(Array.isArray(ui.contextMenu?.refs) && ui.contextMenu.refs.length ? ui.contextMenu.refs : ref ? [ref] : []);
+      const entry = ref ? resolveRef(scene,ref) : null;
+      const finish = () => { closeContextMenu(); render(root,ctx); };
+      if (action === "toggle-snap") return toggleMovementSnap();
+      if (action === "inspector") { ui.rightPanel="inspector"; closeContextMenu(); saveUiState(); return render(root,ctx); }
+      if (action === "group-settings" && isDm) { closeContextMenu(); root.querySelector("[data-vtt-context-menu]")?.remove(); return openGroupTokenEditor(ctx,refs.filter(item=>item.kind==="token").map(item=>item.id)); }
+      if (action === "group-initiative" && isDm) { closeContextMenu(); root.querySelector("[data-vtt-context-menu]")?.remove(); return emit(ctx,"scene:tokens-batch-update",{tokenIds:refs.filter(item=>item.kind==="token").map(item=>item.id),rollInitiative:true},"Инициатива группы брошена"); }
+      if (action === "measure" || action === "ping") { ui.tool = action === "measure" ? "measure" : "ping"; closeContextMenu(); return render(root,ctx); }
+      if (action === "tools") { ui.leftPanel = "tools"; closeContextMenu(); return render(root,ctx); }
+      if (action === "library" && isDm) { ui.leftPanel = "library"; closeContextMenu(); return render(root,ctx); }
+      if (!entry) return finish();
+      if (action === "transform" && isDm && ["token","object"].includes(entry.kind)) {
+        setSelection(room,[ref]); ui.tool = "select"; ui.transformRef = { ...ref }; closeContextMenu(); return render(root,ctx);
+      }
+      if (action === "attach" && isDm) { closeContextMenu(); root.querySelector("[data-vtt-context-menu]")?.remove(); return openAttachmentPicker(ctx,ref); }
+      if (action === "detach" && isDm) { closeContextMenu(); await emit(ctx,"scene:item-attach",{childKind:ref.kind,childId:ref.id},"Привязка снята"); return; }
+      if (action === "settings") {
+        closeContextMenu();
+        root.querySelector("[data-vtt-context-menu]")?.remove();
+        if (entry.kind === "token") return openTokenEditor(ctx,entry.value);
+        if (entry.kind === "object") return openObjectEditor(ctx,entry.value);
+        return openAnnotationEditor(ctx,entry.value);
+      }
+      if (action === "open-character" && entry.kind === "token" && entry.value.playerId) {
+        ui.characterPlayerId = entry.value.playerId; ui.rightPanel = "character"; closeContextMenu(); saveUiState(); return render(root,ctx);
+      }
+      if (action === "open-npc" && entry.kind === "token") { setSelection(room,[ref]); ui.rightPanel = "character"; closeContextMenu(); saveUiState(); return render(root,ctx); }
+      if (action === "initiative" && entry.kind === "token") { closeContextMenu(); root.querySelector("[data-vtt-context-menu]")?.remove(); const response=await emit(ctx,"initiative:roll",{tokenId:entry.value.id}); if(response.ok&&response.roll)window.TT_DICE_PHYSICS?.play?.(response.roll); return; }
+      if (action === "duplicate" && isDm) { closeContextMenu(); await duplicateRefs(root,ctx,refs); return render(root,ctx); }
+      if (action === "delete" && isDm) { closeContextMenu(); await removeRefs(root,ctx,refs); return render(root,ctx); }
+      const patch = {};
+      if (action === "toggle-name" && entry.kind === "token") patch.showName = entry.value.showName === false;
+      if (action === "toggle-hp" && entry.kind === "token") patch.showHp = entry.value.showHp === false;
+      if (action === "toggle-ac" && entry.kind === "token") patch.showAc = !entry.value.showAc;
+      if (action === "toggle-hidden") patch.hidden = !entry.value.hidden;
+      if (action === "toggle-locked") patch.locked = !entry.value.locked;
+      if (Object.keys(patch).length) {
+        closeContextMenu();
+        if (entry.kind === "token") await emit(ctx,"scene:token-update",{tokenId:entry.value.id,...patch});
+        else if (entry.kind === "object") await emit(ctx,"scene:object-update",{objectId:entry.value.id,...patch});
+        else await emit(ctx,"scene:annotation-update",{annotationId:entry.value.id,...patch});
+        return;
+      }
+      finish();
+    }, { signal }));
+
+    root.querySelector("[data-vtt-token-quick-hp]")?.addEventListener("pointerdown",event=>event.stopPropagation(),{signal});
+    root.querySelectorAll("[data-vtt-token-hp-delta]").forEach(button=>button.addEventListener("click",event=>{event.stopPropagation();const host=button.closest("[data-vtt-token-quick-hp]"),amount=event.shiftKey?5:1,delta=Number(button.dataset.vttTokenHpDelta);ctx.actions?.applyCombat?.(host?.dataset.vttTokenQuickHp,delta<0?"damage":"healing",amount,delta<0?"Быстрый урон":"Быстрое лечение","public");},{signal}));
+    root.querySelector("[data-vtt-token-hp-prompt]")?.addEventListener("click",event=>{event.stopPropagation();const host=event.currentTarget.closest("[data-vtt-token-quick-hp]"),raw=prompt("Изменение HP: отрицательное — урон, положительное — лечение","-1"),amount=Number(raw);if(!amount)return;ctx.actions?.applyCombat?.(host?.dataset.vttTokenQuickHp,amount<0?"damage":"healing",Math.abs(amount),amount<0?"Изменение HP · урон":"Изменение HP · лечение","public");},{signal});
+    root.querySelector("[data-vtt-token-death-save]")?.addEventListener("click",event=>{event.stopPropagation();const visibility=window.TT_DICE_TRAY?.state?.visibility==="private"?"private":"public";ctx.actions?.deathSave?.(event.currentTarget.dataset.vttTokenDeathSave,visibility);},{signal});
 
     root.querySelector("#vtt-zoom-in")?.addEventListener("click", () => { const point = cameraCenterGrid(); centerCamera(point.x, point.y, camera.zoom * 1.2); }, { signal });
     root.querySelector("#vtt-zoom-out")?.addEventListener("click", () => { const point = cameraCenterGrid(); centerCamera(point.x, point.y, camera.zoom / 1.2); }, { signal });
@@ -738,17 +917,34 @@
       if (label) label.textContent = `${point.x} : ${point.y}`;
     }, { signal });
 
+    viewport.addEventListener("contextmenu", event => {
+      if (event.target.closest("[data-vtt-token],[data-vtt-object],[data-vtt-annotation]")) return;
+      event.preventDefault();
+      clearTransformMode();
+      ui.contextMenu = { ref:null, refs:[], x:event.clientX, y:event.clientY };
+      render(root,ctx);
+    }, { signal });
+
     viewport.addEventListener("pointerdown", event => {
       if (event.button === 1 || event.button === 0 && (spaceHeld || ui.tool === "pan")) return beginPan(event);
-      if (event.button !== 0 || event.target.closest("[data-vtt-token],[data-vtt-object],[data-vtt-annotation]")) return;
-      if (ui.tool === "select") return beginMarquee(event, root, ctx, viewport);
+      if (event.button !== 0) return;
+      const overSceneItem=event.target.closest("[data-vtt-token],[data-vtt-object],[data-vtt-annotation]");
+      if (ui.contextMenu && !event.target.closest("[data-vtt-context-menu]")) {
+        closeContextMenu();
+        if (!overSceneItem) { clearTransformMode(); setSelection(room,[]); render(root,ctx); event.preventDefault(); return; }
+      }
+      if (ui.tool === "select") {
+        if (overSceneItem) return;
+        if (ui.transformRef) { clearTransformMode(); setSelection(room,[]); render(root,ctx); event.preventDefault(); return; }
+        return beginMarquee(event, root, ctx, viewport);
+      }
       if (ui.tool === "ping") {
-        const point = screenToGrid(event.clientX, event.clientY, "cell");
+        const point = screenToGridRaw(event.clientX,event.clientY);
         emit(ctx, "scene:ping", { ...point, color:ui.color });
         return;
       }
       if (ui.tool === "dice") {
-        const point = screenToGrid(event.clientX, event.clientY, "cell");
+        const point = movementSnaps() ? screenToGrid(event.clientX, event.clientY, "cell") : screenToGridRaw(event.clientX,event.clientY);
         const dice = window.TT_DICE_TRAY?.selection?.() || [];
         if (!dice.length) return ctx.toast("Добавь хотя бы один кубик");
         emit(ctx, "scene:dice-roll", { ...point, dice, modifier:Number(window.TT_DICE_TRAY?.state?.modifier) || 0, visibility:window.TT_DICE_TRAY?.state?.visibility === "private" ? "private" : "public" }).then(response => {
@@ -802,9 +998,18 @@
     }
     if (event.code === "Escape") {
       setSelection(ctx.room, []);
+      clearTransformMode();
+      closeContextMenu();
       measurementByScene.delete(sceneKey(ctx.room));
       ui.tool = "select";
       render(root, ctx);
+      return;
+    }
+    if (event.code === "Enter" && ui.transformRef) {
+      clearTransformMode();
+      closeContextMenu();
+      render(root,ctx);
+      event.preventDefault();
       return;
     }
     if (event.shiftKey && event.code === "KeyS") {
@@ -844,6 +1049,8 @@
     const toolByCode = { KeyV:"select", KeyH:"pan", KeyM:"measure", KeyP:"ping", KeyR:"rect", KeyC:"circle", KeyN:"cone", KeyL:"line", KeyD:"draw", KeyT:"text", KeyK:"dice", KeyF:event.shiftKey?"fog-reveal":"fog-cover" };
     const nextTool = toolByCode[event.code];
     if (!nextTool || event.repeat) return;
+    clearTransformMode();
+    closeContextMenu();
     ui.tool = nextTool === "ping" && ui.tool === "ping" ? "select" : nextTool;
     if (ui.tool === "dice") ui.leftPanel = "tools";
     render(root, ctx);
@@ -984,10 +1191,68 @@
     draw(); event.preventDefault();
   }
 
+  function bindTransformHandles(root,ctx,metrics,screenToGridRaw,signal) {
+    const scene=ctx.room.scene;
+    const resolve=(kind,id)=>kind==="object"?(scene.objects||[]).find(item=>item.id===id):(scene.tokens||[]).find(item=>item.id===id);
+    const elementFor=(kind,id)=>root.querySelector(kind==="object"?`[data-vtt-object="${CSS.escape(id)}"]`:`[data-vtt-token="${CSS.escape(id)}"]`);
+    const snapValue=value=>movementSnaps()?Math.round(value):roundTenth(value);
+    root.querySelectorAll("[data-vtt-resize-handle]").forEach(handle=>handle.addEventListener("pointerdown",event=>{
+      if(event.button!==0)return;
+      event.stopPropagation(); event.preventDefault();
+      const kind=handle.dataset.vttTransformKind,id=handle.dataset.vttTransformId,edge=handle.dataset.vttResizeHandle;
+      const value=resolve(kind,id),element=elementFor(kind,id); if(!value||!element)return;
+      const start=screenToGridRaw(event.clientX,event.clientY),rotation=Number(value.rotation)||0,rad=rotation*Math.PI/180,cos=Math.cos(rad),sin=Math.sin(rad);
+      const width=kind==="token"?Number(value.size||1):Number(value.width||1),height=kind==="token"?Number(value.size||1):Number(value.height||1);
+      const center={x:Number(value.x||0)+width/2,y:Number(value.y||0)+height/2};
+      let result={x:Number(value.x||0),y:Number(value.y||0),width,height,size:width,rotation};
+      handle.setPointerCapture(event.pointerId);
+      const move=pointer=>{
+        const current=screenToGridRaw(pointer.clientX,pointer.clientY),dx=current.x-start.x,dy=current.y-start.y;
+        const localDx=dx*cos+dy*sin,localDy=-dx*sin+dy*cos;
+        if(kind==="token"){
+          const signX=edge.includes("e")?1:-1,signY=edge.includes("s")?1:-1;
+          const fixed={x:-signX*width/2,y:-signY*height/2};
+          const dragged={x:signX*width/2+localDx,y:signY*height/2+localDy};
+          const nextSize=Math.max(.25,Math.max(Math.abs(dragged.x-fixed.x),Math.abs(dragged.y-fixed.y)));
+          const adjusted={x:fixed.x+signX*nextSize,y:fixed.y+signY*nextSize};
+          const shift={x:(fixed.x+adjusted.x)/2,y:(fixed.y+adjusted.y)/2};
+          const worldShift={x:shift.x*cos-shift.y*sin,y:shift.x*sin+shift.y*cos};
+          result={...result,size:nextSize,width:nextSize,height:nextSize,x:center.x+worldShift.x-nextSize/2,y:center.y+worldShift.y-nextSize/2};
+        }else{
+          let left=-width/2,right=width/2,top=-height/2,bottom=height/2;
+          if(edge.includes("w"))left+=localDx;if(edge.includes("e"))right+=localDx;if(edge.includes("n"))top+=localDy;if(edge.includes("s"))bottom+=localDy;
+          if(right-left<.25){if(edge.includes("w"))left=right-.25;else right=left+.25;}
+          if(bottom-top<.25){if(edge.includes("n"))top=bottom-.25;else bottom=top+.25;}
+          const nextWidth=right-left,nextHeight=bottom-top,shift={x:(left+right)/2,y:(top+bottom)/2};
+          const worldShift={x:shift.x*cos-shift.y*sin,y:shift.x*sin+shift.y*cos};
+          result={...result,width:nextWidth,height:nextHeight,x:center.x+worldShift.x-nextWidth/2,y:center.y+worldShift.y-nextHeight/2};
+        }
+        const position=itemPosition(metrics,result.x,result.y,result.width,result.height);
+        element.style.left=`${position.left}px`;element.style.top=`${position.top}px`;element.style.width=`${result.width*metrics.cell}px`;element.style.height=`${result.height*metrics.cell}px`;
+      };
+      const up=async pointer=>{if(handle.hasPointerCapture(pointer.pointerId))handle.releasePointerCapture(pointer.pointerId);handle.removeEventListener("pointermove",move);handle.removeEventListener("pointerup",up);handle.removeEventListener("pointercancel",up);await emit(ctx,"scene:item-transform-update",{kind,id,x:snapValue(result.x),y:snapValue(result.y),width:result.width,height:result.height,size:result.size,snap:movementSnaps()});};
+      handle.addEventListener("pointermove",move);handle.addEventListener("pointerup",up,{once:true});handle.addEventListener("pointercancel",up,{once:true});
+    },{signal}));
+    root.querySelectorAll("[data-vtt-rotate-handle]").forEach(handle=>handle.addEventListener("pointerdown",event=>{
+      if(event.button!==0)return;
+      event.stopPropagation();event.preventDefault();
+      const kind=handle.dataset.vttTransformKind,id=handle.dataset.vttTransformId,value=resolve(kind,id),element=elementFor(kind,id);if(!value||!element)return;
+      const width=kind==="token"?Number(value.size||1):Number(value.width||1),height=kind==="token"?Number(value.size||1):Number(value.height||1),center={x:Number(value.x||0)+width/2,y:Number(value.y||0)+height/2};
+      const start=screenToGridRaw(event.clientX,event.clientY),startAngle=Math.atan2(start.y-center.y,start.x-center.x),base=Number(value.rotation)||0;let rotation=base;
+      handle.setPointerCapture(event.pointerId);
+      const move=pointer=>{const current=screenToGridRaw(pointer.clientX,pointer.clientY),angle=Math.atan2(current.y-center.y,current.x-center.x);rotation=base+(angle-startAngle)*180/Math.PI;if(pointer.shiftKey)rotation=Math.round(rotation/15)*15;element.style.setProperty("--rotation",`${rotation}deg`);};
+      const up=async pointer=>{if(handle.hasPointerCapture(pointer.pointerId))handle.releasePointerCapture(pointer.pointerId);handle.removeEventListener("pointermove",move);handle.removeEventListener("pointerup",up);handle.removeEventListener("pointercancel",up);await emit(ctx,"scene:item-transform-update",{kind,id,rotation,snap:movementSnaps()});};
+      handle.addEventListener("pointermove",move);handle.addEventListener("pointerup",up,{once:true});handle.addEventListener("pointercancel",up,{once:true});
+    },{signal}));
+  }
+
   function bindSceneItems(root, ctx, viewport, metrics, screenToGridRaw, signal) {
     const room = ctx.room;
     const scene = room.scene;
     const isDm = room.dmId === ctx.clientId;
+    const movementMetrics = gridMetrics({ ...(scene.grid || {}), snap:true }, metrics.cell);
+
+    bindTransformHandles(root,ctx,metrics,screenToGridRaw,signal);
 
     const itemData = (kind, id) => resolveRef(scene, { kind, id });
     const itemElement = ref => root.querySelector(ref.kind === "token" ? `[data-vtt-token="${CSS.escape(ref.id)}"]` : ref.kind === "object" ? `[data-vtt-object="${CSS.escape(ref.id)}"]` : `[data-vtt-annotation="${CSS.escape(ref.id)}"]`);
@@ -1006,9 +1271,23 @@
     };
 
     const bindItem = (element, kind, id) => {
+      element.addEventListener("contextmenu", event => {
+        event.preventDefault();
+        event.stopPropagation();
+        const ref = { kind, id };
+        const current = getSelection(room);
+        const refs = selectionHas(current,kind,id) && current.length > 1 ? current : [ref];
+        setSelection(room,refs);
+        if (!transformRefMatches(kind,id)) clearTransformMode();
+        ui.contextMenu = { ref, refs, x:event.clientX, y:event.clientY };
+        render(root,ctx);
+      }, { signal });
       element.addEventListener("pointerdown", event => {
+        if (event.target.closest("[data-vtt-resize-handle],[data-vtt-rotate-handle]")) return;
         if (event.button !== 0 || spaceHeld || ui.tool !== "select") return;
         event.stopPropagation();
+        closeContextMenu();
+        if (ui.transformRef && !transformRefMatches(kind,id)) clearTransformMode();
         const current = getSelection(room);
         const already = selectionHas(current, kind, id);
         if (event.shiftKey || event.ctrlKey || event.metaKey) {
@@ -1039,7 +1318,7 @@
           const currentPointer = screenToGridRaw(pointer.clientX, pointer.clientY);
           const rawDx = currentPointer.x - startPointer.x;
           const rawDy = currentPointer.y - startPointer.y;
-          const snappedDelta = scene.grid.snap === false ? { x:roundTenth(rawDx), y:roundTenth(rawDy) } : metrics.snap({ x:rawDx, y:rawDy }, "intersection");
+          const snappedDelta = movementSnaps() ? movementMetrics.snap({ x:rawDx, y:rawDy }, "intersection") : { x:roundTenth(rawDx), y:roundTenth(rawDy) };
           dx = snappedDelta.x;
           dy = snappedDelta.y;
           moved = moved || Math.abs(dx) > 0 || Math.abs(dy) > 0;
@@ -1066,7 +1345,7 @@
           element.removeEventListener("pointermove", move);
           element.removeEventListener("pointerup", up);
           element.removeEventListener("pointercancel", up);
-          if (moved) await emit(ctx, "scene:items-transform", { moves:originals.map(item => ({ kind:item.ref.kind, id:item.ref.id, dx, dy })) });
+          if (moved) await emit(ctx, "scene:items-transform", { moves:originals.map(item => ({ kind:item.ref.kind, id:item.ref.id, dx, dy })), snap:movementSnaps() });
           else render(root, ctx);
         };
 
@@ -1099,7 +1378,7 @@
     root.querySelector("#vtt-add-party")?.addEventListener("click", () => emit(ctx, "scene:party-add", {}, "Токены партии добавлены"), { signal });
     root.querySelector("#vtt-own-initiative")?.addEventListener("click", () => {
       const token = (scene.tokens || []).find(entry => entry.playerId === ctx.clientId);
-      if (token) emit(ctx, "initiative:roll", { tokenId:token.id });
+      if (token) emit(ctx, "initiative:roll", { tokenId:token.id }).then(response=>{if(response.ok&&response.roll)window.TT_DICE_PHYSICS?.play?.(response.roll);});
     }, { signal });
 
     root.querySelectorAll("[data-vtt-asset-filter]").forEach(button => button.addEventListener("click", () => { assetFilter = button.dataset.vttAssetFilter; render(root, ctx); }, { signal }));
@@ -1178,7 +1457,7 @@
     }, { signal });
 
     root.querySelectorAll("[data-vtt-edit-token]").forEach(button => button.addEventListener("click", () => openTokenEditor(ctx, (scene.tokens || []).find(token => token.id === button.dataset.vttEditToken)), { signal }));
-    root.querySelectorAll("[data-vtt-roll]").forEach(button => button.addEventListener("click", () => emit(ctx, "initiative:roll", { tokenId:button.dataset.vttRoll }), { signal }));
+    root.querySelectorAll("[data-vtt-roll]").forEach(button => button.addEventListener("click", () => emit(ctx, "initiative:roll", { tokenId:button.dataset.vttRoll }).then(response=>{if(response.ok&&response.roll)window.TT_DICE_PHYSICS?.play?.(response.roll);}), { signal }));
     root.querySelectorAll("[data-vtt-edit-object]").forEach(button => button.addEventListener("click", () => openObjectEditor(ctx, (scene.objects || []).find(object => object.id === button.dataset.vttEditObject)), { signal }));
     root.querySelectorAll("[data-vtt-edit-annotation]").forEach(button => button.addEventListener("click", () => openAnnotationEditor(ctx, (scene.annotations || []).find(annotation => annotation.id === button.dataset.vttEditAnnotation)), { signal }));
     root.querySelectorAll("[data-vtt-duplicate-selected],[data-vtt-group-duplicate]").forEach(button => button.addEventListener("click", () => duplicateRefs(root, ctx, getSelection(room)), { signal }));
@@ -1242,6 +1521,17 @@
     return `<article class="vtt-npc-editor-row" data-npc-row data-kind="${kind}" data-id="${id}"><input data-npc-name value="${esc(entry.name||({save:"Новый спасбросок",check:"Новая проверка",formula:"Новая формула"})[kind]||"Формула")}" placeholder="Название"><input data-npc-formula value="${esc(entry.formula||"1d20+0")}" placeholder="Формула"><label title="Показывать игрокам"><input data-npc-public type="checkbox" ${visible}>🌐</label><button type="button" data-npc-remove>×</button></article>`;
   }
 
+  function openAttachmentPicker(ctx,ref) {
+    const scene=ctx.room.scene, child=resolveRef(scene,ref)?.value;
+    if (!child) return;
+    const options=[...(scene.tokens||[]).map(item=>({kind:"token",id:item.id,name:item.name,type:item.playerId?"Персонаж":"NPC"})),...(scene.objects||[]).map(item=>({kind:"object",id:item.id,name:item.name,type:item.type==="map"?"Карта":"Объект"}))].filter(item=>!(item.kind===ref.kind&&item.id===ref.id));
+    ctx.openModal("Прикрепить элемент",`<p class="read-only">«${esc(child.name||"Элемент") }» будет двигаться и поворачиваться вместе с выбранным родителем.</p><input id="vtt-attach-search" placeholder="Поиск токена или объекта"><div class="vtt-attach-list">${options.map(item=>`<button type="button" data-vtt-attach-parent="${esc(item.kind)}:${esc(item.id)}" data-search="${esc(`${item.name} ${item.type}`.toLowerCase())}"><span>${item.kind==="token"?"●":"◆"}</span><div><strong>${esc(item.name)}</strong><small>${esc(item.type)}</small></div></button>`).join("")||`<div class="read-only">На сцене нет подходящих родителей.</div>`}</div><button id="vtt-attach-cancel" class="secondary">Отмена</button>`);
+    const filter=()=>{const query=String(document.querySelector("#vtt-attach-search")?.value||"").toLowerCase();document.querySelectorAll("[data-vtt-attach-parent]").forEach(button=>button.hidden=Boolean(query&&!button.dataset.search.includes(query)));};
+    document.querySelector("#vtt-attach-search")?.addEventListener("input",filter);
+    document.querySelectorAll("[data-vtt-attach-parent]").forEach(button=>button.addEventListener("click",async()=>{const split=button.dataset.vttAttachParent.indexOf(":"),parentKind=button.dataset.vttAttachParent.slice(0,split),parentId=button.dataset.vttAttachParent.slice(split+1);const response=await emit(ctx,"scene:item-attach",{childKind:ref.kind,childId:ref.id,parentKind,parentId},"Элемент прикреплён");if(response.ok)ctx.closeModal();}));
+    document.querySelector("#vtt-attach-cancel")?.addEventListener("click",ctx.closeModal);
+  }
+
   function openNpcSheetEditor(ctx,token) {
     if(!token||token.playerId||ctx.room.dmId!==ctx.clientId)return;
     const sheet=token.npcSheet||{stats:{},saves:[],checks:[],attacks:[],formulas:[]};
@@ -1263,13 +1553,13 @@
     const hpMax = Math.max(1, Number(token.hpMax) || 1);
     const hp = Math.max(0, Math.min(hpMax, Number(token.hp) || 0));
     const tempHp = Math.max(0, Number(token.tempHp) || 0);
-    ctx.openModal("Настройки токена", `<div class="vtt-modal-form">${npc ? `<label>Имя<input id="vtt-token-name" value="${esc(token.name)}"></label><div class="two-col"><label>Цвет рамки<input id="vtt-token-color" type="color" value="${esc(token.color || "#9f7842")}"></label><label>Размер<input id="vtt-token-size" type="number" min="0.25" max="12" step="0.25" value="${Number(token.size || 1)}"></label></div><div class="two-col"><label>Поворот<input id="vtt-token-rotation" type="number" value="${Number(token.rotation || 0)}"></label><label>Прозрачность<input id="vtt-token-opacity" type="number" min="0.05" max="1" step="0.05" value="${Number(token.opacity || 1)}"></label></div><div class="two-col"><label>Зрение<input id="vtt-token-vision" type="number" value="${Number(token.vision || 0)}"></label><label>Бонус инициативы<input id="vtt-token-init" type="number" value="${Number(token.initiativeBonus || 0)}"></label></div>` : `<div class="read-only">Имя и изображение связаны с листом персонажа. HP здесь меняются вручную и сразу сохраняются в лист.</div>`}<div class="three-col"><label>HP<input id="vtt-token-hp" type="number" min="0" value="${hp}"></label><label>Макс. HP<input id="vtt-token-hp-max" type="number" min="1" value="${hpMax}"></label><label>Врем. HP<input id="vtt-token-temp" type="number" min="0" value="${tempHp}"></label></div><div class="two-col"><label>Метка над токеном<input id="vtt-token-badge" maxlength="32" value="${esc(token.badge || "")}" placeholder="Напр. Скрыт, Горит, +2 КД"></label><label>Цвет метки<input id="vtt-token-badge-color" type="color" value="${esc(token.badgeColor || "#f4c875")}"></label></div>${isDm ? `<div class="item-toggle-grid"><label class="toggle-row"><span><strong>Скрытый</strong><small>Не передаётся игрокам</small></span><input id="vtt-token-hidden" type="checkbox" ${token.hidden ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Заблокирован</strong><small>Не двигается случайно</small></span><input id="vtt-token-locked" type="checkbox" ${token.locked ? "checked" : ""}><i></i></label></div>` : ""}<div class="modal-actions"><button id="vtt-token-save" class="primary">Сохранить</button>${npc&&isDm?`<button id="vtt-token-npc-sheet">Лист NPC</button>`:""}<button id="vtt-modal-cancel">Отмена</button></div></div>`);
+    ctx.openModal("Настройки токена", `<div class="vtt-modal-form">${npc ? `<label>Имя<input id="vtt-token-name" value="${esc(token.name)}"></label><div class="two-col"><label>Цвет рамки<input id="vtt-token-color" type="color" value="${esc(token.color || "#9f7842")}"></label><label>Размер<input id="vtt-token-size" type="number" min="0.25" max="12" step="0.25" value="${Number(token.size || 1)}"></label></div><div class="two-col"><label>Поворот<input id="vtt-token-rotation" type="number" value="${Number(token.rotation || 0)}"></label><label>Прозрачность<input id="vtt-token-opacity" type="number" min="0.05" max="1" step="0.05" value="${Number(token.opacity || 1)}"></label></div><div class="two-col"><label>Зрение<input id="vtt-token-vision" type="number" value="${Number(token.vision || 0)}"></label><label>Бонус инициативы<input id="vtt-token-init" type="number" value="${Number(token.initiativeBonus || 0)}"></label></div>` : `<div class="read-only">Имя и изображение связаны с листом персонажа. HP здесь меняются вручную и сразу сохраняются в лист.</div>`}<div class="three-col"><label>HP<input id="vtt-token-hp" type="number" min="0" value="${hp}"></label><label>Макс. HP<input id="vtt-token-hp-max" type="number" min="1" value="${hpMax}"></label><label>Врем. HP<input id="vtt-token-temp" type="number" min="0" value="${tempHp}"></label></div><div class="two-col"><label>Метка над токеном<input id="vtt-token-badge" maxlength="32" value="${esc(token.badge || "")}" placeholder="Напр. Скрыт, Горит, +2 КД"></label><label>Цвет метки<input id="vtt-token-badge-color" type="color" value="${esc(token.badgeColor || "#f4c875")}"></label></div><div class="item-toggle-grid token-display-toggles"><label class="toggle-row"><span><strong>Имя</strong><small>Компактная подпись над токеном</small></span><input id="vtt-token-show-name" type="checkbox" ${token.showName !== false ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>HP</strong><small>Полоска здоровья под токеном</small></span><input id="vtt-token-show-hp" type="checkbox" ${token.showHp !== false ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>КД</strong><small>Небольшой значок класса доспеха</small></span><input id="vtt-token-show-ac" type="checkbox" ${token.showAc ? "checked" : ""}><i></i></label></div>${isDm ? `<div class="item-toggle-grid"><label class="toggle-row"><span><strong>Скрытый</strong><small>Не передаётся игрокам</small></span><input id="vtt-token-hidden" type="checkbox" ${token.hidden ? "checked" : ""}><i></i></label><label class="toggle-row"><span><strong>Заблокирован</strong><small>Не двигается случайно</small></span><input id="vtt-token-locked" type="checkbox" ${token.locked ? "checked" : ""}><i></i></label></div>` : ""}<div class="modal-actions"><button id="vtt-token-save" class="primary">Сохранить</button>${npc&&isDm?`<button id="vtt-token-npc-sheet">Лист NPC</button>`:""}<button id="vtt-modal-cancel">Отмена</button></div></div>`);
     document.querySelector("#vtt-token-save")?.addEventListener("click", async () => {
       const nextHpMax = Number(document.querySelector("#vtt-token-hp-max")?.value);
       const nextHp = Number(document.querySelector("#vtt-token-hp")?.value);
       const nextTemp = Number(document.querySelector("#vtt-token-temp")?.value);
       await emit(ctx, "scene:token-hp", { tokenId:token.id, hp:nextHp, hpMax:nextHpMax, tempHp:nextTemp });
-      await emit(ctx, "scene:token-update", { tokenId:token.id, name:document.querySelector("#vtt-token-name")?.value, color:document.querySelector("#vtt-token-color")?.value, size:Number(document.querySelector("#vtt-token-size")?.value), rotation:Number(document.querySelector("#vtt-token-rotation")?.value), opacity:Number(document.querySelector("#vtt-token-opacity")?.value), vision:Number(document.querySelector("#vtt-token-vision")?.value), initiativeBonus:Number(document.querySelector("#vtt-token-init")?.value), badge:document.querySelector("#vtt-token-badge")?.value, badgeColor:document.querySelector("#vtt-token-badge-color")?.value, hidden:document.querySelector("#vtt-token-hidden")?.checked, locked:document.querySelector("#vtt-token-locked")?.checked }, "Токен обновлён");
+      await emit(ctx, "scene:token-update", { tokenId:token.id, name:document.querySelector("#vtt-token-name")?.value, color:document.querySelector("#vtt-token-color")?.value, size:Number(document.querySelector("#vtt-token-size")?.value), rotation:Number(document.querySelector("#vtt-token-rotation")?.value), opacity:Number(document.querySelector("#vtt-token-opacity")?.value), vision:Number(document.querySelector("#vtt-token-vision")?.value), initiativeBonus:Number(document.querySelector("#vtt-token-init")?.value), badge:document.querySelector("#vtt-token-badge")?.value, badgeColor:document.querySelector("#vtt-token-badge-color")?.value, showName:document.querySelector("#vtt-token-show-name")?.checked, showHp:document.querySelector("#vtt-token-show-hp")?.checked, showAc:document.querySelector("#vtt-token-show-ac")?.checked, hidden:document.querySelector("#vtt-token-hidden")?.checked, locked:document.querySelector("#vtt-token-locked")?.checked }, "Токен обновлён");
       ctx.closeModal();
     });
     document.querySelector("#vtt-token-npc-sheet")?.addEventListener("click",()=>{ctx.closeModal();openNpcSheetEditor(ctx,token);});

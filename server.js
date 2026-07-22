@@ -188,7 +188,8 @@ function normalizeSceneDiceRoll(source, coordinate = value => Math.max(-500, Mat
   }).filter(Boolean);
   if (!sets.length) return null;
   const modifier = Math.max(-999, Math.min(999, Number(source.modifier) || 0));
-  const total = sets.flatMap(set => set.values).reduce((sum, value) => sum + value, modifier);
+  const calculatedTotal = sets.flatMap(set => set.values).reduce((sum, value) => sum + value, modifier);
+  const total = Number.isFinite(Number(source.total)) ? Number(source.total) : calculatedTotal;
   const visibility = ["private","gm"].includes(source.visibility) ? source.visibility : "public";
   return {
     id:cleanText(source.id,80) || id(),
@@ -201,6 +202,9 @@ function normalizeSceneDiceRoll(source, coordinate = value => Math.max(-500, Mat
     at,
     by:cleanText(source.by,60),
     label:cleanText(source.label,100),
+    mode:["advantage","disadvantage"].includes(source.mode) ? source.mode : "normal",
+    natural:source.natural === null || source.natural === undefined ? null : Number(source.natural),
+    detail:Array.isArray(source.detail) ? source.detail.slice(0,50) : [],
     visibility,
     playerId: cleanText(source.playerId,80),
     privateToDm: Boolean(source.privateToDm)
@@ -311,6 +315,7 @@ function normalizeEncounterTemplates(source) {
       vision:Math.max(0,Math.min(10000,Number(token?.vision)||0)),
       initiativeBonus:Math.max(-100,Math.min(100,Number(token?.initiativeBonus)||0)),
       badge:cleanText(token?.badge,32), badgeColor:/^#[0-9a-f]{6}$/i.test(token?.badgeColor) ? token.badgeColor : "#f4c875",
+      showName:token?.showName !== false, showHp:token?.showHp !== false, showAc:Boolean(token?.showAc),
       hpMax:Math.max(1,Math.min(1000000,Number(token?.hpMax)||1)), hp:Math.max(0,Math.min(1000000,Number(token?.hp)||0)),
       tempHp:Math.max(0,Math.min(1000000,Number(token?.tempHp)||0)), ac:Math.max(0,Math.min(1000,Number(token?.ac)||10)),
       conditions:Array.isArray(token?.conditions) ? token.conditions.filter(value => COMBAT_CONDITIONS.includes(value)).slice(0,30) : [],
@@ -319,9 +324,17 @@ function normalizeEncounterTemplates(source) {
   })).filter(template => template.tokens.length);
 }
 
+function normalizeAttachment(source) {
+  if (!source || typeof source !== "object") return null;
+  const parentKind = ["token","object"].includes(source.parentKind) ? source.parentKind : "";
+  const parentId = cleanText(source.parentId,80);
+  if (!parentKind || !parentId) return null;
+  return { parentKind, parentId };
+}
+
 function defaultScene(name = "Главная сцена") {
   return {
-    schemaVersion: 8,
+    schemaVersion: 10,
     id: id(),
     name: cleanText(name, 60) || "Главная сцена",
     folder: "",
@@ -392,9 +405,9 @@ function normalizeScene(source, players = {}) {
       assetId: cleanText(raw?.assetId, 80),
       playerId: player ? playerId : "",
       name: cleanText(player ? (sheet.characterName || player.name) : raw?.name, 60) || fallbackName,
-      x: normalizeCoordinate(raw?.x),
-      y: normalizeCoordinate(raw?.y),
-      size: Math.max(0.25, Math.min(12, Number(player ? sheet.tokenScale : raw?.size) || 1)),
+      x: normalizeFreeCoordinate(raw?.x),
+      y: normalizeFreeCoordinate(raw?.y),
+      size: Math.max(0.25, Math.min(12, Number(raw?.size ?? (player ? sheet.tokenScale : 1)) || 1)),
       rotation: Math.max(-3600, Math.min(3600, Number(raw?.rotation) || 0)),
       opacity: Math.max(0.05, Math.min(1, Number(raw?.opacity) || 1)),
       color: /^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : raw?.color) ? (player ? sheet.tokenColor : raw.color) : "#9f7842",
@@ -408,6 +421,9 @@ function normalizeScene(source, players = {}) {
       initiative,
       badge: cleanText(raw?.badge, 32),
       badgeColor: /^#[0-9a-f]{6}$/i.test(raw?.badgeColor) ? raw.badgeColor : "#f4c875",
+      showName: raw?.showName !== false,
+      showHp: raw?.showHp !== false,
+      showAc: Boolean(raw?.showAc),
       hpMax: Math.max(1, Math.min(1000000, Number(player ? sheet.hpMax : raw?.hpMax) || 1)),
       hp: Math.max(0, Math.min(1000000, Number(player ? sheet.hpCurrent : raw?.hp) || 0)),
       tempHp: Math.max(0, Math.min(1000000, Number(player ? sheet.hpTemp : raw?.tempHp) || 0)),
@@ -417,7 +433,8 @@ function normalizeScene(source, players = {}) {
       deathSuccess: Math.max(0, Math.min(3, Number(player ? sheet.deathSuccess : raw?.deathSuccess) || 0)),
       deathFail: Math.max(0, Math.min(3, Number(player ? sheet.deathFail : raw?.deathFail) || 0)),
       stable: Boolean(raw?.stable),
-      npcSheet: player ? null : normalizeNpcSheet(raw?.npcSheet)
+      npcSheet: player ? null : normalizeNpcSheet(raw?.npcSheet),
+      attachment: normalizeAttachment(raw?.attachment)
     };
   }).filter(Boolean);
   const objectIds = new Set();
@@ -432,15 +449,16 @@ function normalizeScene(source, players = {}) {
       type,
       name: cleanText(raw?.name, 80) || `${type === "map" ? "Карта" : "Объект"} ${index + 1}`,
       imageUrl: cleanText(raw?.imageUrl, 1000),
-      x: normalizeCoordinate(raw?.x),
-      y: normalizeCoordinate(raw?.y),
+      x: normalizeFreeCoordinate(raw?.x),
+      y: normalizeFreeCoordinate(raw?.y),
       width: Math.max(0.25, Math.min(200, Number(raw?.width) || (type === "map" ? 20 : 1))),
       height: Math.max(0.25, Math.min(200, Number(raw?.height) || (type === "map" ? 12 : 1))),
       rotation: Math.max(-3600, Math.min(3600, Number(raw?.rotation) || 0)),
       opacity: Math.max(0.03, Math.min(1, Number(raw?.opacity) || 1)),
       hidden: Boolean(raw?.hidden),
       locked: raw?.locked === undefined ? type === "map" : Boolean(raw.locked),
-      z: Math.max(-1000, Math.min(1000, Number(raw?.z) || (type === "map" ? -100 : 0)))
+      z: Math.max(-1000, Math.min(1000, Number(raw?.z) || (type === "map" ? -100 : 0))),
+      attachment: normalizeAttachment(raw?.attachment)
     };
   }).filter(Boolean);
   const annotationIds = new Set();
@@ -469,13 +487,14 @@ function normalizeScene(source, players = {}) {
       strokeWidth: Math.max(1, Math.min(20, Number(raw?.strokeWidth) || 3)),
       hidden: Boolean(raw?.hidden),
       locked: Boolean(raw?.locked),
-      z: Math.max(-1000, Math.min(1000, Number(raw?.z) || 50))
+      z: Math.max(-1000, Math.min(1000, Number(raw?.z) || 50)),
+      attachment: normalizeAttachment(raw?.attachment)
     };
   }).filter(Boolean);
   const pingSource = incoming.ping && typeof incoming.ping === "object" ? incoming.ping : null;
   const ping = pingSource && Date.now() - Number(pingSource.at || 0) < 10000 ? {
     id: cleanText(pingSource.id, 80) || `${Number(pingSource.at) || Date.now()}-${cleanText(pingSource.by, 20)}`,
-    x: normalizeCoordinate(pingSource.x), y: normalizeCoordinate(pingSource.y),
+    x: normalizeFreeCoordinate(pingSource.x), y: normalizeFreeCoordinate(pingSource.y),
     color: /^#[0-9a-f]{6}$/i.test(pingSource.color) ? pingSource.color : "#f4c875",
     at: Number(pingSource.at) || Date.now(), by: cleanText(pingSource.by, 60)
   } : null;
@@ -486,7 +505,7 @@ function normalizeScene(source, players = {}) {
   const tokenIds = new Set(tokens.map(token => token.id));
   const initiativeSource = incoming.initiative && typeof incoming.initiative === "object" ? incoming.initiative : {};
   return {
-    schemaVersion: 8,
+    schemaVersion: 10,
     id: cleanText(incoming.id, 80) || base.id,
     name: cleanText(incoming.name, 60) || base.name,
     folder: cleanText(incoming.folder,60),
@@ -655,10 +674,10 @@ function sceneCoordinate(scene, value) {
   return Math.max(-500, Math.min(500, positioned));
 }
 
-function translateAnnotation(annotation, dx, dy, scene) {
+function translateAnnotation(annotation, dx, dy, scene, snap = scene?.grid?.snap !== false) {
   const moveX = Number(dx) || 0;
   const moveY = Number(dy) || 0;
-  const coordinate = annotation.kind === "draw" ? sceneFreeCoordinate : value => sceneCoordinate(scene, value);
+  const coordinate = annotation.kind === "draw" || !snap ? sceneFreeCoordinate : value => sceneCoordinate(scene, value);
   annotation.x = coordinate(annotation.x + moveX);
   annotation.y = coordinate(annotation.y + moveY);
   annotation.x2 = coordinate(annotation.x2 + moveX);
@@ -667,6 +686,98 @@ function translateAnnotation(annotation, dx, dy, scene) {
     x: coordinate(point.x + moveX),
     y: coordinate(point.y + moveY)
   }));
+}
+
+function sceneItemByRef(scene, kind, itemId) {
+  const safeId = cleanText(itemId,80);
+  if (kind === "token") return scene.tokens.find(item => item.id === safeId) || null;
+  if (kind === "object") return scene.objects.find(item => item.id === safeId) || null;
+  if (kind === "annotation") return scene.annotations.find(item => item.id === safeId) || null;
+  return null;
+}
+
+function sceneItemKey(kind, itemId) { return `${kind}:${cleanText(itemId,80)}`; }
+
+function translateSceneItem(scene, kind, item, dx, dy, snap = false) {
+  if (!item) return;
+  if (kind === "annotation") return translateAnnotation(item,dx,dy,scene,snap);
+  const coordinate = snap ? value => sceneCoordinate(scene,value) : sceneFreeCoordinate;
+  item.x = coordinate(Number(item.x || 0) + Number(dx || 0));
+  item.y = coordinate(Number(item.y || 0) + Number(dy || 0));
+}
+
+function attachedChildren(scene, parentKind, parentId) {
+  const matches = item => item?.attachment?.parentKind === parentKind && item?.attachment?.parentId === parentId;
+  return [
+    ...scene.tokens.filter(matches).map(item => ({ kind:"token", item })),
+    ...scene.objects.filter(matches).map(item => ({ kind:"object", item })),
+    ...scene.annotations.filter(matches).map(item => ({ kind:"annotation", item }))
+  ];
+}
+
+function propagateAttachedTranslation(scene, parentKind, parentId, dx, dy, skip = new Set(), visited = new Set()) {
+  const parentKey = sceneItemKey(parentKind,parentId);
+  if (visited.has(parentKey)) return;
+  visited.add(parentKey);
+  for (const child of attachedChildren(scene,parentKind,parentId)) {
+    const key = sceneItemKey(child.kind,child.item.id);
+    if (skip.has(key)) continue;
+    translateSceneItem(scene,child.kind,child.item,dx,dy,false);
+    propagateAttachedTranslation(scene,child.kind,child.item.id,dx,dy,skip,visited);
+  }
+}
+
+function sceneItemBox(kind, item) {
+  if (kind === "token") return { x:Number(item.x||0), y:Number(item.y||0), width:Number(item.size||1), height:Number(item.size||1) };
+  if (kind === "object") return { x:Number(item.x||0), y:Number(item.y||0), width:Number(item.width||1), height:Number(item.height||1) };
+  const xs=[Number(item.x||0),Number(item.x2||item.x||0),...(item.points||[]).map(point=>Number(point.x||0))];
+  const ys=[Number(item.y||0),Number(item.y2||item.y||0),...(item.points||[]).map(point=>Number(point.y||0))];
+  const left=Math.min(...xs), top=Math.min(...ys), right=Math.max(...xs), bottom=Math.max(...ys);
+  return { x:left,y:top,width:Math.max(.1,right-left),height:Math.max(.1,bottom-top) };
+}
+
+function rotatePointAround(point, center, radians) {
+  const dx=point.x-center.x, dy=point.y-center.y, cos=Math.cos(radians), sin=Math.sin(radians);
+  return { x:center.x+dx*cos-dy*sin, y:center.y+dx*sin+dy*cos };
+}
+
+function propagateAttachedRotation(scene,parentKind,parentId,deltaDegrees,skip=new Set(),visited=new Set()) {
+  const parent=sceneItemByRef(scene,parentKind,parentId);
+  if (!parent || !deltaDegrees) return;
+  const parentKey=sceneItemKey(parentKind,parentId);
+  if (visited.has(parentKey)) return;
+  visited.add(parentKey);
+  const box=sceneItemBox(parentKind,parent), center={x:box.x+box.width/2,y:box.y+box.height/2}, radians=Number(deltaDegrees)*Math.PI/180;
+  for (const child of attachedChildren(scene,parentKind,parentId)) {
+    const key=sceneItemKey(child.kind,child.item.id);
+    if (!skip.has(key)) {
+      const childBox=sceneItemBox(child.kind,child.item), childCenter={x:childBox.x+childBox.width/2,y:childBox.y+childBox.height/2};
+      const rotated=rotatePointAround(childCenter,center,radians);
+      translateSceneItem(scene,child.kind,child.item,rotated.x-childCenter.x,rotated.y-childCenter.y,false);
+      if (child.kind !== "annotation") child.item.rotation = Number(child.item.rotation||0)+Number(deltaDegrees);
+    }
+    propagateAttachedRotation(scene,child.kind,child.item.id,deltaDegrees,skip,visited);
+  }
+}
+
+function clearAttachmentsTo(scene,parentKind,parentId) {
+  const clear = item => { if (item?.attachment?.parentKind === parentKind && item?.attachment?.parentId === parentId) item.attachment = null; };
+  scene.tokens.forEach(clear); scene.objects.forEach(clear); scene.annotations.forEach(clear);
+}
+
+function attachmentWouldCycle(scene,childKind,childId,parentKind,parentId) {
+  let kind=parentKind, idValue=parentId;
+  const seen=new Set();
+  while (kind && idValue) {
+    const key=sceneItemKey(kind,idValue);
+    if (key === sceneItemKey(childKind,childId)) return true;
+    if (seen.has(key)) return true;
+    seen.add(key);
+    const item=sceneItemByRef(scene,kind,idValue);
+    kind=item?.attachment?.parentKind || "";
+    idValue=item?.attachment?.parentId || "";
+  }
+  return false;
 }
 
 function sceneSummaries(room, viewerId = "") {
@@ -1229,12 +1340,23 @@ function publicRoom(room, viewerId = "") {
   if (!isDm) {
     scene.tokens = scene.tokens.filter(token => !token.hidden).map(token => {
       if (token.playerId) return token;
-      const { ac: _secretAc, ...publicToken } = token;
+      const publicToken = token.showAc ? { ...token } : (({ ac: _secretAc, ...rest }) => rest)(token);
       publicToken.npcSheet = publicNpcSheet(token.npcSheet);
       return publicToken;
     });
     scene.objects = scene.objects.filter(object => !object.hidden);
     scene.annotations = scene.annotations.filter(annotation => !annotation.hidden);
+    const visibleParents = new Set([
+      ...scene.tokens.map(token => sceneItemKey("token",token.id)),
+      ...scene.objects.map(object => sceneItemKey("object",object.id))
+    ]);
+    const cleanAttachment = entry => {
+      const attachment = normalizeAttachment(entry?.attachment);
+      return attachment && visibleParents.has(sceneItemKey(attachment.parentKind,attachment.parentId)) ? entry : { ...entry, attachment:null };
+    };
+    scene.tokens = scene.tokens.map(cleanAttachment);
+    scene.objects = scene.objects.map(cleanAttachment);
+    scene.annotations = scene.annotations.map(cleanAttachment);
     const visibleTokenIds = new Set(scene.tokens.map(token => token.id));
     if (!visibleTokenIds.has(scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
     if (!visibleTokenIds.has(scene.initiative.turnState?.tokenId)) scene.initiative.turnState = null;
@@ -1655,6 +1777,7 @@ io.on("connection", (socket) => {
           x:x + index, y, size:Math.max(.25,Math.min(12,Number(payload.size)||asset.defaultSize||1)), rotation:0, opacity:1,
           color:/^#[0-9a-f]{6}$/i.test(payload.color) ? payload.color : "#9f7842", imageUrl:asset.url,
           vision:Math.max(0,Math.min(10000,Number(payload.vision)||60)), hidden:Boolean(payload.hidden), locked:false, z:100,
+          showName:true, showHp:true, showAc:false, attachment:null,
           initiativeBonus:Math.max(-100,Math.min(100,Number(payload.initiativeBonus)||0)), initiativeAdvantage:false, initiative:null
         });
       }
@@ -1666,14 +1789,14 @@ io.on("connection", (socket) => {
         id:objectId, assetId:asset.id, type:asset.category, name:cleanText(payload.name,80)||asset.name, imageUrl:asset.url,
         x, y, width, height:Math.max(.25,Math.min(200,Number(payload.height)||width*ratio)), rotation:0, opacity:1,
         hidden:Boolean(payload.hidden), locked:payload.locked === undefined ? asset.category === "map" : Boolean(payload.locked),
-        z:asset.category === "map" ? -100 : 0
+        z:asset.category === "map" ? -100 : 0, attachment:null
       });
     }
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true, createdIds });
   });
 
-  socket.on("scene:object-move", ({ objectId, x, y } = {}, reply = () => {}) => {
+  socket.on("scene:object-move", ({ objectId, x, y, snap } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий двигает объекты" });
@@ -1682,9 +1805,12 @@ io.on("connection", (socket) => {
     if (!object) return reply({ ok:false, error:"Объект не найден" });
     if (object.locked) return reply({ ok:false, error:"Сначала разблокируй объект" });
     rememberScene(room, scene);
-    const position = value => scene.grid.snap ? Math.round(Number(value)||0) : Math.round((Number(value)||0)*10)/10;
+    const useSnap = snap === undefined ? scene.grid.snap !== false : Boolean(snap);
+    const position = value => useSnap ? Math.round(Number(value)||0) : sceneFreeCoordinate(value);
+    const oldX=Number(object.x||0), oldY=Number(object.y||0);
     object.x = Math.max(-500,Math.min(500,position(x)));
     object.y = Math.max(-500,Math.min(500,position(y)));
+    propagateAttachedTranslation(scene,"object",object.id,object.x-oldX,object.y-oldY);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
@@ -1696,14 +1822,14 @@ io.on("connection", (socket) => {
     const object = scene.objects.find(entry => entry.id === cleanText(payload.objectId,80));
     if (!object) return reply({ ok:false, error:"Объект не найден" });
     rememberScene(room, scene);
-    object.name = cleanText(payload.name ?? object.name,80) || object.name;
-    object.width = Math.max(.25,Math.min(200,Number(payload.width)||object.width));
-    object.height = Math.max(.25,Math.min(200,Number(payload.height)||object.height));
-    object.rotation = Math.max(-3600,Math.min(3600,Number(payload.rotation)||0));
-    object.opacity = Math.max(.03,Math.min(1,Number(payload.opacity)||1));
-    object.hidden = Boolean(payload.hidden);
-    object.locked = Boolean(payload.locked);
-    object.z = Math.max(-1000,Math.min(1000,Number(payload.z)||0));
+    if (payload.name !== undefined) object.name = cleanText(payload.name,80) || object.name;
+    if (payload.width !== undefined) object.width = Math.max(.25,Math.min(200,Number(payload.width)||object.width));
+    if (payload.height !== undefined) object.height = Math.max(.25,Math.min(200,Number(payload.height)||object.height));
+    if (payload.rotation !== undefined) object.rotation = Math.max(-3600,Math.min(3600,Number(payload.rotation)||0));
+    if (payload.opacity !== undefined) object.opacity = Math.max(.03,Math.min(1,Number(payload.opacity)||1));
+    if (payload.hidden !== undefined) object.hidden = Boolean(payload.hidden);
+    if (payload.locked !== undefined) object.locked = Boolean(payload.locked);
+    if (payload.z !== undefined) object.z = Math.max(-1000,Math.min(1000,Number(payload.z)||0));
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
@@ -1715,7 +1841,7 @@ io.on("connection", (socket) => {
     const object = scene.objects.find(entry => entry.id === cleanText(objectId,80));
     if (!object) return reply({ ok:false, error:"Объект не найден" });
     rememberScene(room, scene);
-    const copy = { ...object, id:id(), name:`${object.name} — копия`, x:object.x+1, y:object.y+1, locked:false };
+    const copy = { ...object, id:id(), name:`${object.name} — копия`, x:object.x+1, y:object.y+1, locked:false, attachment:null };
     scene.objects.push(copy);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, objectId:copy.id });
   });
@@ -1728,6 +1854,7 @@ io.on("connection", (socket) => {
     const targetId = cleanText(objectId,80);
     rememberScene(room, scene);
     scene.objects = scene.objects.filter(object => object.id !== targetId);
+    clearAttachmentsTo(scene,"object",targetId);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
@@ -1742,7 +1869,7 @@ io.on("connection", (socket) => {
     const copies = Math.max(1,Math.min(50,Number(count)||1));
     const baseName = token.name.replace(/\s+\d+$/, "");
     const sameCount = scene.tokens.filter(entry => entry.assetId && entry.assetId === token.assetId || entry.name.replace(/\s+\d+$/, "") === baseName).length;
-    for (let index=0; index<copies; index+=1) scene.tokens.push({ ...token, id:id(), playerId:"", name:`${baseName} ${sameCount+index+1}`, x:token.x+index+1, initiative:null, locked:false });
+    for (let index=0; index<copies; index+=1) scene.tokens.push({ ...token, id:id(), playerId:"", name:`${baseName} ${sameCount+index+1}`, x:token.x+index+1, initiative:null, locked:false, attachment:null });
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
@@ -1787,12 +1914,13 @@ io.on("connection", (socket) => {
       imageUrl:cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : payload.imageUrl, 1000),
       vision:Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : payload.vision) || 0)),
       hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:100,
+      showName:payload.showName !== false, showHp:payload.showHp !== false, showAc:Boolean(payload.showAc),
       initiativeBonus:Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : payload.initiativeBonus) || 0)),
       initiativeAdvantage:Boolean(player ? sheet.initiativeAdvantage : payload.initiativeAdvantage),
       initiative:null,
       hpMax:Math.max(1,Math.min(1000000,Number(player ? sheet.hpMax : payload.hpMax)||1)), hp:Math.max(0,Math.min(1000000,Number(player ? sheet.hpCurrent : payload.hp)||0)),
       tempHp:Math.max(0,Math.min(1000000,Number(player ? sheet.hpTemp : payload.tempHp)||0)), ac:Math.max(0,Math.min(1000,Number(player ? sheet.ac : payload.ac)||10)),
-      conditions:[], concentration:"", deathSuccess:0, deathFail:0, stable:false, npcSheet:player ? null : defaultNpcSheet()
+      conditions:[], concentration:"", deathSuccess:0, deathFail:0, stable:false, npcSheet:player ? null : defaultNpcSheet(), attachment:null
     });
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true, scene:activeScene(room) });
@@ -1808,14 +1936,14 @@ io.on("connection", (socket) => {
     Object.entries(room.players).forEach(([playerId, player]) => {
       if (sceneTokenForPlayer(scene, playerId)) return;
       const position = nextScenePosition(scene), sheet = player.sheet || {};
-      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false, npcSheet:null });
+      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, showName:true, showHp:true, showAc:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false, npcSheet:null, attachment:null });
       added += 1;
     });
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true, added });
   });
 
-  socket.on("scene:token-move", ({ tokenId, x, y } = {}, reply = () => {}) => {
+  socket.on("scene:token-move", ({ tokenId, x, y, snap } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     if (!room) return reply({ ok:false });
@@ -1825,9 +1953,12 @@ io.on("connection", (socket) => {
     const allowed = room.dmId === clientId || token.playerId === clientId;
     if (!allowed || token.locked && room.dmId !== clientId) return reply({ ok:false, error:"Этот токен нельзя двигать" });
     rememberScene(room, scene);
-    const positionValue = value => scene.grid.snap ? Math.round(Number(value) || 0) : Math.round((Number(value) || 0) * 10) / 10;
+    const useSnap = snap === undefined ? scene.grid.snap !== false : Boolean(snap);
+    const positionValue = value => useSnap ? Math.round(Number(value) || 0) : sceneFreeCoordinate(value);
+    const oldX=Number(token.x||0), oldY=Number(token.y||0);
     token.x = Math.max(-500, Math.min(500, positionValue(x)));
     token.y = Math.max(-500, Math.min(500, positionValue(y)));
+    propagateAttachedTranslation(scene,"token",token.id,token.x-oldX,token.y-oldY);
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
@@ -1844,6 +1975,9 @@ io.on("connection", (socket) => {
     rememberScene(room, scene);
     if (payload.badge !== undefined) token.badge = cleanText(payload.badge, 32);
     if (/^#[0-9a-f]{6}$/i.test(payload.badgeColor)) token.badgeColor = payload.badgeColor;
+    if (payload.showName !== undefined) token.showName = Boolean(payload.showName);
+    if (payload.showHp !== undefined) token.showHp = Boolean(payload.showHp);
+    if (payload.showAc !== undefined) token.showAc = Boolean(payload.showAc);
     if (!token.playerId) {
       token.name = cleanText(payload.name ?? token.name,60) || token.name;
       token.imageUrl = cleanText(payload.imageUrl ?? token.imageUrl,1000);
@@ -1887,6 +2021,9 @@ io.on("connection", (socket) => {
       if (has("locked")) token.locked = Boolean(patch.locked);
       if (has("badge")) token.badge = cleanText(patch.badge,40);
       if (has("badgeColor") && /^#[0-9a-f]{6}$/i.test(String(patch.badgeColor || ""))) token.badgeColor = patch.badgeColor;
+      if (has("showName")) token.showName = Boolean(patch.showName);
+      if (has("showHp")) token.showHp = Boolean(patch.showHp);
+      if (has("showAc")) token.showAc = Boolean(patch.showAc);
       if (has("hpMax")) token.hpMax = Math.max(1,Math.min(1000000,Number(patch.hpMax)||1));
       if (has("hp")) token.hp = Math.max(0,Math.min(Number(token.hpMax)||1,Number(patch.hp)||0));
       if (has("tempHp")) token.tempHp = Math.max(0,Math.min(1000000,Number(patch.tempHp)||0));
@@ -2009,7 +2146,7 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("scene:dice-roll", ({ x, y, sides, dice, modifier, visibility, formula:customFormula, label, silent } = {}, reply = () => {}) => {
+  socket.on("scene:dice-roll", ({ x, y, sides, dice, modifier, visibility, formula:customFormula, label, silent, mode } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     const player = room?.players?.[clientId];
@@ -2022,8 +2159,9 @@ io.on("connection", (socket) => {
     let formula;
     let detail;
     let natural;
+    let parsedTotal = null;
     if (String(customFormula || "").trim()) {
-      const parsed = parseDiceFormula(customFormula, "normal");
+      const parsed = parseDiceFormula(customFormula, mode);
       if (!parsed.ok) return reply(parsed);
       if (parsed.detail.some(entry => Number(entry.sign) < 0 || !TABLE_DIE_SIDES.includes(Number(entry.sides)))) {
         return reply({ ok:false, error:"Физический дайстрей поддерживает к4, к6, к8, к10, к12, к20 и к100 без вычитания костей" });
@@ -2032,9 +2170,11 @@ io.on("connection", (socket) => {
       if (physicalCount > MAX_TABLE_DICE) return reply({ ok:false, error:`На физическом столе помещается не больше ${MAX_TABLE_DICE} костей` });
       sets = parsed.detail.map(entry => ({ sides:Number(entry.sides), values:[...(entry.rolls || [])].map(Number) }));
       flat = Math.max(-999, Math.min(999, Number(parsed.modifier) || 0));
-      formula = tableDiceFormula(sets.map(set => ({ sides:set.sides, count:set.values.length })), flat);
+      formula = parsed.formula;
       detail = parsed.detail;
       natural = parsed.natural;
+      parsedTotal = parsed.total;
+      mode = parsed.mode;
     } else {
       const selection = normalizeTableDiceSelection(Array.isArray(dice) && dice.length ? dice : [{ sides:Number(sides) || 20, count:1 }]);
       if (!selection.length) return reply({ ok:false, error:"Добавь хотя бы один кубик" });
@@ -2043,10 +2183,11 @@ io.on("connection", (socket) => {
       formula = tableDiceFormula(selection, flat);
       detail = sets.map(set => ({ count:set.values.length, sides:set.sides, sign:1, rolls:set.values, subtotal:set.values.reduce((sum,value)=>sum+value,0) }));
       natural = sets.length === 1 && sets[0].sides === 20 && sets[0].values.length === 1 ? sets[0].values[0] : null;
+      mode = "normal";
     }
 
     const allValues = sets.flatMap(set => set.values);
-    const total = allValues.reduce((sum, value) => sum + value, flat);
+    const total = parsedTotal === null ? allValues.reduce((sum, value) => sum + value, flat) : Number(parsedTotal);
     const physicalRoll = {
       id:id(),
       x:sceneCoordinate(scene,x), y:sceneCoordinate(scene,y),
@@ -2054,6 +2195,7 @@ io.on("connection", (socket) => {
       color:normalizeDiceColor(player.sheet?.diceColor),
       by:cleanText(player.name,60), at:Date.now(),
       label:cleanText(label,100),
+      mode, natural, detail,
       visibility:safeVisibility,
       playerId:clientId,
       privateToDm:false
@@ -2065,11 +2207,11 @@ io.on("connection", (socket) => {
       .concat(physicalRoll)
       .slice(-MAX_ACTIVE_TABLE_ROLLS);
     if (!silent) {
-      room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:cleanText(label,100) || `${safeVisibility === "private" ? "Закрытый" : "Бросок"} на столе · ${formula}`, formula, dice:allValues, detail, modifier:flat, total, natural, mode:"normal", visibility:safeVisibility, at:Date.now() });
+      room.rollLog.push({ id:id(), playerId:clientId, player:player.name, label:cleanText(label,100) || `${safeVisibility === "private" ? "Закрытый" : "Бросок"} на столе · ${formula}`, formula, dice:allValues, detail, modifier:flat, total, natural, mode, visibility:safeVisibility, at:Date.now() });
       room.rollLog = room.rollLog.slice(-100);
     }
     setActiveScene(room, scene); saveRooms(); emitRoom(code);
-    reply({ ok:true, sets, modifier:flat, total, formula, detail, rollId:physicalRoll.id, visibility:safeVisibility, by:player.name, natural, roll:physicalRoll });
+    reply({ ok:true, sets, modifier:flat, total, formula, detail, rollId:physicalRoll.id, visibility:safeVisibility, by:player.name, natural, mode, roll:physicalRoll });
   });
 
   socket.on("scene:token-remove", ({ tokenId } = {}, reply = () => {}) => {
@@ -2080,6 +2222,7 @@ io.on("connection", (socket) => {
     const idToRemove = cleanText(tokenId,80);
     rememberScene(room, scene);
     scene.tokens = scene.tokens.filter(token => token.id !== idToRemove);
+    clearAttachmentsTo(scene,"token",idToRemove);
     if (scene.initiative.currentTokenId === idToRemove) scene.initiative.currentTokenId = "";
     setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true });
@@ -2102,7 +2245,7 @@ io.on("connection", (socket) => {
       points:Array.isArray(payload.points) ? payload.points : [],
       text:cleanText(payload.text,500), color:payload.color, fill:payload.fill,
       fillOpacity:payload.fillOpacity, opacity:payload.opacity, strokeWidth:payload.strokeWidth,
-      hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:Number(payload.z) || 50
+      hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:Number(payload.z) || 50, attachment:null
     });
     const updated = setActiveScene(room, scene);
     saveRooms(); emitRoom(code); reply({ ok:true, annotationId, annotation:updated.annotations.find(entry => entry.id === annotationId) });
@@ -2143,10 +2286,69 @@ io.on("connection", (socket) => {
     if (!isDm && annotation.ownerId !== clientId) return reply({ ok:false, error:"Можно удалять только свои рисунки" });
     rememberScene(room, scene);
     scene.annotations = scene.annotations.filter(entry => entry.id !== targetId);
+    clearAttachmentsTo(scene,"annotation",targetId);
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true });
   });
 
-  socket.on("scene:items-transform", ({ moves } = {}, reply = () => {}) => {
+  socket.on("scene:item-attach", ({ childKind, childId, parentKind, parentId } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room=rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false,error:"Только ведущий меняет привязки" });
+    const scene=activeScene(room);
+    const safeChildKind=["token","object","annotation"].includes(childKind)?childKind:"";
+    const safeParentKind=["token","object"].includes(parentKind)?parentKind:"";
+    const child=sceneItemByRef(scene,safeChildKind,childId);
+    if (!child) return reply({ ok:false,error:"Дочерний элемент не найден" });
+    if (!safeParentKind || !cleanText(parentId,80)) {
+      rememberScene(room,scene);
+      child.attachment=null;
+      setActiveScene(room,scene); saveRooms(); emitRoom(code); return reply({ ok:true,attached:false });
+    }
+    const parent=sceneItemByRef(scene,safeParentKind,parentId);
+    if (!parent) return reply({ ok:false,error:"Родительский элемент не найден" });
+    if (sceneItemKey(safeChildKind,child.id)===sceneItemKey(safeParentKind,parent.id)) return reply({ ok:false,error:"Нельзя прикрепить объект к самому себе" });
+    if (attachmentWouldCycle(scene,safeChildKind,child.id,safeParentKind,parent.id)) return reply({ ok:false,error:"Такая привязка создаст цикл" });
+    rememberScene(room,scene);
+    child.attachment={ parentKind:safeParentKind,parentId:parent.id };
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true,attached:true });
+  });
+
+  socket.on("scene:item-transform-update", ({ kind, id:itemId, x, y, width, height, size, rotation, snap } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий меняет размер и поворот" });
+    const scene = activeScene(room);
+    const safeId = cleanText(itemId,80);
+    const useSnap = snap === undefined ? scene.grid.snap !== false : Boolean(snap);
+    const position = value => useSnap ? Math.round(Number(value)||0) : Math.round((Number(value)||0)*10)/10;
+    const dimension = value => useSnap ? Math.round((Number(value)||0)*4)/4 : Math.round((Number(value)||0)*10)/10;
+    rememberScene(room,scene);
+    if (kind === "object") {
+      const object = scene.objects.find(entry => entry.id === safeId);
+      if (!object) return reply({ ok:false, error:"Объект не найден" });
+      const oldX=Number(object.x||0),oldY=Number(object.y||0),oldRotation=Number(object.rotation||0);
+      if (x !== undefined) object.x=Math.max(-500,Math.min(500,position(x)));
+      if (y !== undefined) object.y=Math.max(-500,Math.min(500,position(y)));
+      if (width !== undefined) object.width=Math.max(.25,Math.min(200,dimension(width)||.25));
+      if (height !== undefined) object.height=Math.max(.25,Math.min(200,dimension(height)||.25));
+      if (rotation !== undefined) object.rotation=Math.max(-3600,Math.min(3600,Number(rotation)||0));
+      propagateAttachedTranslation(scene,"object",object.id,object.x-oldX,object.y-oldY);
+      propagateAttachedRotation(scene,"object",object.id,object.rotation-oldRotation);
+    } else if (kind === "token") {
+      const token = scene.tokens.find(entry => entry.id === safeId);
+      if (!token) return reply({ ok:false, error:"Токен не найден" });
+      const oldX=Number(token.x||0),oldY=Number(token.y||0),oldRotation=Number(token.rotation||0);
+      if (x !== undefined) token.x=Math.max(-500,Math.min(500,position(x)));
+      if (y !== undefined) token.y=Math.max(-500,Math.min(500,position(y)));
+      if (size !== undefined) token.size=Math.max(.25,Math.min(12,dimension(size)||.25));
+      if (rotation !== undefined) token.rotation=Math.max(-3600,Math.min(3600,Number(rotation)||0));
+      propagateAttachedTranslation(scene,"token",token.id,token.x-oldX,token.y-oldY);
+      propagateAttachedRotation(scene,"token",token.id,token.rotation-oldRotation);
+    } else return reply({ ok:false, error:"Этот элемент нельзя масштабировать" });
+    setActiveScene(room,scene); saveRooms(); emitRoom(code); reply({ ok:true });
+  });
+
+  socket.on("scene:items-transform", ({ moves, snap } = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
     if (!room) return reply({ ok:false });
@@ -2167,19 +2369,27 @@ io.on("connection", (socket) => {
     });
     if (!applicable.length) return reply({ ok:false, error:"Нет объектов, которые можно переместить" });
     rememberScene(room, scene);
+    const useSnap = snap === undefined ? scene.grid.snap !== false : Boolean(snap);
+    const coordinate = value => useSnap ? Math.max(-500,Math.min(500,Math.round(Number(value)||0))) : sceneFreeCoordinate(value);
+    const explicitKeys=new Set(applicable.map(move=>sceneItemKey(move.kind,move.id)));
     applicable.forEach(move => {
       const dx = Number(move.dx) || 0, dy = Number(move.dy) || 0;
       if (move.kind === "token") {
         const token = scene.tokens.find(entry => entry.id === cleanText(move.id,80));
-        token.x = sceneCoordinate(scene, move.x === undefined ? token.x + dx : move.x);
-        token.y = sceneCoordinate(scene, move.y === undefined ? token.y + dy : move.y);
+        const oldX=Number(token.x||0),oldY=Number(token.y||0);
+        token.x = coordinate(move.x === undefined ? token.x + dx : move.x);
+        token.y = coordinate(move.y === undefined ? token.y + dy : move.y);
+        propagateAttachedTranslation(scene,"token",token.id,token.x-oldX,token.y-oldY,explicitKeys);
       } else if (move.kind === "object") {
         const object = scene.objects.find(entry => entry.id === cleanText(move.id,80));
-        object.x = sceneCoordinate(scene, move.x === undefined ? object.x + dx : move.x);
-        object.y = sceneCoordinate(scene, move.y === undefined ? object.y + dy : move.y);
+        const oldX=Number(object.x||0),oldY=Number(object.y||0);
+        object.x = coordinate(move.x === undefined ? object.x + dx : move.x);
+        object.y = coordinate(move.y === undefined ? object.y + dy : move.y);
+        propagateAttachedTranslation(scene,"object",object.id,object.x-oldX,object.y-oldY,explicitKeys);
       } else {
         const annotation = scene.annotations.find(entry => entry.id === cleanText(move.id,80));
-        translateAnnotation(annotation, dx, dy, scene);
+        translateAnnotation(annotation, dx, dy, scene, useSnap);
+        propagateAttachedTranslation(scene,"annotation",annotation.id,dx,dy,explicitKeys);
       }
     });
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, moved:applicable.length });
@@ -2200,17 +2410,17 @@ io.on("connection", (socket) => {
       if (ref?.kind === "token") {
         const source = scene.tokens.find(entry => entry.id === refId);
         if (!source || !isDm) return;
-        const copy = { ...source, id:id(), playerId:"", name:`${source.name.replace(/\s+— копия(?: \d+)?$/, "")} — копия`, x:sceneCoordinate(scene, source.x + Number(offsetX || 0)), y:sceneCoordinate(scene, source.y + Number(offsetY || 0)), initiative:null, locked:false };
+        const copy = { ...source, id:id(), playerId:"", name:`${source.name.replace(/\s+— копия(?: \d+)?$/, "")} — копия`, x:sceneCoordinate(scene, source.x + Number(offsetX || 0)), y:sceneCoordinate(scene, source.y + Number(offsetY || 0)), initiative:null, locked:false, attachment:null };
         scene.tokens.push(copy); created.push({ kind:"token", id:copy.id });
       } else if (ref?.kind === "object") {
         const source = scene.objects.find(entry => entry.id === refId);
         if (!source || !isDm) return;
-        const copy = { ...source, id:id(), name:`${source.name.replace(/\s+— копия(?: \d+)?$/, "")} — копия`, x:sceneCoordinate(scene, source.x + Number(offsetX || 0)), y:sceneCoordinate(scene, source.y + Number(offsetY || 0)), locked:false };
+        const copy = { ...source, id:id(), name:`${source.name.replace(/\s+— копия(?: \d+)?$/, "")} — копия`, x:sceneCoordinate(scene, source.x + Number(offsetX || 0)), y:sceneCoordinate(scene, source.y + Number(offsetY || 0)), locked:false, attachment:null };
         scene.objects.push(copy); created.push({ kind:"object", id:copy.id });
       } else if (ref?.kind === "annotation") {
         const source = scene.annotations.find(entry => entry.id === refId);
         if (!source || !isDm && source.ownerId !== clientId) return;
-        const copy = structuredClone(source); copy.id=id(); copy.ownerId=clientId; copy.name=`${source.name || "Рисунок"} — копия`; copy.locked=false; copy.hidden=false;
+        const copy = structuredClone(source); copy.id=id(); copy.ownerId=clientId; copy.name=`${source.name || "Рисунок"} — копия`; copy.locked=false; copy.hidden=false; copy.attachment=null;
         translateAnnotation(copy, Number(offsetX || 0), Number(offsetY || 0), scene);
         scene.annotations.push(copy); created.push({ kind:"annotation", id:copy.id });
       }
@@ -2231,9 +2441,9 @@ io.on("connection", (socket) => {
     const safe=Array.isArray(refs)?refs.slice(0,500):[]; let copied=0;
     safe.forEach(ref=>{
       const refId=cleanText(ref?.id,80);
-      if (ref?.kind==="token") { const item=source.tokens.find(entry=>entry.id===refId); if(item){ target.tokens.push({ ...structuredClone(item),id:id(),playerId:"",initiative:null,locked:false }); copied++; } }
-      if (ref?.kind==="object") { const item=source.objects.find(entry=>entry.id===refId); if(item){ target.objects.push({ ...structuredClone(item),id:id(),locked:false }); copied++; } }
-      if (ref?.kind==="annotation") { const item=source.annotations.find(entry=>entry.id===refId); if(item){ target.annotations.push({ ...structuredClone(item),id:id(),ownerId:clientId,locked:false }); copied++; } }
+      if (ref?.kind==="token") { const item=source.tokens.find(entry=>entry.id===refId); if(item){ target.tokens.push({ ...structuredClone(item),id:id(),playerId:"",initiative:null,locked:false,attachment:null }); copied++; } }
+      if (ref?.kind==="object") { const item=source.objects.find(entry=>entry.id===refId); if(item){ target.objects.push({ ...structuredClone(item),id:id(),locked:false,attachment:null }); copied++; } }
+      if (ref?.kind==="annotation") { const item=source.annotations.find(entry=>entry.id===refId); if(item){ target.annotations.push({ ...structuredClone(item),id:id(),ownerId:clientId,locked:false,attachment:null }); copied++; } }
     });
     if (!copied) return reply({ ok:false,error:"Нечего копировать" });
     const index=room.scenes.findIndex(scene=>scene.id===target.id); room.scenes[index]=normalizeScene({ ...target,updatedAt:Date.now() },room.players);
@@ -2260,6 +2470,8 @@ io.on("connection", (socket) => {
     scene.tokens = scene.tokens.filter(entry => !tokenIds.has(entry.id));
     scene.objects = scene.objects.filter(entry => !objectIds.has(entry.id));
     scene.annotations = scene.annotations.filter(entry => !annotationIds.has(entry.id));
+    tokenIds.forEach(tokenId => clearAttachmentsTo(scene,"token",tokenId));
+    objectIds.forEach(objectId => clearAttachmentsTo(scene,"object",objectId));
     if (tokenIds.has(scene.initiative.currentTokenId)) scene.initiative.currentTokenId = "";
     setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, removed });
   });
@@ -2288,7 +2500,7 @@ io.on("connection", (socket) => {
     const player = room?.players?.[clientId];
     if (!room || !player) return reply({ ok:false });
     const scene = activeScene(room);
-    scene.ping = { id:id(), x:sceneCoordinate(scene,x), y:sceneCoordinate(scene,y), color:/^#[0-9a-f]{6}$/i.test(color) ? color : "#f4c875", at:Date.now(), by:cleanText(player.name,60) };
+    scene.ping = { id:id(), x:sceneFreeCoordinate(x), y:sceneFreeCoordinate(y), color:/^#[0-9a-f]{6}$/i.test(color) ? color : "#f4c875", at:Date.now(), by:cleanText(player.name,60) };
     setActiveScene(room, scene); emitRoom(code); reply({ ok:true });
   });
 
@@ -2394,9 +2606,13 @@ io.on("connection", (socket) => {
     const next = updateTokenCombatState(room, token, patch);
     let safeVisibility = ["private","gm"].includes(visibility) ? visibility : "public";
     if (safeVisibility === "gm" && !isDm) safeVisibility = "private";
-    room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Спасбросок от смерти · ${token.name}`, formula:"1к20", dice:[natural], detail:[{ count:1,sides:20,sign:1,rolls:[natural],subtotal:natural }], modifier:0, total:natural, mode:"normal", natural, visibility:safeVisibility, at:Date.now() });
+    const detail=[{ count:1,sides:20,sign:1,rolls:[natural],subtotal:natural }];
+    const physicalRoll={ id:id(),x:sceneFreeCoordinate(token.x),y:sceneFreeCoordinate(token.y),sets:[{sides:20,values:[natural]}],modifier:0,total:natural,formula:"к20",color:normalizeDiceColor(room.players[clientId]?.sheet?.diceColor),by:room.players[clientId]?.name||token.name,at:Date.now(),label:`Спасбросок от смерти · ${token.name}`,mode:"normal",natural,detail,visibility:safeVisibility,playerId:clientId,privateToDm:false };
+    scene.diceRoll=physicalRoll;
+    scene.diceRolls=(Array.isArray(scene.diceRolls)?scene.diceRolls:[]).concat(physicalRoll).slice(-MAX_ACTIVE_TABLE_ROLLS);
+    room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Спасбросок от смерти · ${token.name}`, formula:"1к20", dice:[natural], detail, modifier:0, total:natural, mode:"normal", natural, visibility:safeVisibility, at:Date.now() });
     room.rollLog = room.rollLog.slice(-100);
-    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, natural, state:next });
+    setActiveScene(room, scene); saveRooms(); emitRoom(code); reply({ ok:true, natural, state:next, roll:physicalRoll });
   });
 
   socket.on("combat:resolve-hit", ({ targetId, total, natural } = {}, reply = () => {}) => {
@@ -2597,14 +2813,27 @@ io.on("connection", (socket) => {
     const dice = token.initiativeAdvantage ? [crypto.randomInt(1,21),crypto.randomInt(1,21)] : [crypto.randomInt(1,21)];
     const natural = Math.max(...dice);
     token.initiative = natural + Number(token.initiativeBonus || 0);
+    const initiativeFormula = `1к20${Number(token.initiativeBonus)>=0?"+":""}${Number(token.initiativeBonus)||0}`;
+    const physicalRoll = {
+      id:id(), x:token.x, y:token.y,
+      sets:[{ sides:20, values:dice }], modifier:Number(token.initiativeBonus)||0,
+      total:token.initiative, formula:initiativeFormula,
+      color:normalizeDiceColor(room.players?.[clientId]?.sheet?.diceColor),
+      by:cleanText(room.players?.[clientId]?.name || token.name,60), at:Date.now(),
+      label:`Инициатива · ${token.name}`, mode:token.initiativeAdvantage?"advantage":"normal", natural,
+      detail:[{ count:1,sides:20,sign:1,rolls:dice,subtotal:natural,kept:token.initiativeAdvantage?natural:undefined }],
+      visibility:token.hidden?"private":"public", playerId:clientId, privateToDm:false
+    };
+    scene.diceRoll=physicalRoll;
+    scene.diceRolls=(Array.isArray(scene.diceRolls)?scene.diceRolls:[]).map(source=>normalizeSceneDiceRoll(source)).filter(Boolean).concat(physicalRoll).slice(-MAX_ACTIVE_TABLE_ROLLS);
     scene.initiative.active = true;
     const order = initiativeOrder(scene);
     if (!scene.initiative.currentTokenId || !order.some(entry => entry.id === scene.initiative.currentTokenId)) beginTurn(room,scene,order[0]);
     else if (!scene.initiative.turnState || scene.initiative.turnState.tokenId !== scene.initiative.currentTokenId) beginTurn(room,scene,order.find(entry=>entry.id===scene.initiative.currentTokenId));
     setActiveScene(room, scene);
-    room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Инициатива · ${token.name}`, formula:`1к20${Number(token.initiativeBonus)>=0?"+":""}${Number(token.initiativeBonus)||0}`, dice, modifier:Number(token.initiativeBonus)||0, total:token.initiative, mode:token.initiativeAdvantage?"advantage":"normal", natural, visibility:"public", privateToDm:Boolean(token.hidden), at:Date.now() });
+    room.rollLog.push({ id:id(), playerId:clientId, player:room.players[clientId]?.name || token.name, label:`Инициатива · ${token.name}`, formula:initiativeFormula, dice, modifier:Number(token.initiativeBonus)||0, total:token.initiative, mode:token.initiativeAdvantage?"advantage":"normal", natural, visibility:"public", privateToDm:Boolean(token.hidden), at:Date.now() });
     room.rollLog = room.rollLog.slice(-100);
-    saveRooms(); emitRoom(code); reply({ ok:true, natural, total:token.initiative });
+    saveRooms(); emitRoom(code); reply({ ok:true, natural, total:token.initiative, roll:physicalRoll, modifier:Number(token.initiativeBonus)||0 });
   });
 
   socket.on("initiative:set", ({ tokenId, value } = {}, reply = () => {}) => {

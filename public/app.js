@@ -664,6 +664,21 @@ function combatLoadoutMarkup(sheet, mine) {
   </section>`;
 }
 
+function deathSavePipsMarkup(sheet, editable = false) {
+  const row = (kind,count,label,symbol) => `<div class="death-save-row ${kind}"><span>${label}</span><div>${Array.from({length:3},(_,index)=>`<button type="button" data-death-pip="${kind}" data-death-count="${index+1}" class="${index < Number(count||0) ? "filled" : ""}" ${editable ? "" : "disabled"} aria-label="${label}: ${index+1}">${symbol}</button>`).join("")}</div></div>`;
+  return `<div class="death-save-card"><div>${row("success",sheet.deathSuccess,"Успехи","✓")}${row("fail",sheet.deathFail,"Провалы","×")}</div><button id="death-save-roll" class="primary" type="button" ${Number(sheet.hpCurrent)>0 ? "disabled" : ""}>🎲 Спасбросок от смерти</button>${sheet.stable ? `<strong class="death-stable">Стабилен</strong>` : ""}</div>`;
+}
+
+function setDeathSaveCount(kind,count) {
+  if (!state.editMode) return;
+  const next=structuredClone(currentSheet());
+  const key=kind === "success" ? "deathSuccess" : "deathFail";
+  const current=Number(next[key]||0), target=Math.max(0,Math.min(3,Number(count)||0));
+  next[key]=current===target ? target-1 : target;
+  saveNow(next,"Изменены спасброски от смерти","Спасброски от смерти");
+  renderSheet();
+}
+
 function renderSheet() {
   const player = state.room?.players?.[state.selectedId];
   if (!player) return;
@@ -770,7 +785,7 @@ function renderSheet() {
         <div class="panel" data-section="combat" data-combat-view="actions">
           <div class="panel-heading"><h3 class="panel-title">Кости хитов</h3><small>${(s.hitDicePools || []).reduce((sum,pool)=>sum+Number(pool.current),0)}/${(s.hitDicePools || []).reduce((sum,pool)=>sum+Number(pool.total),0)} осталось</small></div>
           <div class="hit-dice-pills">${(s.hitDicePools || [{sides:s.hitDieSize,total:s.hitDiceMax,current:s.hitDiceCurrent}]).map(pool => `<span><b>${Number(pool.current)}/${Number(pool.total)}</b> к${Number(pool.sides)}</span>`).join("")}</div>
-          <div class="death">Спасброски от смерти: успехи <input type="number" min="0" max="3" data-field="deathSuccess" value="${Number(s.deathSuccess)}"> провалы <input type="number" min="0" max="3" data-field="deathFail" value="${Number(s.deathFail)}"><button id="death-save-roll" class="secondary" type="button">Бросить спасбросок</button></div>
+          ${deathSavePipsMarkup(s,Boolean(mine && state.editMode))}
         </div>
         <div class="panel" data-section="combat" data-combat-view="actions"><h3 class="panel-title">Атаки</h3><div class="attack-list">${attackRows}</div>${mine ? `<button id="attack-add" class="secondary" type="button">+ Добавить атаку</button>` : ""}${area("Прочие атаки и заклинания", "attacks", s.attacks, "Свободные заметки об атаках...")}</div>
         <div class="panel" data-section="features"><h3 class="panel-title">Ресурсы и заряды</h3><div class="entity-list">${resources || `<div class="read-only">Стрелы, ярость, ци, превосходство и любые другие заряды.</div>`}</div>${mine ? `<button id="resource-add" class="secondary" type="button">+ Добавить ресурс</button>` : ""}</div>
@@ -794,6 +809,9 @@ function renderSheet() {
   if (!mine) $$("input, textarea, select", $("#sheet-view")).forEach(el => el.disabled = true);
   updateDerived();
   applySheetEditing(mine);
+  // Filter the full sheet before binding optional controls so one broken handler
+  // can never expose sections from every tab at once.
+  applySheetTab();
   if (mine) bindSheet();
   else { state.sheetBindController?.abort(); state.sheetBindController = null; }
   $$('[data-roll-stat]').forEach(button => button.addEventListener("click", () => {
@@ -803,7 +821,6 @@ function renderSheet() {
   if (!mine) $$('[data-spell-info]').forEach(button => button.addEventListener("click", () => showSpellInfoFor(s, button.dataset.spellInfo)));
   if (mine) bindGameControls();
   bindRollModeControls();
-  applySheetTab();
 }
 
 function bindRollModeControls() {
@@ -1037,6 +1054,7 @@ function bindGameControls() {
   $(".xp-track")?.addEventListener("keydown", event => { if (["Enter"," "].includes(event.key)) { event.preventDefault(); openExperienceModal(); } });
   $$('[data-level-info]').forEach(button => button.addEventListener("click", () => openLevelInfo(button.dataset.levelInfo)));
   $("#death-save-roll")?.addEventListener("click", rollDeathSave);
+  $$('[data-death-pip]', $('#sheet-view')).forEach(button => button.addEventListener('click', () => setDeathSaveCount(button.dataset.deathPip, button.dataset.deathCount)));
   $$('[data-class-damage]').forEach(button => button.addEventListener("click", () => roll(resolveDiceFormula(button.dataset.classDamage, currentSheet()), button.closest(".class-combat-hint")?.querySelector("span")?.textContent || "Классовый урон", { mode:"normal" })));
   $("#attack-add")?.addEventListener("click", () => openAttackModal());
   $("#conditions-manager")?.addEventListener("click", openConditionsModal);
@@ -1203,12 +1221,12 @@ function removeQuickSlot(index) {
   saveNow(next,"Быстрый слот освобождён","Изменён быстрый доступ"); renderSheet();
 }
 function healingPotionFormula(item) {
+  const text = `${item?.name || ""} ${item?.description || ""}`.toLowerCase();
+  if (!/зель.*леч|лечебн|potion.*heal|healing potion/.test(text)) return "";
   if (item.useFormula) return resolveDiceFormula(item.useFormula,currentSheet());
-  const name = String(item.name || "").toLowerCase();
-  if (!/зель.*леч|potion.*heal/.test(name)) return "";
-  if (/величай|supreme/.test(name)) return "10к4+20";
-  if (/превосход|superior/.test(name)) return "8к4+8";
-  if (/больш|greater/.test(name)) return "4к4+4";
+  if (/величай|supreme/.test(text)) return "10к4+20";
+  if (/превосход|superior/.test(text)) return "8к4+8";
+  if (/больш|greater/.test(text)) return "4к4+4";
   return "2к4+2";
 }
 function quickItemCondition(item) {
@@ -1225,39 +1243,47 @@ function quickItemCondition(item) {
 function ownVttTokenId() {
   return (state.room?.scene?.tokens || []).find(token => token.playerId === state.clientId)?.id || "";
 }
-async function useQuickItem(index, options = {}) {
-  const sheet = currentSheet(), set = activeCombatSet(sheet), source = combatItem(sheet,set.quickSlots[index]);
-  if (!source) return state.editMode ? assignQuickSlot(index) : toast("Этот быстрый слот пуст");
-  if (state.editMode && state.selectedLoadoutItemId) return assignQuickSlot(index);
+async function useInventoryItem(itemId, options = {}) {
+  const source = combatItem(currentSheet(),itemId);
+  if (!source) return toast("Предмет не найден");
   if (Number(source.quantity || 0) <= 0) return toast(`${source.name}: запас закончился`);
   const formula = healingPotionFormula(source);
   const condition = quickItemCondition(source);
-  const text = `${source.name || ""} ${source.description || ""}`.toLowerCase();
-  const isScroll = source.catalogCategory === "scroll" || /свиток|scroll/.test(text);
+  const itemText = `${source.name || ""} ${source.description || ""}`.toLowerCase();
+  const isScroll = source.catalogCategory === "scroll" || /свиток|scroll/.test(itemText);
   const targetId = options.targetId || ownVttTokenId();
+  const visibility = options.visibility === "private" ? "private" : "public";
   let outcome = { ok:true };
   if (formula) {
-    const result = await roll(formula,`Лечение: ${source.name}`,{ ...options, mode:"normal", silent:true });
+    const result = await vttRollFormula(formula,`Лечение: ${source.name}`,visibility);
     if (!result?.ok) return result;
-    if (targetId) outcome = await vttApplyCombat(targetId,"healing",Number(result.total)||0,`Использован ${source.name}`,options.visibility || "public");
+    if (targetId) outcome = await vttApplyCombat(targetId,"healing",Number(result.total)||0,`Использован ${source.name}`,visibility);
   } else if (condition && targetId) {
     outcome = await vttToggleCondition(targetId,condition,true);
-    if (outcome?.ok && (source.useConcentration || /концентрац|concentration/.test(text))) await vttSetConcentration(targetId,source.name);
+    if (outcome?.ok && (source.useConcentration || /концентрац|concentration/.test(itemText))) await vttSetConcentration(targetId,source.name);
   } else if (isScroll && targetId && source.useConcentration) {
     const spellName = String(source.name || "Свиток").replace(/^Свиток[:\s-]*/i,"").trim() || source.name;
     outcome = await vttSetConcentration(targetId,spellName);
   } else if (source.useFormula) {
-    outcome = await roll(resolveDiceFormula(source.useFormula,sheet),`Использован: ${source.name}`,{ ...options, mode:"normal" });
+    outcome = await vttRollFormula(resolveDiceFormula(source.useFormula,currentSheet()),`Использован: ${source.name}`,visibility);
   }
   if (outcome?.ok === false) return outcome;
-  const next = structuredClone(currentSheet()), nextSet = activeCombatSet(next), item = combatItem(next,nextSet.quickSlots[index]);
-  if (!item || Number(item.quantity || 0) <= 0) return toast(`${source.name}: предмет уже закончился`);
-  item.quantity = Math.max(0,Number(item.quantity)-1);
-  saveNow(next,`${item.name}: осталось ${item.quantity}`,"Использован быстрый предмет");
+  const next=structuredClone(currentSheet()), item=combatItem(next,itemId);
+  if (!item || Number(item.quantity||0)<=0) return toast(`${source.name}: предмет уже закончился`);
+  item.quantity=Math.max(0,Number(item.quantity)-1);
+  saveNow(next,`${item.name}: осталось ${item.quantity}`,"Использован предмет");
   renderSheet();
   if (!formula && !condition && !isScroll && !source.useFormula) toast(`${item.name} использован · осталось ${item.quantity}`);
-  return { ok:true, quantity:item.quantity };
+  return { ok:true,quantity:item.quantity };
 }
+
+async function useQuickItem(index, options = {}) {
+  const sheet=currentSheet(), set=activeCombatSet(sheet), source=combatItem(sheet,set.quickSlots[index]);
+  if (!source) return state.editMode ? assignQuickSlot(index) : toast("Этот быстрый слот пуст");
+  if (state.editMode && state.selectedLoadoutItemId) return assignQuickSlot(index);
+  return useInventoryItem(source.id,options);
+}
+
 function assignAttunement(index, itemId = state.selectedLoadoutItemId) {
   if (!state.editMode) return;
   if (!itemId) return toast("Сначала выбери магический предмет");
@@ -1844,7 +1870,7 @@ function openLevelUpWizard() {
     const { key, cls, existing } = targetData();
     const eligibility = multiclassEligibility(current,key);
     if (!existing && !eligibility.ok && !confirm("Характеристики не соответствуют стандартным требованиям мультикласса. Всё равно получить этот уровень?")) return;
-    if ($("#level-up-hp").value === "roll") socket.emit("dice:roll", { formula:`1к${cls.hitDie}`, label:`HP за новый уровень · к${cls.hitDie}`, mode:"normal" }, response => response.ok ? applyLevel(response.total) : toast(response.error));
+    if ($("#level-up-hp").value === "roll") roll(`1к${cls.hitDie}`,`HP за новый уровень · к${cls.hitDie}`,{mode:"normal"}).then(response=>response.ok?applyLevel(response.total):toast(response.error));
     else applyLevel(Math.floor(cls.hitDie / 2) + 1);
   });
   renderTarget();
@@ -2265,7 +2291,7 @@ function openHealthModal() {
     const pool = sheet.hitDicePools?.find(entry => Number(entry.sides) === sides);
     if (!pool || Number(pool.current) <= 0) return toast("Эти кости хитов закончились");
     const con = modifier(sheet.stats.con);
-    socket.emit("dice:roll", { formula: `1к${sides}${signed(con)}`, label: `Кость хитов к${sides}` }, response => {
+    roll(`1к${sides}${signed(con)}`,`Кость хитов к${sides}`,{mode:"normal"}).then(response=>{
       if (!response.ok) return toast(response.error);
       pool.current -= 1;
       sheet.hitDiceCurrent = sheet.hitDicePools.reduce((sum, entry) => sum + Number(entry.current), 0);
@@ -2317,6 +2343,8 @@ function rollConcentrationCheck(damage) {
 function rollDeathSave() {
   const sheet = currentSheet();
   if (sheet.hpCurrent > 0) return toast("Спасброски от смерти нужны только при 0 HP");
+  const tokenId=(state.room?.scene?.tokens||[]).find(token=>token.playerId===state.selectedId)?.id || ownVttTokenId();
+  if (tokenId) return vttDeathSave(tokenId,"public");
   roll("1к20", "Спасбросок от смерти", { mode:"normal", onResult: response => {
     const next = structuredClone(currentSheet());
     const natural = Number(response.natural || response.dice?.[0] || 0);
@@ -2851,9 +2879,8 @@ function roll(formula, label = formula, options = {}) {
   const isD20 = /(?:^|[^\d])1[кd]20(?:$|[^\d])/i.test(String(formula));
   const usesSelectedMode = isD20 && !options.mode;
   const mode = options.mode || (isD20 ? state.rollMode : "normal");
-  return new Promise(resolve => socket.emit("dice:roll", { formula, label, mode, visibility:options.visibility || "public", silent:Boolean(options.silent) }, response => {
-    if (!response.ok) { toast(response.error); resolve(response); return; }
-    showRollPeek(label, response);
+  const visibility = options.visibility || "public";
+  const finish = response => {
     options.onResult?.(response);
     if (usesSelectedMode && state.rollMode !== "normal") {
       state.rollMode = "normal";
@@ -2867,7 +2894,20 @@ function roll(formula, label = formula, options = {}) {
       });
       $(".roll-mode summary b", $("#sheet-view")) && ($(".roll-mode summary b", $("#sheet-view")).textContent = "обычно");
     }
-    resolve(response);
+    return response;
+  };
+  return new Promise(resolve => socket.emit("scene:dice-roll", { x:0, y:0, formula, label, mode, visibility, silent:Boolean(options.silent) }, response => {
+    if (response?.ok) {
+      if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
+      resolve(finish(response));
+      return;
+    }
+    // Редкие домашние формулы, которые нельзя показать физически, всё ещё работают текстом.
+    socket.emit("dice:roll", { formula, label, mode, visibility, silent:Boolean(options.silent) }, fallback => {
+      if (!fallback?.ok) { toast(fallback?.error || response?.error || "Не удалось бросить кубики"); resolve(fallback || response); return; }
+      showRollPeek(label, fallback);
+      resolve(finish(fallback));
+    });
   }));
 }
 function showRollPeek(label, response) {
@@ -2957,7 +2997,6 @@ function rollPhysicalDice(selection = window.TT_DICE_TRAY?.selection?.(), modifi
   socket.emit("scene:dice-roll", { x:0, y:0, dice, modifier:Number(modifier) || 0, visibility }, response => {
     if (!response?.ok) return toast(response?.error || "Не удалось бросить кубики");
     if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
-    showRollPeek(`${visibility === "private" ? "🔒 " : ""}${response.formula || "Бросок на столе"}`, response);
   });
 }
 function rollPhysicalFormula(formula) {
@@ -2967,7 +3006,6 @@ function rollPhysicalFormula(formula) {
   socket.emit("scene:dice-roll", { x:0, y:0, formula:value, visibility }, response => {
     if (!response?.ok) return toast(response?.error || "Не удалось бросить формулу");
     if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
-    showRollPeek(`${visibility === "private" ? "🔒 " : ""}${response.formula || value}`, response);
   });
 }
 
@@ -3017,15 +3055,26 @@ function buildVttCharacterModels() {
         damageType:attack.damageType || ""
       };
     });
-    const equipment = Object.entries(set.slots || {}).map(([slot,itemId]) => {
+    const equipmentIds = new Set();
+    const equipment = [];
+    Object.entries(set.slots || {}).forEach(([slot,itemId]) => {
       const item = combatItem(sheet,itemId);
-      if (!item) return null;
-      return { slot, slotLabel:combatSlotMeta[slot]?.label || slot, name:item.name || "Предмет", icon:itemCombatIcon(item), quantity:Number(item.quantity || 0) };
-    }).filter(Boolean);
+      if (!item) return;
+      equipmentIds.add(item.id);
+      equipment.push({ id:item.id, slot, slotLabel:combatSlotMeta[slot]?.label || slot, name:item.name || "Предмет", icon:itemCombatIcon(item), quantity:Number(item.quantity || 0), usable:itemCombatKind(item)==="consumable" || Boolean(item.useFormula), useFormula:item.useFormula || "" });
+    });
     const quickItems = (set.quickSlots || []).map((itemId,index) => {
       const item = combatItem(sheet,itemId);
-      return item ? { index, name:item.name || `Слот ${index+1}`, icon:itemCombatIcon(item), quantity:Number(item.quantity || 0) } : null;
+      if (!item) return null;
+      equipmentIds.add(item.id);
+      const model={ id:item.id,index,name:item.name||`Слот ${index+1}`,icon:itemCombatIcon(item),quantity:Number(item.quantity||0),usable:true,useFormula:item.useFormula||healingPotionFormula(item)||"" };
+      equipment.push({ ...model, slot:`quick-${index}`, slotLabel:`Быстрый слот ${index+1}` });
+      return model;
     }).filter(Boolean);
+    (sheet.inventoryList || []).filter(item => (item.equipped || item.attuned) && !equipmentIds.has(item.id)).forEach(item => {
+      equipmentIds.add(item.id);
+      equipment.push({ id:item.id, slot:"equipped", slotLabel:item.attuned ? "Настроено" : "Экипировано", name:item.name || "Предмет", icon:itemCombatIcon(item), quantity:Number(item.quantity || 0), usable:itemCombatKind(item)==="consumable" || Boolean(item.useFormula), useFormula:item.useFormula || "" });
+    });
     const abilityModels = Object.entries(abilities).map(([key,name]) => {
       const bonus = modifier(sheet.stats?.[key]);
       return { key, name, value:Number(sheet.stats?.[key] || 0), modifier:bonus, formula:`1к20${bonus ? signed(bonus) : ""}` };
@@ -3041,8 +3090,14 @@ function buildVttCharacterModels() {
     });
     const spellModels=(sheet.spellsList||[]).filter(spell=>Number(spell.level||0)===0||spell.prepared).map(spell=>{
       const formula=spellRollFormula(spell,Number(spell.level)||0,sheet);
-      return { id:spell.id,name:spell.name||"Заклинание",level:Number(spell.level||0),school:spell.school||"",prepared:Boolean(spell.prepared),concentration:Boolean(spell.concentration),formula:String(formula||"").replace(/d/gi,"к"),kind:spellRollKind(spell) };
-    }).filter(spell=>spell.formula).slice(0,40);
+      return { id:spell.id,name:spell.name||"Заклинание",level:Number(spell.level||0),school:spell.school||"",prepared:Boolean(spell.prepared),concentration:Boolean(spell.concentration),ritual:Boolean(spell.ritual),formula:String(formula||"").replace(/d/gi,"к"),kind:spellRollKind(spell) };
+    }).slice(0,80);
+    const resourceModels=(sheet.resources||[]).map(resource=>({ id:resource.id,name:resource.name||"Ресурс",current:Number(resource.current||0),max:Number(resource.max||0),reset:resource.reset||"none" }));
+    const spellSlotModels=(sheet.spellSlots||[]).filter(slot=>Number(slot.total)>0).map(slot=>({ level:Number(slot.level),total:Number(slot.total),used:Number(slot.used||0),remaining:Math.max(0,Number(slot.total)-Number(slot.used||0)) }));
+    const pactSlotModel=Number(sheet.pactSlots?.total||0)>0?{ level:Number(sheet.pactSlots.level||0),total:Number(sheet.pactSlots.total||0),used:Number(sheet.pactSlots.used||0),remaining:Math.max(0,Number(sheet.pactSlots.total||0)-Number(sheet.pactSlots.used||0)) }:null;
+    const combatFeatures=[];
+    const rogueLevel=classLevel(sheet,"rogue");
+    if (rogueLevel>0) combatFeatures.push({ id:"sneak-attack",name:"Скрытая атака",formula:`${rules.sneakAttackDice(rogueLevel)}к6`,note:"Раз за ход при выполнении условий" });
     return [playerId, {
       playerId,
       name:sheet.characterName || player.name,
@@ -3069,6 +3124,11 @@ function buildVttCharacterModels() {
       attacks:attackList,
       equipment,
       quickItems,
+      consumables:equipment.filter(item=>item.usable && Number(item.quantity)>0),
+      resources:resourceModels,
+      spellSlots:spellSlotModels,
+      pactSlots:pactSlotModel,
+      combatFeatures,
       spells:spellModels,
       quickSheet:sheet.vttQuickSheet || { sections:["overview","combat","checks","spells"] },
       notes:(sheet.notesList||[]).slice(0,8).map(note=>({ id:note.id,title:note.title||note.name||"Заметка",text:note.text||note.description||"" })),
@@ -3084,12 +3144,9 @@ function buildVttCharacterModels() {
 }
 
 function vttRollFormula(formula, label = formula, visibility = "public") {
-  return new Promise(resolve => socket.emit("scene:dice-roll", { x:0, y:0, formula, visibility }, response => {
+  return new Promise(resolve => socket.emit("scene:dice-roll", { x:0, y:0, formula, label, visibility }, response => {
     if (!response?.ok) toast(response?.error || "Не удалось бросить кубики");
-    else {
-      if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
-      showRollPeek(`${visibility === "private" ? "🔒 " : ""}${label}`,response);
-    }
+    else if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
     resolve(response || { ok:false });
   }));
 }
@@ -3100,6 +3157,38 @@ function vttApplyCombat(tokenId, kind, amount, label = "Бой", visibility = "p
     resolve(response || { ok:false });
   }));
 }
+function vttUseItem(itemId,targetId,visibility="public") {
+  return useInventoryItem(itemId,{ targetId,visibility });
+}
+function vttChangeResource(resourceId,delta) {
+  const next=structuredClone(currentSheet()), resource=next.resources.find(item=>item.id===resourceId);
+  if (!resource) return Promise.resolve({ ok:false });
+  resource.current=Math.max(0,Math.min(Number(resource.max||0),Number(resource.current||0)+Number(delta||0)));
+  saveNow(next,`${resource.name}: ${resource.current}/${resource.max}`,"Изменён ресурс"); renderSheet();
+  return Promise.resolve({ ok:true,current:resource.current });
+}
+function vttChangeSpellSlot(level,delta,pact=false) {
+  const next=structuredClone(currentSheet());
+  if (pact) {
+    if (!next.pactSlots) return Promise.resolve({ok:false});
+    next.pactSlots.used=Math.max(0,Math.min(Number(next.pactSlots.total||0),Number(next.pactSlots.used||0)+Number(delta||0)));
+  } else {
+    const slot=next.spellSlots.find(item=>Number(item.level)===Number(level));
+    if (!slot) return Promise.resolve({ok:false});
+    slot.used=Math.max(0,Math.min(Number(slot.total||0),Number(slot.used||0)+Number(delta||0)));
+  }
+  saveNow(next,"Изменены ячейки заклинаний","Ячейки заклинаний"); renderSheet();
+  return Promise.resolve({ok:true});
+}
+function vttCastSpell(spellId) { castSpell(spellId); return Promise.resolve({ok:true}); }
+function vttDeathSave(tokenId,visibility="public") {
+  return new Promise(resolve=>socket.emit("combat:death-save",{tokenId,visibility},response=>{
+    if (!response?.ok) toast(response?.error||"Не удалось бросить спасбросок");
+    else if (response.roll) window.TT_DICE_PHYSICS?.play?.(response.roll);
+    resolve(response||{ok:false});
+  }));
+}
+
 function vttToggleCondition(tokenId, condition, active) {
   return new Promise(resolve => socket.emit("combat:condition", { tokenId, condition, active }, response => {
     if (!response?.ok) toast(response?.error || "Не удалось изменить состояние");
@@ -3147,7 +3236,7 @@ function renderMap() {
       closeModal,
       switchView,
       characters:buildVttCharacterModels(),
-      actions:{ roll:vttRollFormula, openSheet:vttOpenSheet, savePreferences:vttSavePreferences }
+      actions:{ roll:vttRollFormula, openSheet:vttOpenSheet, savePreferences:vttSavePreferences, applyCombat:vttApplyCombat, useItem:vttUseItem, changeResource:vttChangeResource, changeSpellSlot:vttChangeSpellSlot, castSpell:vttCastSpell, deathSave:vttDeathSave }
     });
     return;
   }
