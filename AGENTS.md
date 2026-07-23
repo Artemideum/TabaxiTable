@@ -8,6 +8,7 @@ TabaxiTable — русскоязычный виртуальный стол и и
 - Сервер и игровое состояние: `server.js`.
 - Клиент без сборщика: `public/index.html`, `public/style.css`, `public/app.js`.
 - Виртуальный стол вынесен в `public/vtt.js` и `public/vtt.css`; не возвращать его в монолит `app.js`.
+- Кузница токенов вынесена в `public/token-forge.js` и `public/token-forge.css`; не смешивать Canvas-редактор с основным рендером VTT.
 - Загруженные пользователем карты и токены хранятся в `data/assets/`, а метаданные — внутри комнаты в `data/rooms.json`.
 - Базовые правила: `public/rules-5e.js`; дополнительные источники подключаются через `public/content-packs.js` и `public/content-details-xgte-tcoe.js`.
 - Автоматические списки магии подклассов: `public/subclass-spells-xgte-tcoe.js`.

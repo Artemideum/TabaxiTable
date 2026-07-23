@@ -9,6 +9,8 @@ const vttCss = fs.readFileSync("public/vtt.css", "utf8");
 const css = fs.readFileSync("public/style.css", "utf8");
 const indexHtml = fs.readFileSync("public/index.html", "utf8");
 const contentPacks = fs.readFileSync("public/content-packs.js", "utf8");
+const tokenForge = fs.readFileSync("public/token-forge.js", "utf8");
+const tokenForgeCss = fs.readFileSync("public/token-forge.css", "utf8");
 
 test("полный лист фильтрует вкладки до привязки игровых контролов", () => {
   const applyIndex = app.indexOf("applySheetTab();", app.indexOf("function renderSheet"));
@@ -44,7 +46,7 @@ test("версии схем листа и сцены не размазаны м�
   assert.match(app, /sheet\.schemaVersion = SHEET_SCHEMA_VERSION;/);
   assert.doesNotMatch(app, /sheet\.schemaVersion = 8;/);
   assert.match(server, /const SHEET_SCHEMA_VERSION = 12;/);
-  assert.match(server, /const SCENE_SCHEMA_VERSION = 10;/);
+  assert.match(server, /const SCENE_SCHEMA_VERSION = 11;/);
   assert.match(server, /normalized\.schemaVersion = SHEET_SCHEMA_VERSION;/);
 });
 
@@ -118,4 +120,25 @@ test("контент-менеджеры и строки листа исполь�
   assert.match(vttCss, /grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);
   assert.match(vtt, /class="vtt-character-spell-actions"/);
   assert.match(vttCss, /\.vtt-character-spell-actions \{ display:flex/);
+});
+
+
+test("Кузница токенов подключена как отдельный редактируемый модуль", () => {
+  assert.ok(indexHtml.indexOf('/token-forge.js') > -1);
+  assert.ok(indexHtml.indexOf('/token-forge.js') < indexHtml.indexOf('/vtt.js'));
+  assert.ok(indexHtml.includes('/token-forge.css'));
+  assert.match(vtt, /data-vtt-panel-left="forge"/);
+  assert.match(vtt, /window\.TT_TOKEN_FORGE\?\.markup/);
+  assert.match(tokenForge, /Кузница токенов/);
+  assert.match(tokenForge, /canvas\.toDataURL\("image\/webp"/);
+  assert.match(tokenForge, /sourceAssetId/);
+  assert.match(tokenForge, /replaceAssetId:state\.editingAssetId/);
+  assert.match(tokenForge, /Сохранить и поставить/);
+  assert.match(tokenForgeCss, /\.token-forge-workspace/);
+  assert.match(server, /function normalizeTokenRecipe/);
+  assert.match(server, /tokenRecipe:/);
+  assert.match(server, /replaceAssetId/);
+  assert.match(server, /token\.imageUrl = replacement\.url/);
+  assert.match(server, /category === "source"/);
+  assert.match(vtt, /draggable="\$\{asset\.category === "source" \? "false" : "true"\}"/);
 });

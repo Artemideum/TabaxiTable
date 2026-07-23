@@ -174,7 +174,7 @@ test("комната, лист, броски, история и резервна
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 12);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 10);
+    assert.equal(created.room.scene.schemaVersion, 11);
     assert.deepEqual(created.room.scene.annotations, []);
     assert.deepEqual(created.room.scene.fog.operations, []);
     assert.equal(created.room.scene.fog.enabled, true);
@@ -413,13 +413,15 @@ test("комната, лист, броски, история и резервна
     const uploadedAsset = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
       method:"POST",
       headers:{ "content-type":"application/json", "x-client-id":"test-dm" },
-      body:JSON.stringify({ name:"Красный гоблин", fileName:"goblin.png", category:"token", folder:"Противники", tags:["гоблин"], dataUrl:tinyPng, width:1, height:1 })
+      body:JSON.stringify({ name:"Красный гоблин", fileName:"goblin.png", category:"token", folder:"Противники", tags:["гоблин"], dataUrl:tinyPng, width:1, height:1, defaultSize:1.25, tokenRecipe:{ version:1, sourceAssetId:"source-goblin", sourceName:"Гоблин исходник", name:"Красный гоблин", shape:"hex", image:{scale:1.4,offsetX:4,offsetY:-3,rotation:8}, frame:{primary:"#b94b42",secondary:"#351714",width:18,glow:.4,shadow:.6}, backgroundColor:"#17120e", defaults:{size:1.25,hp:12,hpMax:17,ac:14,vision:90,disposition:"hostile",showName:true,showHp:true,showAc:true} } })
     }).then(response => response.json());
     assert.equal(uploadedAsset.ok, true);
     assert.match(uploadedAsset.asset.url, new RegExp(`/assets/${created.code}/`));
     const assetRoom = await assetState;
     assert.equal(assetRoom.assets[0].usageCount, 0);
     assert.equal(assetRoom.assets[0].folder, "Противники");
+    assert.equal(assetRoom.assets[0].tokenRecipe.shape, "hex");
+    assert.equal(assetRoom.assets[0].tokenRecipe.defaults.hpMax, 17);
     const assetFile = await fetch(`http://127.0.0.1:${PORT}${uploadedAsset.asset.url}`);
     assert.equal(assetFile.status, 200);
     assert.equal(assetFile.headers.get("content-type"), "image/png");
@@ -431,7 +433,38 @@ test("комната, лист, броски, история и резервна
     const placedRoom = await placedState;
     assert.equal(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).length, 3);
     assert.deepEqual(placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.name), ["Красный гоблин 1","Красный гоблин 2","Красный гоблин 3"]);
-    const attachedChild=placedRoom.scene.tokens.find(token=>token.assetId===uploadedAsset.asset.id);
+    const forgedToken=placedRoom.scene.tokens.find(token=>token.assetId===uploadedAsset.asset.id);
+    assert.equal(forgedToken.forged,true);
+    assert.equal(forgedToken.tokenShape,"hex");
+    assert.equal(forgedToken.disposition,"hostile");
+    assert.equal(forgedToken.size,1.25);
+    assert.equal(forgedToken.hp,12);
+    assert.equal(forgedToken.hpMax,17);
+    assert.equal(forgedToken.ac,14);
+    assert.equal(forgedToken.vision,90);
+    assert.equal(forgedToken.showAc,true);
+
+    const replacedState=waitFor(dm,"room:state",room=>{
+      const asset=room.assets.find(entry=>entry.id===uploadedAsset.asset.id);
+      const token=room.scene.tokens.find(entry=>entry.assetId===uploadedAsset.asset.id);
+      return asset?.tokenRecipe?.shape==="circle"&&asset.url!==uploadedAsset.asset.url&&token?.imageUrl===asset.url;
+    });
+    const replacedAsset=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`,{
+      method:"POST",
+      headers:{"content-type":"application/json","x-client-id":"test-dm"},
+      body:JSON.stringify({name:"Красный гоблин — новая рамка",fileName:"goblin-new.webp",category:"token",dataUrl:tinyPng,width:1,height:1,defaultSize:1.25,replaceAssetId:uploadedAsset.asset.id,tokenRecipe:{...uploadedAsset.asset.tokenRecipe,shape:"circle",defaults:{...uploadedAsset.asset.tokenRecipe.defaults,vision:0,ac:0}}})
+    }).then(response=>response.json());
+    assert.equal(replacedAsset.ok,true);
+    assert.equal(replacedAsset.updated,true);
+    assert.equal(replacedAsset.asset.id,uploadedAsset.asset.id);
+    assert.equal(replacedAsset.asset.tokenRecipe.defaults.vision,0);
+    assert.equal(replacedAsset.asset.tokenRecipe.defaults.ac,0);
+    const replacedRoom=await replacedState;
+    const replacedToken=replacedRoom.scene.tokens.find(token=>token.assetId===uploadedAsset.asset.id);
+    assert.equal(replacedToken.hp,12);
+    assert.equal(replacedToken.hpMax,17);
+    assert.equal(replacedToken.tokenShape,"circle");
+    const attachedChild=replacedToken;
     const childStart={x:attachedChild.x,y:attachedChild.y};
     assert.equal((await emit(dm,"scene:item-attach",{childKind:"token",childId:attachedChild.id,parentKind:"token",parentId:npcToken.id})).ok,true);
     const attachmentMoveState=waitFor(dm,"room:state",room=>{const child=room.scene.tokens.find(token=>token.id===attachedChild.id);return child?.x===childStart.x+0.5&&child?.y===childStart.y+0.5;});
@@ -708,7 +741,7 @@ test("комната, лист, броски, история и резервна
     await new Promise(resolve => setTimeout(resolve, 250));
     const persistedRooms = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "rooms.json"), "utf8"));
     assert.ok(persistedRooms[created.code].scenes.length >= 2);
-    assert.equal(persistedRooms[created.code].assets[0].name, "Красный гоблин");
+    assert.equal(persistedRooms[created.code].assets[0].name, "Красный гоблин — новая рамка");
     assert.ok(fs.existsSync(path.join(DATA_DIR, "assets", created.code, persistedRooms[created.code].assets[0].filename)));
   } finally {
     dm.disconnect();

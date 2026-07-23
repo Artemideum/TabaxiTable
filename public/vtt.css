@@ -1454,3 +1454,35 @@ body.vtt-active { overflow: hidden; }
   .vtt-character-spell-actions { justify-content:stretch; }
   .vtt-character-spell-actions button { flex:1 1 110px; }
 }
+
+/* 2.4 Token Forge assets carry their own frame and transparent silhouette. */
+.vtt-token.is-forged > i {
+  inset:0;
+  overflow:visible;
+  border:0;
+  border-radius:0;
+  background:transparent;
+  box-shadow:none;
+}
+.vtt-token.is-forged img { object-fit:contain; filter:drop-shadow(0 5px 10px #000b); }
+.vtt-token.is-forged:hover > i,
+.vtt-token.is-forged.is-selected > i { box-shadow:none; filter:brightness(1.1) drop-shadow(0 0 7px #d3ad6e88); }
+.vtt-token.is-forged.is-current > i { animation:token-turn-forged 1.35s ease-in-out infinite; }
+.vtt-token.token-shape-square .vtt-transform-handles { border-radius:13%; }
+.vtt-token.token-shape-hex .vtt-transform-handles { border-radius:0; clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%); }
+.vtt-token.disposition-friendly { --disposition-color:#68b67b; }
+.vtt-token.disposition-neutral { --disposition-color:#d3ad6e; }
+.vtt-token.disposition-hostile { --disposition-color:#cf6258; }
+.vtt-token.is-forged.is-selected::before {
+  content:"";
+  position:absolute;
+  inset:-3px;
+  border:2px solid var(--disposition-color);
+  border-radius:50%;
+  opacity:.8;
+  pointer-events:none;
+  filter:drop-shadow(0 0 5px var(--disposition-color));
+}
+.vtt-token.is-forged.token-shape-square.is-selected::before { border-radius:14%; }
+.vtt-token.is-forged.token-shape-hex.is-selected::before { border-radius:0; clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%); }
+@keyframes token-turn-forged { 0%,100%{filter:brightness(1) drop-shadow(0 0 0 #d3ad6e00)} 50%{filter:brightness(1.2) drop-shadow(0 0 12px #d3ad6eaa)} }

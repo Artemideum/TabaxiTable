@@ -16,7 +16,7 @@ const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const SHEET_SCHEMA_VERSION = 12;
-const SCENE_SCHEMA_VERSION = 10;
+const SCENE_SCHEMA_VERSION = 11;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(ASSET_DIR, { recursive: true });
@@ -414,6 +414,9 @@ function normalizeScene(source, players = {}) {
       opacity: Math.max(0.05, Math.min(1, Number(raw?.opacity) || 1)),
       color: /^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : raw?.color) ? (player ? sheet.tokenColor : raw.color) : "#9f7842",
       imageUrl: cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : raw?.imageUrl, 1000),
+      forged: player ? false : Boolean(raw?.forged),
+      tokenShape: ["circle","square","hex"].includes(raw?.tokenShape) ? raw.tokenShape : "circle",
+      disposition: ["friendly","neutral","hostile"].includes(raw?.disposition) ? raw.disposition : player ? "friendly" : "neutral",
       vision: Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : raw?.vision) || 0)),
       hidden: Boolean(raw?.hidden),
       locked: Boolean(raw?.locked),
@@ -549,12 +552,57 @@ function normalizeScene(source, players = {}) {
   };
 }
 
+function normalizeTokenRecipe(source) {
+  if (!source || typeof source !== "object") return null;
+  const image = source.image && typeof source.image === "object" ? source.image : {};
+  const frame = source.frame && typeof source.frame === "object" ? source.frame : {};
+  const defaults = source.defaults && typeof source.defaults === "object" ? source.defaults : {};
+  const color = (value,fallback) => /^#[0-9a-f]{6}$/i.test(String(value||"")) ? value : fallback;
+  const numberOr = (value,fallback) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const hpMax = Math.max(1,Math.min(1000000,numberOr(defaults.hpMax,10)));
+  const hp = Math.max(0,Math.min(hpMax,numberOr(defaults.hp,hpMax)));
+  return {
+    version:1,
+    sourceAssetId:cleanText(source.sourceAssetId,80),
+    sourceName:cleanText(source.sourceName,80),
+    name:cleanText(source.name,80) || "Новый токен",
+    shape:["circle","square","hex"].includes(source.shape) ? source.shape : "circle",
+    image:{
+      scale:Math.max(.5,Math.min(4,numberOr(image.scale,1.15))),
+      offsetX:Math.max(-100,Math.min(100,numberOr(image.offsetX,0))),
+      offsetY:Math.max(-100,Math.min(100,numberOr(image.offsetY,0))),
+      rotation:Math.max(-180,Math.min(180,numberOr(image.rotation,0)))
+    },
+    frame:{
+      primary:color(frame.primary,"#d3ad6e"),
+      secondary:color(frame.secondary,"#3a2415"),
+      width:Math.max(0,Math.min(42,numberOr(frame.width,18))),
+      glow:Math.max(0,Math.min(1,numberOr(frame.glow,.35))),
+      shadow:Math.max(0,Math.min(1,numberOr(frame.shadow,.65)))
+    },
+    backgroundColor:color(source.backgroundColor,"#17120e"),
+    defaults:{
+      size:Math.max(.25,Math.min(12,numberOr(defaults.size,1))),
+      hpMax,
+      hp,
+      ac:Math.max(0,Math.min(1000,numberOr(defaults.ac,10))),
+      vision:Math.max(0,Math.min(10000,numberOr(defaults.vision,60))),
+      disposition:["friendly","neutral","hostile"].includes(defaults.disposition) ? defaults.disposition : "hostile",
+      showName:defaults.showName !== false,
+      showHp:defaults.showHp !== false,
+      showAc:Boolean(defaults.showAc)
+    },
+    folder:cleanText(source.folder,60),
+    tags:Array.isArray(source.tags) ? [...new Set(source.tags.map(tag=>cleanText(tag,30)).filter(Boolean))].slice(0,20) : []
+  };
+}
+
 function normalizeAsset(raw, roomCodeValue = "") {
   if (!raw || typeof raw !== "object") return null;
   const assetId = cleanText(raw.id, 80);
   const filename = cleanText(raw.filename, 160).replace(/[^a-zA-Z0-9._-]/g, "");
   if (!assetId || !filename) return null;
-  const category = ["token", "map", "prop"].includes(raw.category) ? raw.category : "token";
+  const category = ["token", "map", "prop", "source"].includes(raw.category) ? raw.category : "token";
   return {
     id: assetId,
     name: cleanText(raw.name, 80) || "Безымянный ресурс",
@@ -569,6 +617,7 @@ function normalizeAsset(raw, roomCodeValue = "") {
     folder: cleanText(raw.folder,60),
     tags: Array.isArray(raw.tags) ? [...new Set(raw.tags.map(tag => cleanText(tag, 30)).filter(Boolean))].slice(0, 20) : [],
     hash: cleanText(raw.hash, 128),
+    tokenRecipe: category === "token" ? normalizeTokenRecipe(raw.tokenRecipe) : null,
     createdAt: Math.max(0, Number(raw.createdAt) || Date.now())
   };
 }
@@ -1482,7 +1531,7 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
   const room = rooms[code];
   if (!room || room.dmId !== clientId) return res.status(403).json({ ok:false, error:"Только ведущий загружает ресурсы" });
   ensureRoomVtt(room);
-  const category = ["token", "map", "prop"].includes(req.body?.category) ? req.body.category : "token";
+  const category = ["token", "map", "prop", "source"].includes(req.body?.category) ? req.body.category : "token";
   const dataUrl = String(req.body?.dataUrl || "");
   const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([a-zA-Z0-9+/=\r\n]+)$/);
   if (!match) return res.status(400).json({ ok:false, error:"Поддерживаются PNG, JPG, WebP и GIF" });
@@ -1493,8 +1542,50 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
   if (!imageSignatureMatches(buffer, mimeType)) return res.status(400).json({ ok:false, error:"Содержимое файла не соответствует формату изображения" });
   const extension = { "image/png":"png", "image/jpeg":"jpg", "image/webp":"webp", "image/gif":"gif" }[mimeType];
   const hash = crypto.createHash("sha256").update(buffer).digest("hex");
-  const duplicate = room.assets.find(asset => asset.hash === hash && asset.category === category);
-  if (duplicate) return res.json({ ok:true, asset:{ ...duplicate, usageCount:assetUsageCount(room, duplicate.id, true) }, duplicate:true });
+  const replaceAssetId = cleanText(req.body?.replaceAssetId,80);
+  if (replaceAssetId) {
+    const replacement = room.assets.find(asset => asset.id === replaceAssetId && asset.category === "token");
+    if (!replacement) return res.status(404).json({ ok:false, error:"Редактируемый токен не найден" });
+    const directory = path.join(ASSET_DIR, code);
+    fs.mkdirSync(directory, { recursive:true });
+    const oldFilepath = path.join(directory, replacement.filename);
+    const filename = `${replacement.id}-${Date.now().toString(36)}.${extension}`;
+    fs.writeFileSync(path.join(directory, filename), buffer);
+    if (replacement.filename !== filename) try { fs.rmSync(oldFilepath, { force:true }); } catch {}
+    replacement.name = cleanText(req.body?.name,80) || replacement.name;
+    replacement.filename = filename;
+    replacement.url = `/assets/${code}/${filename}`;
+    replacement.mimeType = mimeType;
+    replacement.bytes = buffer.length;
+    replacement.width = Math.max(0,Math.min(20000,Number(req.body?.width)||0));
+    replacement.height = Math.max(0,Math.min(20000,Number(req.body?.height)||0));
+    replacement.defaultSize = Math.max(.25,Math.min(30,Number(req.body?.defaultSize)||replacement.defaultSize||1));
+    replacement.folder = cleanText(req.body?.folder,60);
+    replacement.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag=>cleanText(tag,30)).filter(Boolean))].slice(0,20) : [];
+    replacement.hash = hash;
+    replacement.tokenRecipe = normalizeTokenRecipe(req.body?.tokenRecipe);
+    room.scenes.forEach(scene => scene.tokens.forEach(token => {
+      if (token.assetId !== replacement.id) return;
+      token.imageUrl = replacement.url;
+      token.forged = Boolean(replacement.tokenRecipe);
+      token.tokenShape = replacement.tokenRecipe?.shape || token.tokenShape || "circle";
+    }));
+    room.scene = room.scenes.find(scene => scene.id === room.activeSceneId) || room.scenes[0];
+    saveRooms(); await emitRoom(code);
+    return res.json({ ok:true, asset:{ ...replacement, usageCount:assetUsageCount(room,replacement.id,true) }, updated:true });
+  }
+  const duplicate = room.assets.find(asset => asset.hash === hash && asset.category === category && (category !== "token" || !req.body?.tokenRecipe || asset.tokenRecipe));
+  if (duplicate) {
+    if (category === "token" && req.body?.tokenRecipe) {
+      duplicate.name = cleanText(req.body?.name,80) || duplicate.name;
+      duplicate.defaultSize = Math.max(.25,Math.min(30,Number(req.body?.defaultSize)||duplicate.defaultSize));
+      duplicate.folder = cleanText(req.body?.folder,60) || duplicate.folder;
+      duplicate.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag=>cleanText(tag,30)).filter(Boolean))].slice(0,20) : duplicate.tags;
+      duplicate.tokenRecipe = normalizeTokenRecipe(req.body.tokenRecipe);
+      saveRooms(); await emitRoom(code);
+    }
+    return res.json({ ok:true, asset:{ ...duplicate, usageCount:assetUsageCount(room, duplicate.id, true) }, duplicate:true });
+  }
   const assetId = id();
   const filename = `${assetId}.${extension}`;
   const directory = path.join(ASSET_DIR, code);
@@ -1513,6 +1604,7 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
     folder:cleanText(req.body?.folder,60),
     tags:Array.isArray(req.body?.tags) ? req.body.tags : [],
     hash,
+    tokenRecipe:category === "token" ? req.body?.tokenRecipe : null,
     createdAt:Date.now()
   }, code);
   room.assets.push(asset);
@@ -1530,10 +1622,12 @@ app.patch("/api/rooms/:code/assets/:assetId", async (req, res) => {
   const asset = room.assets.find(entry => entry.id === cleanText(req.params.assetId, 80));
   if (!asset) return res.status(404).json({ ok:false, error:"Ресурс не найден" });
   asset.name = cleanText(req.body?.name ?? asset.name, 80) || asset.name;
-  asset.category = ["token", "map", "prop"].includes(req.body?.category) ? req.body.category : asset.category;
+  asset.category = ["token", "map", "prop", "source"].includes(req.body?.category) ? req.body.category : asset.category;
   asset.defaultSize = Math.max(0.25, Math.min(30, Number(req.body?.defaultSize) || asset.defaultSize));
   asset.folder = cleanText(req.body?.folder ?? asset.folder,60);
   asset.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag => cleanText(tag,30)).filter(Boolean))].slice(0,20) : asset.tags;
+  if (asset.category === "token" && req.body?.tokenRecipe) asset.tokenRecipe = normalizeTokenRecipe(req.body.tokenRecipe);
+  if (asset.category !== "token") asset.tokenRecipe = null;
   saveRooms();
   await emitRoom(code);
   res.json({ ok:true, asset:{ ...asset, usageCount:assetUsageCount(room, asset.id, true) } });
@@ -1821,6 +1915,7 @@ io.on("connection", (socket) => {
     ensureRoomVtt(room);
     const asset = room.assets.find(entry => entry.id === cleanText(payload.assetId,80));
     if (!asset) return reply({ ok:false, error:"Ресурс не найден в библиотеке" });
+    if (asset.category === "source") return reply({ ok:false, error:"Исходник Кузницы нельзя размещать на сцене" });
     const scene = activeScene(room);
     rememberScene(room, scene);
     const snap = value => scene.grid.snap ? Math.round(Number(value)||0) : Math.round((Number(value)||0)*10)/10;
@@ -1833,13 +1928,18 @@ io.on("connection", (socket) => {
       const existing = scene.tokens.filter(token => token.assetId === asset.id).length;
       for (let index=0; index<count; index+=1) {
         const tokenId = id(); createdIds.push(tokenId);
+        const defaults=asset.tokenRecipe?.defaults || {};
+        const hpMax=Math.max(1,Math.min(1000000,Number(payload.hpMax ?? defaults.hpMax)||10));
         scene.tokens.push({
           id:tokenId, assetId:asset.id, playerId:"",
           name:count > 1 || existing ? `${baseName} ${existing + index + 1}` : baseName,
-          x:x + index, y, size:Math.max(.25,Math.min(12,Number(payload.size)||asset.defaultSize||1)), rotation:0, opacity:1,
-          color:/^#[0-9a-f]{6}$/i.test(payload.color) ? payload.color : "#9f7842", imageUrl:asset.url,
-          vision:Math.max(0,Math.min(10000,Number(payload.vision)||60)), hidden:Boolean(payload.hidden), locked:false, z:100,
-          showName:true, showHp:true, showAc:false, attachment:null,
+          x:x + index, y, size:Math.max(.25,Math.min(12,Number(payload.size ?? defaults.size)||asset.defaultSize||1)), rotation:0, opacity:1,
+          color:/^#[0-9a-f]{6}$/i.test(payload.color) ? payload.color : asset.tokenRecipe?.frame?.primary || "#9f7842", imageUrl:asset.url,
+          forged:Boolean(payload.forged ?? asset.tokenRecipe), tokenShape:["circle","square","hex"].includes(payload.tokenShape) ? payload.tokenShape : asset.tokenRecipe?.shape || "circle",
+          disposition:["friendly","neutral","hostile"].includes(payload.disposition) ? payload.disposition : defaults.disposition || "neutral",
+          vision:Math.max(0,Math.min(10000,Number(payload.vision ?? defaults.vision)||60)), hidden:Boolean(payload.hidden), locked:false, z:100,
+          showName:(payload.showName ?? defaults.showName) !== false, showHp:(payload.showHp ?? defaults.showHp) !== false, showAc:Boolean(payload.showAc ?? defaults.showAc), attachment:null,
+          hpMax, hp:Math.max(0,Math.min(hpMax,(payload.hp ?? defaults.hp) === undefined ? hpMax : Number(payload.hp ?? defaults.hp)||0)), tempHp:0, ac:Math.max(0,Math.min(1000,Number(payload.ac ?? defaults.ac)||10)),
           initiativeBonus:Math.max(-100,Math.min(100,Number(payload.initiativeBonus)||0)), initiativeAdvantage:false, initiative:null
         });
       }
@@ -1974,6 +2074,8 @@ io.on("connection", (socket) => {
       size:Math.max(0.25, Math.min(12, Number(player ? sheet.tokenScale : payload.size) || 1)), rotation:Number(payload.rotation)||0, opacity:Number(payload.opacity)||1,
       color:/^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : payload.color) ? (player ? sheet.tokenColor : payload.color) : "#9f7842",
       imageUrl:cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : payload.imageUrl, 1000),
+      forged:player ? false : Boolean(payload.forged), tokenShape:["circle","square","hex"].includes(payload.tokenShape) ? payload.tokenShape : "circle",
+      disposition:player ? "friendly" : ["friendly","neutral","hostile"].includes(payload.disposition) ? payload.disposition : "neutral",
       vision:Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : payload.vision) || 0)),
       hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:100,
       showName:payload.showName !== false, showHp:payload.showHp !== false, showAc:Boolean(payload.showAc),

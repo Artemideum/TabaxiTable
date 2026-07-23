@@ -210,11 +210,11 @@
   }
 
   function assetCard(asset) {
-    const categoryLabel = { token:"Токен", map:"Карта", prop:"Объект" }[asset.category] || "Ресурс";
-    return `<article class="vtt-asset-card" draggable="true" data-vtt-asset="${esc(asset.id)}">
+    const categoryLabel = { token:"Токен", map:"Карта", prop:"Объект", source:"Исходник" }[asset.category] || "Ресурс";
+    return `<article class="vtt-asset-card" draggable="${asset.category === "source" ? "false" : "true"}" data-vtt-asset="${esc(asset.id)}">
       <div class="vtt-asset-preview"><img src="${esc(asset.url)}" alt=""><span>${categoryLabel}</span></div>
       <div class="vtt-asset-info"><strong title="${esc(asset.name)}">${esc(asset.name)}</strong><small>${asset.folder ? `▤ ${esc(asset.folder)} · ` : ""}${asset.usageCount ? `На сценах: ${Number(asset.usageCount)}` : "Ещё не размещён"}</small></div>
-      <div class="vtt-asset-actions"><button type="button" data-vtt-place="${esc(asset.id)}" title="Поставить в центр">＋</button><button type="button" data-vtt-asset-edit="${esc(asset.id)}" title="Настроить">⋮</button></div>
+      <div class="vtt-asset-actions">${asset.category === "token" && asset.tokenRecipe ? `<button type="button" data-vtt-forge-edit="${esc(asset.id)}" title="Открыть рецепт в Кузнице">✦</button>` : ""}${asset.category !== "source" ? `<button type="button" data-vtt-place="${esc(asset.id)}" title="Поставить в центр">＋</button>` : ""}<button type="button" data-vtt-asset-edit="${esc(asset.id)}" title="Настроить">⋮</button></div>
     </article>`;
   }
 
@@ -251,7 +251,7 @@
     const selected = selectionHas(selection, "token", token.id);
     const canTransform = isDm;
     const transforming = transformRefMatches("token",token.id);
-    return `<button type="button" class="vtt-token ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selected ? "is-selected" : ""} ${transforming ? "is-transforming" : ""} ${token.id === currentId ? "is-current" : ""} ${hp <= 0 ? "is-down" : ""}"
+    return `<button type="button" class="vtt-token ${token.forged ? "is-forged" : ""} token-shape-${esc(token.tokenShape || "circle")} disposition-${esc(token.disposition || "neutral")} ${token.hidden ? "is-hidden" : ""} ${token.locked ? "is-locked" : ""} ${selected ? "is-selected" : ""} ${transforming ? "is-transforming" : ""} ${token.id === currentId ? "is-current" : ""} ${hp <= 0 ? "is-down" : ""}"
       data-vtt-token="${esc(token.id)}" data-vtt-movable="${movable && (!token.locked || isDm) ? "1" : "0"}"
       style="left:${position.left}px;top:${position.top}px;width:${size * metrics.cell}px;height:${size * metrics.cell}px;--rotation:${Number(token.rotation) || 0}deg;--opacity:${Number(token.opacity) || 1};--z:${Number(token.z) || 100};--color:${esc(token.color || "#9f7842")};--badge-color:${esc(token.badgeColor || "#f4c875")}"
       title="${esc(token.name)} · HP ${hp}/${hpMax}${tempHp ? ` +${tempHp}` : ""} · КД ${Number(token.ac || 0)}">
@@ -466,7 +466,7 @@
 
   function libraryPanel(room, assets) {
     const folders=[...new Set((room.assets||[]).map(asset=>asset.folder||"Без папки"))].sort((a,b)=>a.localeCompare(b,"ru"));
-    return `<div class="vtt-panel-head"><div><span class="eyebrow">С компьютера</span><h3>Ресурсы</h3></div><b>${Number(room.assets?.length||0)}</b></div><div class="vtt-upload-grid"><button data-vtt-upload="token">＋ Токены</button><button data-vtt-upload="map">＋ Карты</button><button data-vtt-upload="prop">＋ Объекты</button></div><div class="vtt-library-search"><input id="vtt-asset-search" type="search" value="${esc(assetSearch)}" placeholder="Поиск…"><select id="vtt-asset-folder"><option value="all">Все папки</option>${folders.map(folder=>`<option value="${esc(folder)}" ${assetFolder===folder?"selected":""}>${esc(folder)}</option>`).join("")}</select></div><div class="vtt-asset-filters"><button data-vtt-asset-filter="all" class="${assetFilter==="all"?"active":""}">Все</button><button data-vtt-asset-filter="token" class="${assetFilter==="token"?"active":""}">Токены</button><button data-vtt-asset-filter="map" class="${assetFilter==="map"?"active":""}">Карты</button><button data-vtt-asset-filter="prop" class="${assetFilter==="prop"?"active":""}">Объекты</button></div><div class="vtt-asset-list">${assets.length?assets.map(assetCard).join(""):`<div class="vtt-library-empty"><span>▧</span><strong>${room.assets?.length?"Ничего не найдено":"Библиотека пуста"}</strong><p>Используй папки, теги и поиск.</p></div>`}</div>`;
+    return `<div class="vtt-panel-head"><div><span class="eyebrow">С компьютера</span><h3>Ресурсы</h3></div><b>${Number(room.assets?.length||0)}</b></div><div class="vtt-upload-grid"><button data-vtt-upload="token">＋ Токены</button><button data-vtt-upload="map">＋ Карты</button><button data-vtt-upload="prop">＋ Объекты</button></div><div class="vtt-library-search"><input id="vtt-asset-search" type="search" value="${esc(assetSearch)}" placeholder="Поиск…"><select id="vtt-asset-folder"><option value="all">Все папки</option>${folders.map(folder=>`<option value="${esc(folder)}" ${assetFolder===folder?"selected":""}>${esc(folder)}</option>`).join("")}</select></div><div class="vtt-asset-filters"><button data-vtt-asset-filter="all" class="${assetFilter==="all"?"active":""}">Все</button><button data-vtt-asset-filter="token" class="${assetFilter==="token"?"active":""}">Токены</button><button data-vtt-asset-filter="map" class="${assetFilter==="map"?"active":""}">Карты</button><button data-vtt-asset-filter="prop" class="${assetFilter==="prop"?"active":""}">Объекты</button><button data-vtt-asset-filter="source" class="${assetFilter==="source"?"active":""}">Исходники</button></div><div class="vtt-asset-list">${assets.length?assets.map(assetCard).join(""):`<div class="vtt-library-empty"><span>▧</span><strong>${room.assets?.length?"Ничего не найдено":"Библиотека пуста"}</strong><p>Используй папки, теги и поиск.</p></div>`}</div>`;
   }
 
   function encounterPanel(room) {
@@ -529,7 +529,7 @@
     const entries = selectedEntries(room);
     const order = sceneOrder(scene);
     const current = order.find(token => token.id === scene.initiative?.currentTokenId);
-    const assets = (room.assets || []).filter(asset => assetFilter === "all" || asset.category === assetFilter)
+    const assets = (room.assets || []).filter(asset => assetFilter === "source" ? asset.category === "source" : asset.category !== "source" && (assetFilter === "all" || asset.category === assetFilter))
       .filter(asset => assetFolder === "all" || (asset.folder || "Без папки") === assetFolder)
       .filter(asset => !assetSearch || `${asset.name} ${asset.folder || ""} ${(asset.tags || []).join(" ")}`.toLowerCase().includes(assetSearch.toLowerCase()));
     const ownToken = (scene.tokens || []).find(token => token.playerId === ctx.clientId);
@@ -540,6 +540,7 @@
     const selectedNpc = entries.length === 1 && entries[0].kind === "token" && !entries[0].value.playerId ? entries[0].value : null;
     if (linkedCharacterId && ui.rightPanel === "character") ui.characterPlayerId = linkedCharacterId;
     const characterId = ui.characterPlayerId && ctx.characters?.[ui.characterPlayerId] ? ui.characterPlayerId : ctx.characters?.[ctx.clientId] ? ctx.clientId : Object.keys(ctx.characters || {})[0];
+    const forgeOpen = ui.leftPanel === "forge" && isDm;
     const leftContent = ui.leftPanel === "library" && isDm ? libraryPanel(room, assets) : ui.leftPanel === "scenes" ? scenesPanel(room, isDm) : ui.leftPanel === "tools" ? toolsPanel(grid, entries.length, isDm, diceColor) : ui.leftPanel === "encounters" && isDm ? encounterPanel(room) : "";
     const rightContent = ui.rightPanel === "inspector" ? inspectorMarkup(entries, isDm, ctx.clientId) : ui.rightPanel === "initiative" ? initiativePanelMarkup(scene, order, isDm) : ui.rightPanel === "character" ? (selectedNpc ? npcCharacterPanelMarkup(selectedNpc,isDm) : characterPanelMarkup(ctx.characters || {}, characterId, isDm, ctx.clientId, scene)) : "";
 
@@ -568,7 +569,7 @@
       </header>
 
       <nav class="vtt-left-rail">
-        ${isDm ? `<button data-vtt-panel-left="library" class="${ui.leftPanel === "library" ? "active" : ""}" title="Ресурсы"><span>▧</span></button><button data-vtt-panel-left="encounters" class="${ui.leftPanel === "encounters" ? "active" : ""}" title="Группы противников"><span>⚔</span></button>` : ""}
+        ${isDm ? `<button data-vtt-panel-left="forge" class="${ui.leftPanel === "forge" ? "active" : ""}" title="Кузница токенов"><span>⬡</span></button><button data-vtt-panel-left="library" class="${ui.leftPanel === "library" ? "active" : ""}" title="Ресурсы"><span>▧</span></button><button data-vtt-panel-left="encounters" class="${ui.leftPanel === "encounters" ? "active" : ""}" title="Группы противников"><span>⚔</span></button>` : ""}
         <button data-vtt-panel-left="scenes" class="${ui.leftPanel === "scenes" ? "active" : ""}" title="Сцены"><span>▤</span></button>
         <button data-vtt-panel-left="tools" class="${ui.leftPanel === "tools" ? "active" : ""}" title="Инструменты"><span>⌘</span></button>
         <i></i>${toolRailMarkup(isDm)}
@@ -576,6 +577,7 @@
 
       <nav class="vtt-right-rail"><button data-vtt-panel-right="character" class="${ui.rightPanel === "character" ? "active" : ""}" title="Мини-лист персонажа"><span>☷</span></button><button data-vtt-panel-right="inspector" class="${ui.rightPanel === "inspector" ? "active" : ""}" title="Инспектор"><span>◆</span>${entries.length ? `<b>${entries.length}</b>` : ""}</button><button data-vtt-panel-right="initiative" class="${ui.rightPanel === "initiative" ? "active" : ""}" title="Инициатива"><span>⚔</span>${order.length ? `<b>${order.length}</b>` : ""}</button></nav>
 
+      ${forgeOpen ? window.TT_TOKEN_FORGE?.markup?.(ctx) || "" : ""}
       ${leftContent ? `<aside class="vtt-floating-panel vtt-panel-left">${leftContent}</aside>` : ""}
       ${rightContent ? `<aside class="vtt-floating-panel vtt-panel-right ${ui.rightPanel === "initiative" ? "vtt-initiative-panel" : ui.rightPanel === "character" ? "vtt-character-panel" : ""}">${rightContent}</aside>` : ""}
       ${contextMenuMarkup(room,isDm,ctx.clientId)}
@@ -722,6 +724,18 @@
       ui.leftPanel = ui.leftPanel === panel ? null : panel;
       render(root, ctx);
     }, { signal }));
+    if (ui.leftPanel === "forge" && isDm) {
+      const refreshForgeButtons = disabled => root.querySelectorAll("[data-forge-save],[data-forge-save-place]").forEach(button => { button.disabled = Boolean(disabled); });
+      window.TT_TOKEN_FORGE?.bind?.(root,ctx,{
+        rerender:()=>render(root,ctx),
+        close:()=>{ui.leftPanel=null;render(root,ctx);},
+        cameraCenterGrid,
+        emit:(event,payload)=>emit(ctx,event,payload),
+        toast:message=>ctx.toast(message),
+        refreshButtons:refreshForgeButtons
+      });
+    }
+
     root.querySelectorAll("[data-vtt-panel-right]").forEach(button => button.addEventListener("click", () => {
       const panel = button.dataset.vttPanelRight;
       ui.rightPanel = ui.rightPanel === panel ? null : panel;
@@ -1395,7 +1409,7 @@
         if (next) { next.focus(); next.setSelectionRange(position, position); }
       });
     }, { signal });
-    root.querySelectorAll("[data-vtt-asset]").forEach(card => card.addEventListener("dragstart", event => {
+    root.querySelectorAll('[data-vtt-asset][draggable="true"]').forEach(card => card.addEventListener("dragstart", event => {
       event.dataTransfer.setData("text/tabaxi-asset", card.dataset.vttAsset);
       event.dataTransfer.effectAllowed = "copy";
     }, { signal }));
@@ -1411,6 +1425,10 @@
       emit(ctx, "scene:asset-place", { assetId:button.dataset.vttPlace, x:point.x, y:point.y }, "Ресурс размещён");
     }, { signal }));
     root.querySelectorAll("[data-vtt-asset-edit]").forEach(button => button.addEventListener("click", () => openAssetEditor(ctx, (room.assets || []).find(asset => asset.id === button.dataset.vttAssetEdit)), { signal }));
+    root.querySelectorAll("[data-vtt-forge-edit]").forEach(button => button.addEventListener("click", () => {
+      const asset=(room.assets||[]).find(entry=>entry.id===button.dataset.vttForgeEdit);
+      window.TT_TOKEN_FORGE?.openAsset?.(asset,room); ui.leftPanel="forge"; render(root,ctx);
+    }, { signal }));
 
     let uploadCategory = "token";
     const input = root.querySelector("#vtt-file-input");
@@ -1587,7 +1605,7 @@
 
   function openAssetEditor(ctx, asset) {
     if (!asset) return;
-    ctx.openModal("Ресурс библиотеки", `<div class="vtt-modal-form"><div class="vtt-asset-large"><img src="${esc(asset.url)}" alt=""></div><label>Название<input id="vtt-asset-name" value="${esc(asset.name)}"></label><div class="two-col"><label>Категория<select id="vtt-asset-category"><option value="token" ${asset.category === "token" ? "selected" : ""}>Токен</option><option value="map" ${asset.category === "map" ? "selected" : ""}>Карта</option><option value="prop" ${asset.category === "prop" ? "selected" : ""}>Объект</option></select></label><label>Размер по умолчанию<input id="vtt-asset-size" type="number" min="0.25" max="30" step="0.25" value="${Number(asset.defaultSize || 1)}"></label></div><div class="two-col"><label>Папка<input id="vtt-asset-folder-edit" value="${esc(asset.folder||"")}"></label><label>Теги через запятую<input id="vtt-asset-tags" value="${esc((asset.tags || []).join(", "))}"></label></div><div class="modal-actions"><button id="vtt-asset-save" class="primary">Сохранить</button><button id="vtt-asset-delete" class="danger-action">Удалить</button><button id="vtt-modal-cancel">Отмена</button></div></div>`);
+    ctx.openModal("Ресурс библиотеки", `<div class="vtt-modal-form"><div class="vtt-asset-large"><img src="${esc(asset.url)}" alt=""></div><label>Название<input id="vtt-asset-name" value="${esc(asset.name)}"></label><div class="two-col"><label>Категория<select id="vtt-asset-category"><option value="token" ${asset.category === "token" ? "selected" : ""}>Токен</option><option value="map" ${asset.category === "map" ? "selected" : ""}>Карта</option><option value="prop" ${asset.category === "prop" ? "selected" : ""}>Объект</option><option value="source" ${asset.category === "source" ? "selected" : ""}>Исходник Кузницы</option></select></label><label>Размер по умолчанию<input id="vtt-asset-size" type="number" min="0.25" max="30" step="0.25" value="${Number(asset.defaultSize || 1)}"></label></div><div class="two-col"><label>Папка<input id="vtt-asset-folder-edit" value="${esc(asset.folder||"")}"></label><label>Теги через запятую<input id="vtt-asset-tags" value="${esc((asset.tags || []).join(", "))}"></label></div><div class="modal-actions"><button id="vtt-asset-save" class="primary">Сохранить</button><button id="vtt-asset-delete" class="danger-action">Удалить</button><button id="vtt-modal-cancel">Отмена</button></div></div>`);
     document.querySelector("#vtt-asset-save")?.addEventListener("click", async () => {
       const response = await fetch(`/api/rooms/${ctx.room.code}/assets/${asset.id}`, { method:"PATCH", headers:{ "content-type":"application/json", "x-client-id":ctx.clientId }, body:JSON.stringify({ name:document.querySelector("#vtt-asset-name").value, category:document.querySelector("#vtt-asset-category").value, defaultSize:Number(document.querySelector("#vtt-asset-size").value), folder:document.querySelector("#vtt-asset-folder-edit").value, tags:document.querySelector("#vtt-asset-tags").value.split(",").map(value => value.trim()).filter(Boolean) }) }).then(response => response.json()).catch(() => ({ ok:false, error:"Сеть недоступна" }));
       if (!response.ok) ctx.toast(response.error); else { ctx.toast("Ресурс обновлён"); ctx.closeModal(); }
