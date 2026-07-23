@@ -96,3 +96,16 @@ test("каталог полностью локализован и магичес
   const flameVariant = itemSystem.buildMagicVariant(flameTongue,longbow);
   assert.deepEqual(flameVariant.extraDamage, { formula:"2d6", damageType:"огненный" });
 });
+
+
+test("предметы Занатара и Таши подключаются отдельным локальным каталогом", () => {
+  global.window.TT_ITEMS_XGTE_TCOE = undefined;
+  delete require.cache[require.resolve(path.join(process.cwd(), "public", "items-xgte-tcoe.js"))];
+  require(path.join(process.cwd(), "public", "items-xgte-tcoe.js"));
+  const supplemental = global.window.TT_ITEMS_XGTE_TCOE;
+  assert.equal(supplemental.length, 107);
+  assert.equal(supplemental.filter(item => item.sourceId === "xgte").length, 48);
+  assert.equal(supplemental.filter(item => item.sourceId === "tcoe").length, 59);
+  assert.equal(new Set(supplemental.map(item => item.key)).size, supplemental.length);
+  assert.ok(supplemental.some(item => item.spellBonus > 0 && Array.isArray(item.spellClassKeys)));
+});

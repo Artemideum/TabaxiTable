@@ -9,7 +9,10 @@ TabaxiTable — русскоязычный виртуальный стол и и
 - Клиент без сборщика: `public/index.html`, `public/style.css`, `public/app.js`.
 - Виртуальный стол вынесен в `public/vtt.js` и `public/vtt.css`; не возвращать его в монолит `app.js`.
 - Загруженные пользователем карты и токены хранятся в `data/assets/`, а метаданные — внутри комнаты в `data/rooms.json`.
-- Каталог заклинаний: `public/spells-5e.json`.
+- Базовые правила: `public/rules-5e.js`; дополнительные источники подключаются через `public/content-packs.js` и `public/content-details-xgte-tcoe.js`.
+- Автоматические списки магии подклассов: `public/subclass-spells-xgte-tcoe.js`.
+- Каталоги заклинаний: `public/spells-5e.json`, `public/spells-phb-support-xgte-tcoe.json`, `public/spells-xgte-tcoe.json`.
+- Каталоги предметов: `public/items-5e.js` и `public/items-xgte-tcoe.js`.
 - Интеграционные проверки: `test/integration.test.js`.
 - Стандартный локальный адрес: `http://localhost:31777`.
 

@@ -1,0 +1,485 @@
+[
+  {
+    "key": "color-spray",
+    "name": "Цветной спрей",
+    "originalName": "Color Spray",
+    "level": 1,
+    "school": "Иллюзия",
+    "castingTime": "1 действие",
+    "range": "На себя, конус 15 футов",
+    "duration": "1 раунд",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Чародей",
+      "Волшебник"
+    ],
+    "description": "Ослепляющий веер цветов временно выводит из строя существ с небольшим запасом HP.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "enlarge-reduce",
+    "name": "Увеличение/Уменьшение",
+    "originalName": "Enlarge/Reduce",
+    "level": 2,
+    "school": "Преобразование",
+    "castingTime": "1 действие",
+    "range": "30 футов",
+    "duration": "Концентрация, до 1 минуты",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Изобретатель",
+      "Чародей",
+      "Волшебник"
+    ],
+    "description": "Изменяет размер существа или предмета, вместе с его силой и уроном оружия.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "prismatic-spray",
+    "name": "Радужные брызги",
+    "originalName": "Prismatic Spray",
+    "level": 7,
+    "school": "Воплощение",
+    "castingTime": "1 действие",
+    "range": "На себя, конус 60 футов",
+    "duration": "Мгновенная",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Чародей",
+      "Волшебник"
+    ],
+    "description": "Семь разноцветных лучей создают случайные разрушительные или сдерживающие эффекты.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "antipathy-sympathy",
+    "name": "Антипатия/Симпатия",
+    "originalName": "Antipathy/Sympathy",
+    "level": 8,
+    "school": "Очарование",
+    "castingTime": "1 час",
+    "range": "60 футов",
+    "duration": "10 дней",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Друид",
+      "Волшебник"
+    ],
+    "description": "Наделяет цель аурой, которая отталкивает или непреодолимо привлекает выбранный вид существ.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "prismatic-wall",
+    "name": "Радужная стена",
+    "originalName": "Prismatic Wall",
+    "level": 9,
+    "school": "Ограждение",
+    "castingTime": "1 действие",
+    "range": "60 футов",
+    "duration": "10 минут",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Волшебник"
+    ],
+    "description": "Создаёт многослойную сияющую преграду, каждый цвет которой имеет собственную защиту и опасность.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "sunbeam",
+    "name": "Солнечный луч",
+    "originalName": "Sunbeam",
+    "level": 6,
+    "school": "Воплощение",
+    "castingTime": "1 действие",
+    "range": "На себя, линия 60 футов",
+    "duration": "Концентрация, до 1 минуты",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Друид",
+      "Чародей",
+      "Волшебник"
+    ],
+    "description": "Сияющий луч наносит урон излучением и может ослепить существ; его можно выпускать повторно.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "power-word-heal",
+    "name": "Слово силы: Исцеление",
+    "originalName": "Power Word Heal",
+    "level": 9,
+    "school": "Воплощение",
+    "castingTime": "1 действие",
+    "range": "Касание",
+    "duration": "Мгновенная",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Бард"
+    ],
+    "description": "Полностью восстанавливает HP существа и снимает несколько тяжёлых состояний.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "protection-from-evil-and-good",
+    "name": "Защита от зла и добра",
+    "originalName": "Protection from Evil and Good",
+    "level": 1,
+    "school": "Ограждение",
+    "castingTime": "1 действие",
+    "range": "Касание",
+    "duration": "Концентрация, до 10 минут",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Жрец",
+      "Паладин",
+      "Колдун",
+      "Волшебник"
+    ],
+    "description": "Защищает цель от аберраций, небожителей, элементалей, фей, исчадий и нежити.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "augury",
+    "name": "Гадание",
+    "originalName": "Augury",
+    "level": 2,
+    "school": "Прорицание",
+    "castingTime": "1 минута",
+    "range": "На себя",
+    "duration": "Мгновенная",
+    "damage": "",
+    "ritual": true,
+    "concentration": false,
+    "classes": [
+      "Жрец"
+    ],
+    "description": "Даёт краткое предзнаменование о последствиях конкретного решения в ближайшие полчаса.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "continual-flame",
+    "name": "Вечный огонь",
+    "originalName": "Continual Flame",
+    "level": 2,
+    "school": "Воплощение",
+    "castingTime": "1 действие",
+    "range": "Касание",
+    "duration": "Пока не рассеяно",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Жрец",
+      "Волшебник"
+    ],
+    "description": "Создаёт постоянное безвредное пламя, которое светит как факел.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "divination",
+    "name": "Предсказание",
+    "originalName": "Divination",
+    "level": 4,
+    "school": "Прорицание",
+    "castingTime": "1 действие",
+    "range": "На себя",
+    "duration": "Мгновенная",
+    "damage": "",
+    "ritual": true,
+    "concentration": false,
+    "classes": [
+      "Жрец"
+    ],
+    "description": "Позволяет получить правдивый совет о цели, событии или деятельности в ближайшие семь дней.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "flesh-to-stone",
+    "name": "Плоть в камень",
+    "originalName": "Flesh to Stone",
+    "level": 6,
+    "school": "Преобразование",
+    "castingTime": "1 действие",
+    "range": "60 футов",
+    "duration": "Концентрация, до 1 минуты",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Колдун",
+      "Волшебник"
+    ],
+    "description": "Постепенно превращает существо в камень при серии проваленных спасбросков.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "symbol",
+    "name": "Символ",
+    "originalName": "Symbol",
+    "level": 7,
+    "school": "Ограждение",
+    "castingTime": "1 минута",
+    "range": "Касание",
+    "duration": "Пока не рассеяно или не сработает",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Бард",
+      "Жрец",
+      "Волшебник"
+    ],
+    "description": "Накладывает скрытую магическую печать с выбранным опасным эффектом.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "incendiary-cloud",
+    "name": "Огненное облако",
+    "originalName": "Incendiary Cloud",
+    "level": 8,
+    "school": "Вызов",
+    "castingTime": "1 действие",
+    "range": "150 футов",
+    "duration": "Концентрация, до 1 минуты",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Друид",
+      "Чародей",
+      "Волшебник"
+    ],
+    "description": "Создаёт движущееся облако дыма и пламени, которое причиняет сильный огненный урон.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "prayer-of-healing",
+    "name": "Молебен лечения",
+    "originalName": "Prayer of Healing",
+    "level": 2,
+    "school": "Воплощение",
+    "castingTime": "10 минут",
+    "range": "30 футов",
+    "duration": "Мгновенная",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Жрец"
+    ],
+    "description": "После длительного сотворения лечит до шести существ.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "meld-into-stone",
+    "name": "Слияние с камнем",
+    "originalName": "Meld into Stone",
+    "level": 3,
+    "school": "Преобразование",
+    "castingTime": "1 действие",
+    "range": "Касание",
+    "duration": "8 часов",
+    "damage": "",
+    "ritual": true,
+    "concentration": false,
+    "classes": [
+      "Жрец",
+      "Друид"
+    ],
+    "description": "Позволяет войти внутрь достаточно большого каменного объекта и скрыться в нём.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "grease",
+    "name": "Скольжение",
+    "originalName": "Grease",
+    "level": 1,
+    "school": "Вызов",
+    "castingTime": "1 действие",
+    "range": "60 футов",
+    "duration": "1 минута",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Волшебник"
+    ],
+    "description": "Покрывает участок скользким жиром и может сбить существ с ног.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "flame-blade",
+    "name": "Пламенный клинок",
+    "originalName": "Flame Blade",
+    "level": 2,
+    "school": "Воплощение",
+    "castingTime": "1 бонусное действие",
+    "range": "На себя",
+    "duration": "Концентрация, до 10 минут",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Друид"
+    ],
+    "description": "Создаёт огненный клинок для рукопашных атак заклинанием.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "planar-binding",
+    "name": "Планарное связывание",
+    "originalName": "Planar Binding",
+    "level": 5,
+    "school": "Ограждение",
+    "castingTime": "1 час",
+    "range": "60 футов",
+    "duration": "24 часа",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Бард",
+      "Жрец",
+      "Друид",
+      "Волшебник"
+    ],
+    "description": "Пытается связать небожителя, элементаля, фею или исчадие службой заклинателю.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "weird",
+    "name": "Фантасмагория",
+    "originalName": "Weird",
+    "level": 9,
+    "school": "Иллюзия",
+    "castingTime": "1 действие",
+    "range": "120 футов",
+    "duration": "Концентрация, до 1 минуты",
+    "damage": "",
+    "ritual": false,
+    "concentration": true,
+    "classes": [
+      "Волшебник"
+    ],
+    "description": "Навязывает группе существ их худшие страхи, пугая и причиняя психический урон.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  },
+  {
+    "key": "speak-with-dead",
+    "name": "Разговор с мёртвыми",
+    "originalName": "Speak with Dead",
+    "level": 3,
+    "school": "Некромантия",
+    "castingTime": "1 действие",
+    "range": "10 футов",
+    "duration": "10 минут",
+    "damage": "",
+    "ritual": false,
+    "concentration": false,
+    "classes": [
+      "Бард",
+      "Жрец"
+    ],
+    "description": "Позволяет задать трупу несколько вопросов, не возвращая ему душу или полноценное сознание.",
+    "sourceId": "phb2014",
+    "source": "Player's Handbook (2014)",
+    "supportFor": [
+      "tcoe"
+    ]
+  }
+]

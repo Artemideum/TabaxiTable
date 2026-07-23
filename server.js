@@ -15,7 +15,7 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
-const SHEET_SCHEMA_VERSION = 11;
+const SHEET_SCHEMA_VERSION = 12;
 const SCENE_SCHEMA_VERSION = 10;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -1012,6 +1012,11 @@ function defaultSheet(playerName) {
     levelProgression: [],
     abilityAdvancements: [],
     feats: [],
+    optionalFeatures: [],
+    infusionsKnown: [],
+    infusedItemIds: [],
+    contentSources: ["srd2014","xgte","tcoe"],
+    originCustomization: { enabled:false, flexibleAbilities:[], skillChoice:"", lineageTalent:"darkvision", size:"", languageChoice:"", proficiencyChoice:"", levelOneFeatKey:"", levelOneFeatAbility:"" },
     level: 1,
     race: "",
     ancestryTraits: "",
@@ -1188,7 +1193,12 @@ function normalizeSheet(sheet, playerName) {
       useCondition: COMBAT_CONDITIONS.includes(cleanText(rawItem?.useCondition,40)) ? cleanText(rawItem?.useCondition,40) : "",
       useConcentration: Boolean(rawItem?.useConcentration),
       rarity: cleanText(rawItem?.rarity, 40),
-      source: cleanText(rawItem?.source, 80),
+      source: cleanText(rawItem?.source, 120),
+      sourceId: cleanText(rawItem?.sourceId, 20),
+      spellBonus: Math.max(0, Math.min(5, Number(rawItem?.spellBonus) || 0)),
+      baseSpellBonus: Math.max(0, Math.min(5, Number(rawItem?.baseSpellBonus ?? rawItem?.spellBonus) || 0)),
+      baseMagical: Boolean(rawItem?.baseMagical ?? (rawItem?.magical && !rawItem?.infused)),
+      spellClassKeys: Array.isArray(rawItem?.spellClassKeys) ? rawItem.spellClassKeys.slice(0,20).map(value=>cleanText(value,30)).filter(Boolean) : [],
       costUnit: cleanText(rawItem?.costUnit, 8),
       costValue: Math.max(0, Math.min(999999999, Number(rawItem?.costValue) || 0)),
       rangeNormal: Math.max(0, Math.min(100000, Number(rawItem?.rangeNormal) || 0)),
@@ -1197,6 +1207,10 @@ function normalizeSheet(sheet, playerName) {
       armorType: cleanText(rawItem?.armorType, 20),
       strengthMinimum: Math.max(0, Math.min(30, Number(rawItem?.strengthMinimum) || itemSystem.strengthRequirements[canonical.baseCatalogKey || canonical.catalogKey] || 0)),
       magicBonus: Math.max(-10, Math.min(10, Number(canonical.magicBonus) || 0)),
+      baseMagicBonus: Math.max(-10, Math.min(10, Number(rawItem?.baseMagicBonus ?? canonical.magicBonus) || 0)),
+      infusionKey: cleanText(rawItem?.infusionKey, 80),
+      infusionName: cleanText(rawItem?.infusionName, 120),
+      infused: Boolean(rawItem?.infused || rawItem?.infusionKey),
       equipped: Boolean(rawItem?.equipped),
       attuned: Boolean(rawItem?.attuned),
       magical: Boolean(rawItem?.magical),
@@ -1261,7 +1275,14 @@ function normalizeSheet(sheet, playerName) {
     description: cleanText(spell?.description, 6000),
     rollKind: ["damage","healing","none"].includes(spell?.rollKind) ? spell.rollKind : "",
     effectParts: normalizeParts(spell?.effectParts),
-    upcastParts: normalizeParts(spell?.upcastParts)
+    upcastParts: normalizeParts(spell?.upcastParts),
+    sourceId:cleanText(spell?.sourceId,40),
+    automaticSubclass:Boolean(spell?.automaticSubclass),
+    automaticSubclassKey:cleanText(spell?.automaticSubclassKey,220),
+    alwaysPreparedBySubclass:Boolean(spell?.alwaysPreparedBySubclass),
+    subclassGrantName:cleanText(spell?.subclassGrantName,120),
+    summon:Boolean(spell?.summon),
+    summonProfile:cleanText(spell?.summonProfile,40)
   }));
   const normalized = {
     ...base,
@@ -1280,10 +1301,30 @@ function normalizeSheet(sheet, playerName) {
     levelProgression: savedProgression,
     abilityAdvancements: Array.isArray(incoming.abilityAdvancements) ? incoming.abilityAdvancements.slice(0, 20) : [],
     feats: Array.isArray(incoming.feats) ? incoming.feats.slice(0, 30) : [],
+    optionalFeatures: (Array.isArray(incoming.optionalFeatures) ? incoming.optionalFeatures : []).map(value=>cleanText(value,100)).filter(Boolean).slice(0,100),
+    infusionsKnown: (Array.isArray(incoming.infusionsKnown) ? incoming.infusionsKnown : []).map(value=>cleanText(value,100)).filter(Boolean).slice(0,30),
+    infusedItemIds: (Array.isArray(incoming.infusedItemIds) ? incoming.infusedItemIds : []).map(value=>inventoryIdRemap.get(cleanText(value,80)) || cleanText(value,80)).filter(Boolean).slice(0,20),
+    contentSources: (Array.isArray(incoming.contentSources) ? incoming.contentSources : base.contentSources).map(value=>cleanText(value,40)).filter(Boolean).slice(0,20),
+    originCustomization: {
+      enabled:Boolean(incoming.originCustomization?.enabled),
+      flexibleAbilities:(Array.isArray(incoming.originCustomization?.flexibleAbilities) ? incoming.originCustomization.flexibleAbilities : []).map(value=>cleanText(value,8)).filter(value=>["str","dex","con","int","wis","cha"].includes(value)).slice(0,6),
+      skillChoice:cleanText(incoming.originCustomization?.skillChoice,40),
+      lineageTalent:["darkvision","skill"].includes(incoming.originCustomization?.lineageTalent) ? incoming.originCustomization.lineageTalent : "darkvision",
+      size:["Маленький","Средний"].includes(incoming.originCustomization?.size) ? incoming.originCustomization.size : "",
+      languageChoice:cleanText(incoming.originCustomization?.languageChoice,80),
+      proficiencyChoice:cleanText(incoming.originCustomization?.proficiencyChoice,120),
+      levelOneFeatKey:cleanText(incoming.originCustomization?.levelOneFeatKey,80),
+      levelOneFeatAbility:["str","dex","con","int","wis","cha"].includes(incoming.originCustomization?.levelOneFeatAbility) ? incoming.originCustomization.levelOneFeatAbility : ""
+    },
     hitDicePools: normalizedPools,
     pactSlots: { ...base.pactSlots, ...(incoming.pactSlots || {}) },
     spellSlots: normalizedSlots
   };
+  const inventoryIds = new Set(normalized.inventoryList.map(item=>item.id));
+  normalized.infusedItemIds = normalized.infusedItemIds.filter(itemId=>inventoryIds.has(itemId));
+  normalized.inventoryList.forEach(item => {
+    if (!normalized.infusedItemIds.includes(item.id)) { item.infused=false; item.infusionKey=""; item.infusionName=""; item.magicBonus=Number(item.baseMagicBonus || 0); item.spellBonus=Number(item.baseSpellBonus || 0); item.magical=Boolean(item.baseMagical || item.baseMagicBonus || item.baseSpellBonus); }
+  });
   normalized.schemaVersion = SHEET_SCHEMA_VERSION;
   normalized.diceColor = normalizeDiceColor(incoming.diceColor, base.diceColor);
   normalized.vttUiMode = incoming.vttUiMode === "assistant" ? "assistant" : "veteran";

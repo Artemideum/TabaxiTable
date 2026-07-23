@@ -1,7 +1,7 @@
 const socket = io();
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const SHEET_SCHEMA_VERSION = 11;
+const SHEET_SCHEMA_VERSION = 12;
 function uuid() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16);
@@ -36,7 +36,10 @@ const state = {
 const rules = window.TT_RULES;
 const itemSystem = window.TT_ITEM_SYSTEM;
 let spellCatalog = null;
-const itemCatalog2014 = (Array.isArray(window.TT_ITEMS_2014) ? window.TT_ITEMS_2014 : []).map(item => itemSystem.enrichCatalogItem(item));
+const itemCatalog2014 = [
+  ...(Array.isArray(window.TT_ITEMS_2014) ? window.TT_ITEMS_2014 : []),
+  ...(Array.isArray(window.TT_ITEMS_XGTE_TCOE) ? window.TT_ITEMS_XGTE_TCOE : [])
+].map(item => itemSystem.enrichCatalogItem(item));
 localStorage.setItem("tt-client-id", state.clientId);
 
 const abilities = {
@@ -55,6 +58,13 @@ const conditionNames = ["Скрыт", "Ослеплён", "Очарован", "�
 function esc(value) {
   return String(value ?? "").replace(/[&<>'"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]);
 }
+function sourceShort(sourceId) { return rules.sourceInfo?.(sourceId)?.short || ""; }
+function sourceSuffix(sourceId) { return sourceId && sourceId !== "srd2014" ? ` · ${sourceShort(sourceId)}` : ""; }
+function sourceBadge(sourceId) {
+  if (!sourceId || sourceId === "srd2014") return "";
+  const source = rules.sourceInfo?.(sourceId);
+  return `<span class="content-source-badge" title="${esc(source?.name || sourceId)}">${esc(source?.short || sourceId)}</span>`;
+}
 function modifier(score) { return Math.floor((Number(score || 10) - 10) / 2); }
 function signed(number) { return Number(number) >= 0 ? `+${number}` : String(number); }
 function classEntries(sheet) {
@@ -68,11 +78,15 @@ function classLevel(sheet, classKey) { return Number(classEntries(sheet).find(en
 function hasClass(sheet, classKey) { return classLevel(sheet, classKey) > 0; }
 function featKey(feat) { return typeof feat === "string" ? feat : feat?.key; }
 function hasFeat(sheet, key) { return (sheet.feats || []).some(feat => featKey(feat) === key); }
+function spellFocusBonus(sheet) {
+  const classKeys = new Set(classEntries(sheet).map(entry => entry.key));
+  return (sheet.inventoryList || []).filter(item => item.attuned && Number(item.spellBonus || 0) > 0 && (!Array.isArray(item.spellClassKeys) || item.spellClassKeys.some(key => classKeys.has(key)))).reduce((best,item) => Math.max(best,Number(item.spellBonus || 0)),0);
+}
 function passiveBonus(sheet, key) { return hasFeat(sheet, "observant") && ["perception","investigation"].includes(key) ? 5 : 0; }
 function passivePerception(sheet) { return 10 + getSkillBonus(sheet,"perception") + passiveBonus(sheet,"perception") + Number(sheet.passivePerceptionBonus || 0); }
 function effectiveProficiency(sheet) { return sheet.autoProficiency ? rules.proficiency(totalLevel(sheet)) : Number(sheet.proficiency || 0); }
 function initiativeBonus(sheet) { return modifier(sheet.stats.dex) + Number(sheet.initiativeBonus || 0) + (hasFeat(sheet, "alert") ? 5 : 0); }
-const classSymbols = { barbarian:"◈", bard:"♫", cleric:"✚", druid:"❧", fighter:"⚔", monk:"☯", paladin:"✦", ranger:"➹", rogue:"⤫", sorcerer:"✧", warlock:"⌁", wizard:"⌃" };
+const classSymbols = { artificer:"⚙", barbarian:"◈", bard:"♫", cleric:"✚", druid:"❧", fighter:"⚔", monk:"☯", paladin:"✦", ranger:"➹", rogue:"⤫", sorcerer:"✧", warlock:"⌁", wizard:"⌃" };
 function classGlyph(classKey, title = "") {
   const safeKey = rules.classes[classKey] ? classKey : "unknown";
   return `<span class="class-glyph" data-class="${safeKey}" title="${esc(title || rules.classes[classKey]?.name || "Класс")}">${esc(classSymbols[classKey] || "")}</span>`;
@@ -228,8 +242,8 @@ function classHighlightsMarkup(sheet) {
   if (!cards.length) return "";
   return `<section class="class-highlights">${cards.map(item => `<button type="button" class="class-highlight ${item.accent ? "accent" : ""}" ${item.formula ? `data-class-damage="${esc(item.formula)}" title="Нажми, чтобы бросить"` : "disabled"}>${classGlyph(item.classKey)}<span><small>${esc(item.label)}</small><strong>${esc(item.value)}</strong></span>${item.formula ? "<i>бросить</i>" : ""}</button>`).join("")}</section>`;
 }
-function levelFeaturesMarkup(classKey, classLevel) {
-  return rules.featuresAt(classKey, classLevel).map(feature => `<article class="level-gain ${feature.choice ? "choice" : ""}"><span>${feature.choice ? "?" : "✓"}</span><div><strong>${esc(feature.name)}</strong><p>${esc(feature.summary)}</p></div>${feature.choice ? "<b>нужен выбор</b>" : ""}</article>`).join("");
+function levelFeaturesMarkup(classKey, classLevel, subclass = "", enabledOptional = []) {
+  return rules.featuresAt(classKey, classLevel, subclass, enabledOptional).map(feature => `<article class="level-gain ${feature.choice ? "choice" : ""}"><span>${feature.choice ? "?" : "✓"}</span><div><strong>${esc(feature.name)}</strong><p>${esc(feature.summary)}</p></div>${feature.choice ? "<b>нужен выбор</b>" : ""}</article>`).join("");
 }
 function commonLevelFeaturesMarkup(level) {
   const items = [];
@@ -242,8 +256,30 @@ function mergeText(current, addition) {
   if (String(current || "").includes(addition)) return current;
   return [current, addition].filter(Boolean).join("; ");
 }
+function applyInfusionToItem(item, infusionKey, artificerLevel = 1) {
+  const infusion = rules.infusions?.find(entry => entry.key === infusionKey);
+  item.baseMagical = item.baseMagical ?? Boolean(item.magical && !item.infused);
+  item.baseMagicBonus = Number(item.baseMagicBonus ?? item.magicBonus ?? 0);
+  item.baseSpellBonus = Number(item.baseSpellBonus ?? item.spellBonus ?? 0);
+  item.magicBonus = Number(item.baseMagicBonus || 0);
+  item.spellBonus = Number(item.baseSpellBonus || 0);
+  item.infused = Boolean(infusion);
+  item.infusionKey = infusion?.key || "";
+  item.infusionName = infusion?.name || "";
+  if (!infusion) { item.magical = Boolean(item.baseMagical || item.baseMagicBonus || item.baseSpellBonus); return item; }
+  item.magical = true;
+  const improved = artificerLevel >= 10 ? 2 : 1;
+  if (["enhanced-defense","enhanced-weapon"].includes(infusion.key)) item.magicBonus = Math.max(item.magicBonus,improved);
+  if (infusion.key === "enhanced-arcane-focus") item.spellBonus = Math.max(item.spellBonus,improved);
+  if (["repeating-shot","returning-weapon","radiant-weapon","repulsion-shield"].includes(infusion.key)) item.magicBonus = Math.max(item.magicBonus,1);
+  return item;
+}
 function syncCharacterMechanics(sheet) {
   ensureCombatLoadout(sheet);
+  sheet.optionalFeatures = Array.isArray(sheet.optionalFeatures) ? sheet.optionalFeatures : [];
+  sheet.infusionsKnown = Array.isArray(sheet.infusionsKnown) ? sheet.infusionsKnown : [];
+  sheet.infusedItemIds = Array.isArray(sheet.infusedItemIds) ? sheet.infusedItemIds : [];
+  sheet.originCustomization = sheet.originCustomization && typeof sheet.originCustomization === "object" ? sheet.originCustomization : { enabled:false, flexibleAbilities:[], skillChoice:"", lineageTalent:"darkvision", size:"", languageChoice:"", proficiencyChoice:"", levelOneFeatKey:"", levelOneFeatAbility:"" };
   sheet.classes = classEntries(sheet).map(entry => {
     const cls = rules.classes[entry.key];
     return { ...entry, name:entry.name || cls?.name || entry.key, subclass:entry.subclass || "", level:Math.max(1, Number(entry.level) || 1), hitDie:Number(entry.hitDie || cls?.hitDie || 8), spellAbility:entry.spellAbility || cls?.spellAbility || "" };
@@ -269,17 +305,53 @@ function syncCharacterMechanics(sheet) {
     const oldPact = sheet.pactSlots || {};
     sheet.pactSlots = { ...magic.pact, used:Math.min(Number(magic.pact.total || 0), Number(oldPact.used || 0)) };
   }
+  sheet.spellsList = Array.isArray(sheet.spellsList) ? sheet.spellsList : [];
+  const subclassSpellEntries=rules.subclassSpellsFor?.(sheet) || [];
+  const expectedSubclassSpells=new Map(subclassSpellEntries.map(entry=>[`${entry.sourceClassKey}:${entry.subclass}:${entry.key}`,entry]));
+  sheet.spellsList=sheet.spellsList.filter(spell=>!spell.automaticSubclass || expectedSubclassSpells.has(spell.automaticSubclassKey));
+  sheet.spellsList.forEach(spell=>{ spell.alwaysPreparedBySubclass=false; spell.subclassGrantName=""; });
+  expectedSubclassSpells.forEach((source,automaticSubclassKey)=>{
+    let spell=sheet.spellsList.find(entry=>entry.catalogKey===source.key);
+    if (!spell) {
+      spell={ ...structuredClone(source), id:uuid(), catalogKey:source.key, sourceClassKey:source.sourceClassKey, prepared:true, automaticSubclass:true, automaticSubclassKey };
+      delete spell.key; delete spell.mode; delete spell.grantLevel; delete spell.subclass;
+      sheet.spellsList.push(spell);
+    }
+    spell.prepared=true;
+    spell.alwaysPreparedBySubclass=true;
+    spell.subclassGrantName=source.subclass;
+    if (spell.automaticSubclass) spell.automaticSubclassKey=automaticSubclassKey;
+  });
   sheet.resources = Array.isArray(sheet.resources) ? sheet.resources : [];
+  const expected = new Map();
+  const addAutomatic = (automaticKey, source) => {
+    const max = Math.max(0,Number(source.max || 0));
+    expected.set(automaticKey,{ ...source, max, automatic:true, automaticKey });
+  };
   sheet.classes.forEach(entry => {
     const cls = rules.classes[entry.key];
-    (cls?.resources?.(entry.level, { ...sheet, level:entry.level }) || []).forEach(source => {
-      const automaticKey = `${entry.key}:${source.name}`;
-      const existing = sheet.resources.find(resource => resource.automaticKey === automaticKey || (resource.automatic && resource.name === source.name));
-      if (existing) {
-        const spent = Math.max(0, Number(existing.max || 0) - Number(existing.current || 0));
-        Object.assign(existing, source, { automatic:true, automaticKey, current:Math.max(0, Number(source.max) - spent) });
-      } else sheet.resources.push({ id:uuid(), ...source, current:source.max, automatic:true, automaticKey });
-    });
+    (cls?.resources?.(entry.level, { ...sheet, level:entry.level }) || []).forEach(source => addAutomatic(`${entry.key}:${source.name}`,source));
+    (rules.subclassResourcesFor?.(entry.key,entry.subclass,entry.level,sheet) || []).forEach(source => addAutomatic(source.key || `subclass:${entry.key}:${entry.subclass}:${source.name}`,source));
+  });
+  (sheet.feats || []).forEach(feat => {
+    const key=featKey(feat), resource=rules.feats[key]?.resource;
+    if (!resource) return;
+    const max=resource.maxFormula ? rules.resolveResourceMax(resource.maxFormula,sheet,sheet.level) : Number(resource.max || 0);
+    addAutomatic(`feat:${key}`,{ name:resource.name, max, reset:resource.reset || "long" });
+  });
+  sheet.resources = sheet.resources.filter(resource => !resource.automatic || expected.has(resource.automaticKey || ""));
+  expected.forEach((source,automaticKey) => {
+    const existing = sheet.resources.find(resource => resource.automaticKey === automaticKey);
+    if (existing) {
+      const spent = Math.max(0, Number(existing.max || 0) - Number(existing.current || 0));
+      Object.assign(existing, source, { current:Math.max(0,Number(source.max)-spent) });
+    } else sheet.resources.push({ id:uuid(), ...source, current:source.max });
+  });
+  const artificerLevel=classLevel(sheet,"artificer");
+  const activeIds=new Set(sheet.infusedItemIds);
+  sheet.inventoryList=(sheet.inventoryList || []).map(item => {
+    if (!activeIds.has(item.id)) return applyInfusionToItem(item,"",artificerLevel);
+    return applyInfusionToItem(item,item.infusionKey,artificerLevel);
   });
   sheet.xp = Math.max(0, Number(sheet.xp) || 0);
   sheet.schemaVersion = SHEET_SCHEMA_VERSION;
@@ -316,7 +388,7 @@ const spellUpcastDice = {
   moonbeam:"1d10", "scorching-ray":"2d6", fireball:"1d6", "lightning-bolt":"1d6", "spirit-guardians":"1d8", "mass-healing-word":"1d4",
   "ice-storm":"1d8", "wall-of-fire":"1d8", "cone-of-cold":"1d8", "mass-cure-wounds":"1d8", "chain-lightning":"1d8", disintegrate:"3d6"
 };
-const healingSpellKeys = new Set(["cure-wounds","healing-word","mass-cure-wounds","mass-healing-word","heal","regenerate","mass-heal"]);
+const healingSpellKeys = new Set(["cure-wounds","healing-word","mass-cure-wounds","mass-healing-word","heal","regenerate","mass-heal","healing-spirit"]);
 function spellRollKind(spell) {
   if (["damage","healing","none"].includes(spell.rollKind)) return spell.rollKind;
   if (healingSpellKeys.has(spell.catalogKey)) return "healing";
@@ -330,7 +402,7 @@ function spellRollFormula(spell, slotLevel, sheet) {
   }
   const levelsAbove = Math.max(0, Number(slotLevel || spell.level) - Number(spell.level || 0));
   const customUpcast = Array.isArray(spell.upcastParts) && spell.upcastParts.length ? formulaFromParts(spell.upcastParts,sheet) : "";
-  const extra = customUpcast || spellUpcastDice[spell.catalogKey];
+  const extra = customUpcast || spell.upcastDice || spellUpcastDice[spell.catalogKey];
   if (extra && levelsAbove) formula += Array.from({ length:levelsAbove }, () => `+${extra}`).join("");
   return resolveDiceFormula(formula, sheet);
 }
@@ -360,7 +432,7 @@ $("#join-form").addEventListener("submit", event => {
   socket.emit("room:join", { ...data, clientId: state.clientId }, enterResponse);
 });
 function openQuickGuide(firstVisit = false) {
-  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.1" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группы, сохранять встречи и вручную скрывать карту туманом войны.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
+  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.3" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группы, сохранять встречи и вручную скрывать карту туманом войны.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
   $("#quick-guide-close")?.addEventListener("click", () => { localStorage.setItem("tt-2-tour","1"); closeModal(); });
 }
 
@@ -380,6 +452,7 @@ function enterResponse(response) {
   $("#lobby").classList.add("hidden");
   $("#room").classList.remove("hidden");
   restorePendingDraft(response.code, response.clientId);
+  syncOwnMechanicsOnLoad();
   renderAll();
   if (!localStorage.getItem("tt-2-tour")) setTimeout(() => openQuickGuide(true), 250);
 }
@@ -394,8 +467,9 @@ function restorePendingDraft(code, clientId) {
   try {
     const saved = JSON.parse(localStorage.getItem(draftKey(code, clientId)) || "null");
     if (!saved?.sheet || Date.now() - Number(saved.at || 0) > 7 * 86400000) return;
-    state.room.players[clientId].sheet = saved.sheet;
-    socket.emit("sheet:update", { sheet: saved.sheet }, response => {
+    const restoredSheet=syncCharacterMechanics(structuredClone(saved.sheet));
+    state.room.players[clientId].sheet = restoredSheet;
+    socket.emit("sheet:update", { sheet: restoredSheet }, response => {
       if (response.ok) { localStorage.removeItem(draftKey(code, clientId)); toast("Несохранённые изменения восстановлены"); }
     });
   } catch { localStorage.removeItem(draftKey(code, clientId)); }
@@ -416,6 +490,7 @@ socket.on("connect", () => {
         state.room = response.room;
         state.selectedId = response.room.players[selected] ? selected : state.clientId;
         restorePendingDraft(response.code, state.clientId);
+        syncOwnMechanicsOnLoad();
         $("#save-state").textContent = "Сохранено";
         renderAll();
       });
@@ -727,23 +802,24 @@ function renderSheet() {
   const carryingCapacity = Number(s.stats.str || 0) * 15;
   const attunedCount = inventory.filter(item => item.attuned).length;
   const inventoryRows = inventory.map(item => `
-    <div class="entity-row inventory-row"><div><strong>${esc(item.name || "Предмет")}</strong><div class="item-flags">${item.equipped ? "<span>надето</span>" : ""}${item.attuned ? "<span>настроено</span>" : ""}${item.magical ? "<span>магия</span>" : ""}${item.type === "weapon" ? "<span>оружие</span>" : ""}${item.type === "armor" ? "<span>броня</span>" : ""}</div></div><small>${Number(item.quantity || 0)} шт.</small><small>${Number(item.weight || 0) * Number(item.quantity || 0)} фнт.</small><button data-item-edit="${esc(item.id)}">⋮</button></div>`).join("");
+    <div class="entity-row inventory-row"><div><strong>${esc(item.name || "Предмет")}</strong><div class="item-flags">${item.equipped ? "<span>надето</span>" : ""}${item.attuned ? "<span>настроено</span>" : ""}${item.magical ? "<span>магия</span>" : ""}${item.infused ? `<span title="${esc(item.infusionName || "Инфузия")}">⚙ ${esc(item.infusionName || "инфузия")}</span>` : ""}${item.type === "weapon" ? "<span>оружие</span>" : ""}${item.type === "armor" ? "<span>броня</span>" : ""}</div></div><small>${Number(item.quantity || 0)} шт.</small><small>${Number(item.weight || 0) * Number(item.quantity || 0)} фнт.</small><button data-item-edit="${esc(item.id)}">⋮</button></div>`).join("");
   const spellAbility = s.spellcastingAbility || "";
   const spellMod = spellAbility ? modifier(s.stats[spellAbility]) : 0;
-  const spellSave = 8 + proficiency + spellMod;
-  const spellAttack = proficiency + spellMod;
-  const preparedCount = (s.spellsList || []).filter(spell => spell.prepared && Number(spell.level) > 0).length;
+  const focusBonus = spellFocusBonus(s);
+  const spellSave = 8 + proficiency + spellMod + focusBonus;
+  const spellAttack = proficiency + spellMod + focusBonus;
+  const preparedCount = (s.spellsList || []).filter(spell => spell.prepared && !spell.alwaysPreparedBySubclass && Number(spell.level) > 0).length;
   const preparedLimit = preparedSpellLimit(s);
   const classRoadmaps = classEntries(s).map(entry => `<details class="class-roadmap" ${classEntries(s).length === 1 ? "open" : ""}><summary>${classGlyph(entry.key)}<span><strong>${esc(entry.name || rules.classes[entry.key]?.name)} · ${Number(entry.level)} уровень</strong><small>Все особенности класса по уровням</small></span><i>раскрыть</i></summary><div>${Array.from({length:20},(_,index) => {
     const level = index + 1, unlocked = level <= Number(entry.level);
-    return `<article class="roadmap-level ${unlocked ? "unlocked" : "locked"} ${level === Number(entry.level) ? "current" : ""}"><b>${level}</b><div><strong>${rules.featuresAt(entry.key,level).map(feature => esc(feature.name)).join(" · ")}</strong><p>${rules.featuresAt(entry.key,level).map(feature => esc(feature.summary)).join(" ")}</p></div></article>`;
+    return `<article class="roadmap-level ${unlocked ? "unlocked" : "locked"} ${level === Number(entry.level) ? "current" : ""}"><b>${level}</b><div><strong>${rules.featuresAt(entry.key,level,entry.subclass,s.optionalFeatures).map(feature => esc(feature.name)).join(" · ")}</strong><p>${rules.featuresAt(entry.key,level,entry.subclass,s.optionalFeatures).map(feature => esc(feature.summary)).join(" ")}</p></div></article>`;
   }).join("")}</div></details>`).join("");
   const featRows = (s.feats || []).map(feat => {
     const key = featKey(feat), info = rules.feats[key];
     return `<article class="feat-chip"><span>${classGlyph(feat.classKey || s.classKey)}</span><div><strong>${esc(feat.name || info?.name || key || "Черта")}</strong><small>${esc(info?.summary || feat.summary || "Добавлена вручную")}</small></div></article>`;
   }).join("");
   const spellRows = [...(s.spellsList || [])].sort((a, b) => Number(a.level) - Number(b.level) || String(a.name).localeCompare(String(b.name))).map(spell => `
-    <div class="entity-row spell-row ${spell.prepared ? "prepared" : ""}" data-spell-name="${esc(String(spell.name || "").toLowerCase())}" data-spell-level="${Number(spell.level || 0)}" data-spell-prepared="${spell.prepared ? "yes" : "no"}"><span class="spell-level">${Number(spell.level || 0)}</span><div><strong>${esc(spell.name || "Заклинание")}${spellRollKind(spell) === "healing" ? `<i class="spell-kind healing">лечение</i>` : spellRollKind(spell) === "damage" ? `<i class="spell-kind damage">урон</i>` : ""}</strong><small>${spell.sourceClassKey ? `${esc(rules.classes[spell.sourceClassKey]?.name || spell.sourceClassKey)} · ` : ""}${esc(spell.castingTime || "действие")} · ${esc(spell.range || "на себя")}${spell.concentration ? " · концентрация" : ""}${spell.ritual ? " · ритуал" : ""}</small></div><button data-spell-prepare="${esc(spell.id)}" title="Подготовить или убрать">${spell.prepared ? "★" : "☆"}</button><button data-spell-cast="${esc(spell.id)}">Сотворить</button><button data-spell-info="${esc(spell.id)}" title="Описание">i</button><button data-spell-edit="${esc(spell.id)}">⋮</button></div>`).join("");
+    <div class="entity-row spell-row ${spell.prepared ? "prepared" : ""}" data-spell-name="${esc(String(spell.name || "").toLowerCase())}" data-spell-level="${Number(spell.level || 0)}" data-spell-prepared="${spell.prepared ? "yes" : "no"}"><span class="spell-level">${Number(spell.level || 0)}</span><div><strong>${esc(spell.name || "Заклинание")}${spellRollKind(spell) === "healing" ? `<i class="spell-kind healing">лечение</i>` : spellRollKind(spell) === "damage" ? `<i class="spell-kind damage">урон</i>` : ""}</strong><small>${spell.sourceClassKey ? `${esc(rules.classes[spell.sourceClassKey]?.name || spell.sourceClassKey)} · ` : ""}${esc(spell.castingTime || "действие")} · ${esc(spell.range || "на себя")}${spell.concentration ? " · концентрация" : ""}${spell.ritual ? " · ритуал" : ""}${spell.alwaysPreparedBySubclass ? ` · ${esc(spell.subclassGrantName || "подкласс")}` : ""}</small></div><button data-spell-prepare="${esc(spell.id)}" title="${spell.alwaysPreparedBySubclass ? `Всегда подготовлено: ${esc(spell.subclassGrantName || "подкласс")}` : "Подготовить или убрать"}" ${spell.alwaysPreparedBySubclass ? "disabled" : ""}>${spell.alwaysPreparedBySubclass ? "◆" : spell.prepared ? "★" : "☆"}</button><button data-spell-cast="${esc(spell.id)}">Сотворить</button><button data-spell-info="${esc(spell.id)}" title="Описание">i</button><button data-spell-edit="${esc(spell.id)}">⋮</button></div>`).join("");
   const goalRows = (s.goalsList || []).map(goal => `<div class="entity-row goal-row"><input type="checkbox" data-goal-done="${esc(goal.id)}" ${goal.done ? "checked" : ""}><strong>${esc(goal.text)}</strong><button data-goal-edit="${esc(goal.id)}">⋮</button></div>`).join("");
   const noteRows = (s.notesList || []).map(note => `<div class="panel"><h3 class="panel-title">${esc(note.title || "Заметка")}</h3><p>${esc(note.text).replace(/\n/g, "<br>")}</p><button data-note-edit="${esc(note.id)}" class="secondary">Изменить</button></div>`).join("");
   const sheetTools = mine ? `<div class="sheet-tools"><label class="edit-mode-switch"><input id="edit-mode-toggle" type="checkbox" ${state.editMode ? "checked" : ""}><span><i></i></span><b>${state.editMode ? "Редактирование" : "Игровой режим"}</b></label>${s.classKey && totalLevel(s) < 20 ? `<button id="level-up" class="primary level-up-button" type="button"><span>↑</span> Повысить уровень</button>` : ""}<button id="character-builder" class="secondary" type="button">${s.classKey ? "Пересобрать героя" : "Подробный мастер"}</button>${s.classKey ? `<button id="quick-character" class="secondary" type="button">Быстрая сборка</button>` : ""}<details class="sheet-more"><summary>Ещё ···</summary><div><button id="sheet-history" class="secondary" type="button">История версий</button><button id="sheet-export" class="secondary" type="button">Экспорт листа</button><button id="sheet-import" class="secondary" type="button">Импорт листа</button>${player.role === "dm" ? `<button id="campaign-backup" class="secondary" type="button">Копия кампании</button><button id="campaign-restore" class="secondary" type="button">Восстановить кампанию</button>` : ""}</div></details><input id="sheet-import-file" type="file" accept="application/json" hidden><input id="campaign-restore-file" type="file" accept="application/json" hidden></div>` : "";
@@ -789,16 +865,16 @@ function renderSheet() {
           ${deathSavePipsMarkup(s,Boolean(mine && state.editMode))}
         </div>
         <div class="panel" data-section="combat" data-combat-view="actions"><h3 class="panel-title">Атаки</h3><div class="attack-list">${attackRows}</div>${mine ? `<button id="attack-add" class="secondary" type="button">+ Добавить атаку</button>` : ""}${area("Прочие атаки и заклинания", "attacks", s.attacks, "Свободные заметки об атаках...")}</div>
-        <div class="panel" data-section="features"><h3 class="panel-title">Ресурсы и заряды</h3><div class="entity-list">${resources || `<div class="read-only">Стрелы, ярость, ци, превосходство и любые другие заряды.</div>`}</div>${mine ? `<button id="resource-add" class="secondary" type="button">+ Добавить ресурс</button>` : ""}</div>
+        <div class="panel" data-section="features"><div class="section-actions"><h3 class="panel-title">Ресурсы и заряды</h3>${mine ? `<button id="optional-features-manager" class="secondary" type="button">Опции Таши</button>${hasClass(s,"artificer") ? `<button id="infusions-manager" class="secondary" type="button">Инфузии</button>` : ""}<button id="resource-add" class="secondary" type="button">+ Ресурс</button>` : ""}</div><div class="entity-list">${resources || `<div class="read-only">Стрелы, ярость, ци, превосходство и любые другие заряды.</div>`}</div></div>
         <div class="panel" data-section="equipment"><div class="section-actions"><h3 class="panel-title">Снаряжение · ${inventoryWeight}/${carryingCapacity} фнт. · настройка ${attunedCount}/3</h3>${mine ? `<button id="item-catalog" class="secondary" type="button">Справочник</button><button id="item-add" class="secondary" type="button">Хоумбрю</button>` : ""}</div><div class="capacity-bar"><span style="width:${Math.min(100, inventoryWeight/Math.max(1,carryingCapacity)*100)}%"></span></div><div class="entity-list">${inventoryRows || `<div class="read-only">Инвентарь пока пуст.</div>`}</div>${area("Дополнительное снаряжение", "equipment", s.equipment)}</div>
       </div>
       <div class="stack">
         <div class="panel" data-section="combat" data-combat-view="actions"><div class="panel-heading"><h3 class="panel-title">Состояния</h3>${mine ? `<button id="conditions-manager" class="quiet-action" type="button">Изменить</button>` : ""}</div><div class="active-conditions">${activeConditions}</div>${Number(s.exhaustion || 0) > 0 ? `<div class="exhaustion-effect">Истощение ${Math.min(6, Number(s.exhaustion))}: ${esc(rules.exhaustionInfo[Math.min(6, Number(s.exhaustion))])}</div>` : ""}${s.concentrationSpellName ? `<div class="concentration"><span>◉ Концентрация: <strong>${esc(s.concentrationSpellName)}</strong></span>${mine ? `<button id="stop-concentration">Завершить</button>` : ""}</div>` : ""}</div>
         <div class="panel" data-section="equipment"><h3 class="panel-title">Монеты</h3><div class="coins">${coins}</div></div>
-        <div class="panel progression-panel" data-section="features"><div class="panel-heading"><h3 class="panel-title">Развитие персонажа</h3>${mine && totalLevel(s) < 20 ? `<button id="level-up-features" class="secondary" type="button">+ Уровень</button>` : ""}</div><div class="class-summary-list">${classEntries(s).map(entry => `<article>${classGlyph(entry.key)}<div><strong>${esc(entry.name || rules.classes[entry.key]?.name)} ${Number(entry.level)}</strong><small>${esc(entry.subclass || `Подкласс на ${rules.subclassLevel(entry.key)} уровне`)}</small></div></article>`).join("") || `<div class="read-only">Сначала выбери класс.</div>`}</div>${featRows ? `<h3 class="panel-title feat-title">Черты</h3><div class="feat-list">${featRows}</div>` : ""}<h3 class="panel-title roadmap-title">Классовые особенности 1–20</h3><div class="class-roadmaps">${classRoadmaps}</div></div>
+        <div class="panel progression-panel" data-section="features"><div class="panel-heading"><h3 class="panel-title">Развитие персонажа</h3>${mine && totalLevel(s) < 20 ? `<button id="level-up-features" class="secondary" type="button">+ Уровень</button>` : ""}</div><div class="class-summary-list">${classEntries(s).map(entry => `<article>${classGlyph(entry.key)}<div><strong>${esc(entry.name || rules.classes[entry.key]?.name)} ${Number(entry.level)}</strong><small>${esc(entry.subclass || `Подкласс на ${rules.subclassLevel(entry.key)} уровне`)}</small></div></article>`).join("") || `<div class="read-only">Сначала выбери класс.</div>`}</div>${featRows ? `<h3 class="panel-title feat-title">Черты</h3><div class="feat-list">${featRows}</div>` : ""}${(s.optionalFeatures || []).length ? `<h3 class="panel-title feat-title">Опциональные особенности Таши</h3><div class="feat-list">${classEntries(s).flatMap(entry=>(rules.optionalFeaturesFor?.(entry.key,entry.level)||[]).filter(feature=>(s.optionalFeatures||[]).includes(feature.key))).map(feature=>`<article class="feat-chip"><span>◆</span><div><strong>${esc(feature.name)}</strong><small>${esc(feature.summary)}</small></div></article>`).join("")}</div>` : ""}<h3 class="panel-title roadmap-title">Классовые особенности 1–20</h3><div class="class-roadmaps">${classRoadmaps}</div></div>
         <div class="panel" data-section="features"><h3 class="panel-title">Наследие и особенности</h3>${area("Расовые особенности", "ancestryTraits", s.ancestryTraits || "")}${area("Классовые особенности и умения", "features", s.features)}</div>
         <div class="panel" data-section="features"><h3 class="panel-title">Чувства и защита</h3><div class="bio-grid">${field("Тёмное зрение", "darkvision", s.darkvision || 0, "number")}${field("Слепое зрение", "blindsight", s.blindsight || 0, "number")}${field("Чувство вибрации", "tremorsense", s.tremorsense || 0, "number")}${field("Истинное зрение", "truesight", s.truesight || 0, "number")}</div>${area("Сопротивления", "resistances", s.resistances || "")}${area("Иммунитеты", "immunities", s.immunities || "")}${area("Уязвимости", "vulnerabilities", s.vulnerabilities || "")}</div>
-        <div class="panel" data-section="spells"><h3 class="panel-title">Гримуар</h3><div class="spell-summary"><div><small>Сложность</small><strong>${spellSave}</strong></div><div><small>Атака</small><strong>${signed(spellAttack)}</strong></div><div class="${preparedLimit !== null && preparedCount > preparedLimit ? "over-limit" : ""}"><small>Подготовлено</small><strong>${preparedCount}${preparedLimit === null ? "" : `/${preparedLimit}`}</strong></div><label>Характеристика<select data-field="spellcastingAbility"><option value="">—</option>${Object.entries(abilities).map(([key,name]) => `<option value="${key}" ${spellAbility === key ? "selected" : ""}>${name}</option>`).join("")}</select></label></div><div class="spell-slots">${slots || (!pactSlots ? `<span class="read-only">Настрой доступные ячейки.</span>` : "")}${pactSlots}</div><div class="section-actions">${mine ? `<button id="slots-manager" class="secondary" type="button">Ячейки</button><button id="spell-library" class="secondary" type="button">Справочник</button><button id="spell-add" class="secondary" type="button">Хоумбрю</button>` : ""}</div><div class="spell-filters"><input id="owned-spell-search" aria-label="Поиск в гримуаре" placeholder="Поиск в гримуаре"><select id="owned-spell-level" aria-label="Уровень заклинаний"><option value="all">Все уровни</option><option value="0">Заговоры</option>${Array.from({length:9},(_,i)=>`<option value="${i+1}">${i+1} уровень</option>`).join("")}</select><select id="owned-spell-prepared" aria-label="Статус подготовки"><option value="all">Все</option><option value="yes">Подготовленные</option><option value="no">Неподготовленные</option></select></div><div class="entity-list" id="owned-spells">${spellRows || `<div class="read-only">Гримуар пока пуст.</div>`}</div>${area("Заметки заклинателя", "spells", s.spells)}</div>
+        <div class="panel" data-section="spells"><h3 class="panel-title">Гримуар</h3>${focusBonus ? `<div class="content-pack-note">Магическая фокусировка: +${focusBonus} к атаке заклинанием и Сл.</div>` : ""}<div class="spell-summary"><div><small>Сложность</small><strong>${spellSave}</strong></div><div><small>Атака</small><strong>${signed(spellAttack)}</strong></div><div class="${preparedLimit !== null && preparedCount > preparedLimit ? "over-limit" : ""}"><small>Подготовлено</small><strong>${preparedCount}${preparedLimit === null ? "" : `/${preparedLimit}`}</strong></div><label>Характеристика<select data-field="spellcastingAbility"><option value="">—</option>${Object.entries(abilities).map(([key,name]) => `<option value="${key}" ${spellAbility === key ? "selected" : ""}>${name}</option>`).join("")}</select></label></div><div class="spell-slots">${slots || (!pactSlots ? `<span class="read-only">Настрой доступные ячейки.</span>` : "")}${pactSlots}</div><div class="section-actions">${mine ? `<button id="slots-manager" class="secondary" type="button">Ячейки</button><button id="spell-library" class="secondary" type="button">Справочник</button><button id="spell-add" class="secondary" type="button">Хоумбрю</button>` : ""}</div><div class="spell-filters"><input id="owned-spell-search" aria-label="Поиск в гримуаре" placeholder="Поиск в гримуаре"><select id="owned-spell-level" aria-label="Уровень заклинаний"><option value="all">Все уровни</option><option value="0">Заговоры</option>${Array.from({length:9},(_,i)=>`<option value="${i+1}">${i+1} уровень</option>`).join("")}</select><select id="owned-spell-prepared" aria-label="Статус подготовки"><option value="all">Все</option><option value="yes">Подготовленные</option><option value="no">Неподготовленные</option></select></div><div class="entity-list" id="owned-spells">${spellRows || `<div class="read-only">Гримуар пока пуст.</div>`}</div>${area("Заметки заклинателя", "spells", s.spells)}</div>
         <div class="panel" data-section="personality"><h3 class="panel-title">Личность и внешность</h3>${s.portraitUrl ? `<img class="portrait-preview" src="${esc(s.portraitUrl)}" alt="Портрет">` : ""}${field("Ссылка на портрет", "portraitUrl", s.portraitUrl || "")}<div class="bio-grid">${field("Возраст", "age", s.age || "")}${field("Рост", "height", s.height || "")}${field("Вес", "weight", s.weight || "")}${field("Глаза", "eyes", s.eyes || "")}${field("Кожа", "skin", s.skin || "")}${field("Волосы", "hair", s.hair || "")}</div>${area("Внешность", "appearance", s.appearance || "")}${area("Предыстория персонажа", "backstory", s.backstory || "")}${area("Союзники и организации", "allies", s.allies || "")}${area("Черты характера", "personality", s.personality)}${area("Идеалы", "ideals", s.ideals)}${area("Привязанности", "bonds", s.bonds)}${area("Слабости", "flaws", s.flaws)}</div>
         <div class="panel" data-section="personality"><h3 class="panel-title">Токен карты</h3><div class="bio-grid">${field("Картинка токена", "tokenImageUrl", s.tokenImageUrl || s.portraitUrl || "")}${field("Цвет рамки", "tokenColor", s.tokenColor || "#9f7842", "color")}${field("Зрение, футы", "tokenVision", s.tokenVision ?? 60, "number")}${field("Размер на сетке", "tokenScale", s.tokenScale ?? 1, "number")}</div><div class="read-only">Имя, изображение, цвет, размер и зрение синхронно используются токеном персонажа на общей карте.</div></div>
         <div class="panel" data-section="goals"><div class="section-actions"><h3 class="panel-title">Цели и задачи</h3>${mine ? `<button id="goal-add" class="secondary" type="button">+ Цель</button>` : ""}</div><div class="entity-list">${goalRows || `<div class="read-only">Целей пока нет.</div>`}</div></div>
@@ -899,6 +975,16 @@ function applySheetEditing(mine) {
 }
 
 function currentSheet() { return state.room.players[state.clientId].sheet; }
+function syncOwnMechanicsOnLoad() {
+  const player=state.room?.players?.[state.clientId];
+  if (!player?.sheet) return false;
+  const before=JSON.stringify(player.sheet);
+  const next=syncCharacterMechanics(structuredClone(player.sheet));
+  if (JSON.stringify(next) === before) return false;
+  player.sheet=next; rememberDraft(next);
+  socket.emit("sheet:update",{sheet:next},response=>{ if (response?.ok) clearDraft(); });
+  return true;
+}
 function collectSheet() {
   const sheet = structuredClone(currentSheet());
   $$('[data-field]', $("#sheet-view")).forEach(el => {
@@ -980,7 +1066,7 @@ function openLevelInfo(total) {
   const sheet = currentSheet(), entry = levelProgression(sheet).find(item => Number(item.level) === Number(total));
   if (!entry) return;
   const cls = rules.classes[entry.classKey];
-  openModal(`${Number(total)} уровень · ${cls?.name || entry.classKey}`, `<div class="level-info-head">${classGlyph(entry.classKey)}<div><span class="eyebrow">Общий уровень ${Number(total)}</span><h3>${esc(cls?.name || entry.classKey)} ${Number(entry.classLevel)}</h3>${entry.choice ? `<p>Сделанный выбор: <strong>${esc(entry.choice)}</strong></p>` : ""}</div></div><div class="level-gains">${levelFeaturesMarkup(entry.classKey, entry.classLevel)}${commonLevelFeaturesMarkup(total)}</div><div class="read-only">Также увеличиваются максимум HP и запас костей хитов этого класса.</div><button id="level-info-close" class="primary" type="button">Понятно</button>`);
+  openModal(`${Number(total)} уровень · ${cls?.name || entry.classKey}`, `<div class="level-info-head">${classGlyph(entry.classKey)}<div><span class="eyebrow">Общий уровень ${Number(total)}</span><h3>${esc(cls?.name || entry.classKey)} ${Number(entry.classLevel)}</h3>${entry.choice ? `<p>Сделанный выбор: <strong>${esc(entry.choice)}</strong></p>` : ""}</div></div><div class="level-gains">${levelFeaturesMarkup(entry.classKey, entry.classLevel, classEntries(currentSheet()).find(item=>item.key===entry.classKey)?.subclass || "", currentSheet().optionalFeatures || [])}${commonLevelFeaturesMarkup(total)}</div><div class="read-only">Также увеличиваются максимум HP и запас костей хитов этого класса.</div><button id="level-info-close" class="primary" type="button">Понятно</button>`);
   $("#level-info-close").addEventListener("click", closeModal);
 }
 
@@ -1077,6 +1163,8 @@ function bindGameControls() {
   $$('[data-slot-restore]').forEach(button => button.addEventListener("click", () => changeSlot(Number(button.dataset.slotRestore), -1)));
   $$('[data-pact-slot]').forEach(button => button.addEventListener("click", () => changePactSlot(button.dataset.pactSlot === "use" ? 1 : -1)));
   $("#resource-add")?.addEventListener("click", () => openResourceModal());
+  $("#optional-features-manager")?.addEventListener("click", openOptionalFeaturesManager);
+  $("#infusions-manager")?.addEventListener("click", openInfusionsManager);
   $$('[data-resource-edit]').forEach(button => button.addEventListener("click", () => openResourceModal(button.dataset.resourceEdit)));
   $$('[data-resource-change]').forEach(button => button.addEventListener("click", () => changeResource(button.dataset.resourceChange, Number(button.dataset.delta))));
   $("#item-add")?.addEventListener("click", () => openItemModal());
@@ -1377,10 +1465,31 @@ function addStarterEquipment(sheet, classKey, backgroundKey) {
 
 async function loadSpellCatalog() {
   if (spellCatalog) return spellCatalog;
-  const response = await fetch("/spells-5e.json");
-  if (!response.ok) throw new Error("catalog");
-  spellCatalog = await response.json();
+  const responses = await Promise.all([fetch("/spells-5e.json"), fetch("/spells-phb-support-xgte-tcoe.json"), fetch("/spells-xgte-tcoe.json")]);
+  if (responses.some(response => !response.ok)) throw new Error("catalog");
+  const [base, phbSupport, supplements] = await Promise.all(responses.map(response => response.json()));
+  const subclassStubs=Object.values(window.TT_SUBCLASS_SPELLS_XGTE_TCOE || {}).flatMap(group=>Object.values(group || {}).flat()).map(spell=>({ ...spell, classes:[], source:rules.sourceInfo?.(spell.sourceId)?.name || "Базовые правила 2014" }));
+  const merged = [...subclassStubs, ...base.map(spell => ({ ...spell, sourceId:spell.sourceId || "srd2014", source:spell.source || "Открытые правила 2014" })), ...phbSupport, ...supplements];
+  const unique = new Map();
+  merged.forEach(spell => unique.set(spell.key, { ...spell, classes:[...new Set(spell.classes || [])] }));
+  spellCatalog = [...unique.values()].sort((a,b) => Number(a.level)-Number(b.level) || String(a.name).localeCompare(String(b.name),"ru"));
+  Object.entries(rules.spellClassKeys || {}).forEach(([classKey,keys]) => {
+    const className = rules.classes[classKey]?.name;
+    if (!className) return;
+    const allowed = new Set(keys);
+    spellCatalog.forEach(spell => {
+      if (allowed.has(spell.key) && !spell.classes.includes(className)) spell.classes.push(className);
+    });
+  });
   return spellCatalog;
+}
+function spellAvailableForClass(spell, classKey, sheet = currentSheet()) {
+  if (!classKey) return true;
+  const className = rules.classes[classKey]?.name;
+  if (className && (spell.classes || []).includes(className)) return true;
+  const classKeys=new Set(rules.spellKeysForClass?.(classKey,sheet.optionalFeatures || []) || []);
+  const subclassKeys=new Set(rules.subclassSpellKeysFor?.(sheet,classKey) || []);
+  return classKeys.has(spell.key) || subclassKeys.has(spell.key);
 }
 
 async function addStarterSpells(sheet, classKey, level) {
@@ -1417,12 +1526,13 @@ function openCharacterBuilderV2(quickStart = false) {
         <div class="builder-lead"><div><span class="eyebrow">Концепция героя</span><h3>Кто отправится за приключениями?</h3><p>Выбирай из готовых вариантов. Всё можно изменить позже без потери заметок и предметов.</p></div><button id="builder-instant" class="quick-create" type="button"><span>✦</span><strong>Создать сразу</strong><small>Соберём рекомендуемые статы, навыки, снаряжение и заклинания</small></button></div>
         <div class="builder-form">
           <label class="builder-name">Имя персонажа<input id="builder-name" maxlength="60" value="${esc(s.characterName || "")}" placeholder="Например, Артемидеус"></label>
-          <label>Класс<select id="builder-class">${Object.entries(rules.classes).map(([key,value]) => `<option value="${key}" ${key === guessedClass ? "selected" : ""}>${value.name} · к${value.hitDie}</option>`).join("")}</select></label>
+          <label>Класс<select id="builder-class">${Object.entries(rules.classes).map(([key,value]) => `<option value="${key}" ${key === guessedClass ? "selected" : ""}>${value.name} · к${value.hitDie}${sourceSuffix(value.source)}</option>`).join("")}</select></label>
           <label>Подкласс<select id="builder-subclass"></select></label>
           <label>Уровень<select id="builder-level">${Array.from({length:20},(_,i)=>`<option value="${i+1}" ${Number(s.level || 1) === i+1 ? "selected" : ""}>${i+1} уровень</option>`).join("")}</select></label>
-          <label>Раса<select id="builder-race">${Object.entries(rules.races).map(([key,value]) => `<option value="${key}" ${key === guessedRace ? "selected" : ""}>${value.name}</option>`).join("")}</select></label>
+          <label>Раса<select id="builder-race">${(rules.raceOptions?.() || Object.entries(rules.races).map(([key,value])=>({key,...value}))).map(value => `<option value="${value.key}" ${value.key === guessedRace ? "selected" : ""}>${value.name}${sourceSuffix(value.source)}</option>`).join("")}</select></label>
           <label>Предыстория<select id="builder-background">${Object.entries(rules.backgrounds).map(([key,value]) => `<option value="${key}" ${key === guessedBackground ? "selected" : ""}>${value.name}</option>`).join("")}</select></label>
         </div>
+        <div id="builder-origin-box" class="builder-origin-box"></div>
         <div id="builder-concept" class="builder-concept"></div>
       </section>
       <section class="builder-page hidden" data-builder-page="abilities">
@@ -1441,6 +1551,7 @@ function openCharacterBuilderV2(quickStart = false) {
           <label class="toggle-row"><span><strong>Автоматическая КД</strong><small>По классу и надетой броне</small></span><input id="builder-ac" type="checkbox" ${s.autoArmorClass !== false ? "checked" : ""}><i></i></label>
           <label class="toggle-row"><span><strong>Стартовое снаряжение</strong><small>Оружие, броня и набор класса</small></span><input id="builder-equipment" type="checkbox" checked><i></i></label>
           <label class="toggle-row"><span><strong>Рекомендуемые заклинания</strong><small>Только для выбранного класса</small></span><input id="builder-spells" type="checkbox" checked><i></i></label>
+          <label class="toggle-row"><span><strong>Опциональные особенности Таши</strong><small>Включить доступные дополнения и замены класса</small></span><input id="builder-tasha-options" type="checkbox" ${s.optionalFeatures?.length || !s.classKey ? "checked" : ""}><i></i></label>
           <label class="toggle-row"><span><strong>Пересчитать HP</strong><small>Среднее значение по уровню</small></span><input id="builder-hp" type="checkbox" checked><i></i></label>
         </div></details>
       </section>
@@ -1449,10 +1560,61 @@ function openCharacterBuilderV2(quickStart = false) {
 
   const statInputs = () => $$('[data-builder-stat]', $("#modal-content"));
   const currentKeys = () => ({ classKey:$("#builder-class").value, raceKey:$("#builder-race").value, backgroundKey:$("#builder-background").value, level:Math.max(1, Math.min(20, Number($("#builder-level").value || 1))) });
+  let originDraft = structuredClone(s.originCustomization || { enabled:false, flexibleAbilities:[], skillChoice:"", lineageTalent:"darkvision", size:"", languageChoice:"", proficiencyChoice:"", levelOneFeatKey:"", levelOneFeatAbility:"" });
+  const originAmounts = race => [...Object.values(race?.bonuses || {}).map(Number), ...(race?.flexible || []).map(Number)].filter(Boolean);
+  const languageOptions = ["Дварфийский","Эльфийский","Великаний","Гномий","Гоблинский","Полуросликов","Орочий","Бездны","Небесный","Драконий","Глубинная речь","Инфернальный","Первичный","Сильван","Подземный"];
+  const readOriginControls = () => {
+    const enabled=$("#builder-origin-enabled"), talent=$("#builder-lineage-talent"), skill=$("#builder-origin-skill"), size=$("#builder-lineage-size"), feat=$("#builder-lineage-feat"), featAbility=$("#builder-lineage-feat-ability"), language=$("#builder-origin-language"), proficiency=$("#builder-origin-proficiency");
+    if (enabled) originDraft.enabled=enabled.checked;
+    originDraft.flexibleAbilities=$$('[data-origin-ability]').map(select=>select.value).filter(Boolean);
+    if (talent) originDraft.lineageTalent=talent.value;
+    if (skill) originDraft.skillChoice=skill.value;
+    if (size) originDraft.size=size.value;
+    if (feat) originDraft.levelOneFeatKey=feat.value;
+    if (featAbility) originDraft.levelOneFeatAbility=featAbility.value;
+    if (language) originDraft.languageChoice=language.value.trim();
+    if (proficiency) originDraft.proficiencyChoice=proficiency.value.trim();
+    return originDraft;
+  };
+  const buildOptions = () => {
+    readOriginControls();
+    const race=rules.races[currentKeys().raceKey];
+    const enabled=Boolean(originDraft.enabled || race?.customLineage);
+    return enabled ? { bonuses:{}, flexible:originAmounts(race), flexibleAbilities:originDraft.flexibleAbilities } : {};
+  };
+  const renderOriginControls = () => {
+    const { classKey,raceKey }=currentKeys(), race=rules.races[raceKey];
+    const forced=Boolean(race?.customLineage); if (forced) originDraft.enabled=true;
+    const enabled=Boolean(originDraft.enabled || forced), amounts=originAmounts(race), priority=rules.statPriorities[classKey] || Object.keys(abilities);
+    const used=[];
+    const selected=amounts.map((_,index)=>{
+      const preferred=originDraft.flexibleAbilities?.[index];
+      const choice=preferred && !used.includes(preferred) ? preferred : priority.find(key=>!used.includes(key));
+      used.push(choice); return choice;
+    });
+    originDraft.flexibleAbilities=selected;
+    const temporary={ raceKey, race:race?.name, classes:[{key:classKey,level:1}] };
+    const featOptions=Object.entries(rules.feats).filter(([key])=>rules.featAvailable?.(key,temporary)?.ok !== false).map(([key,feat])=>`<option value="${key}" ${originDraft.levelOneFeatKey===key ? "selected" : ""}>${esc(feat.name)}${sourceSuffix(feat.source)}</option>`).join("");
+    const selectedFeat=rules.feats[originDraft.levelOneFeatKey] || null;
+    const featAbilities=selectedFeat?.abilityChoices || [];
+    if (featAbilities.length && !featAbilities.includes(originDraft.levelOneFeatAbility)) originDraft.levelOneFeatAbility=priority.find(key=>featAbilities.includes(key)) || featAbilities[0];
+    const featAbilityControl=forced && featAbilities.length ? `<label>Характеристика черты<select id="builder-lineage-feat-ability">${featAbilities.map(key=>`<option value="${key}" ${originDraft.levelOneFeatAbility===key ? "selected" : ""}>${abilities[key]}</option>`).join("")}</select></label>` : "";
+    const canReplaceSkill=Boolean(race?.skills?.length);
+    const lineageSkill=forced && originDraft.lineageTalent === "skill";
+    if (forced && !originDraft.languageChoice) originDraft.languageChoice="Эльфийский";
+    const languageControl=`<label>${forced ? "Дополнительный язык" : "Новый язык вместо врождённого"}<input id="builder-origin-language" list="builder-language-list" value="${esc(originDraft.languageChoice || "")}" placeholder="Например, Драконий"><datalist id="builder-language-list">${languageOptions.map(name=>`<option value="${name}">`).join("")}</datalist></label>`;
+    const proficiencyControl=!forced ? `<label>Замена владения<input id="builder-origin-proficiency" value="${esc(originDraft.proficiencyChoice || "")}" placeholder="Например, инструменты алхимика"><small>Необязательно: запишется в инструменты и прочие владения.</small></label>` : "";
+    $("#builder-origin-box").innerHTML=`<div class="builder-section-head"><div><span class="eyebrow">Tasha's Cauldron of Everything</span><h3>${forced ? "Особая родословная" : "Настройка происхождения"}</h3></div>${forced ? "" : `<label class="compact-toggle"><input id="builder-origin-enabled" type="checkbox" ${enabled ? "checked" : ""}><span>использовать</span></label>`}</div><p class="builder-help">${forced ? "Выбери размер, талант происхождения, характеристику +2, язык и черту первого уровня." : "Перенеси врождённые бонусы характеристик, язык и подходящее владение. Каждый бонус назначается отдельно и не складывается с другим расовым бонусом."}</p>${enabled ? `<div class="origin-ability-grid">${amounts.map((amount,index)=>`<label>Бонус +${amount}<select data-origin-ability="${index}">${Object.entries(abilities).map(([key,name])=>`<option value="${key}" ${selected[index]===key ? "selected" : ""}>${name}</option>`).join("")}</select></label>`).join("")}</div>${forced ? `<div class="builder-form compact"><label>Размер<select id="builder-lineage-size"><option ${originDraft.size!=="Маленький" ? "selected" : ""}>Средний</option><option ${originDraft.size==="Маленький" ? "selected" : ""}>Маленький</option></select></label><label>Талант<select id="builder-lineage-talent"><option value="darkvision" ${originDraft.lineageTalent!=="skill" ? "selected" : ""}>Тёмное зрение 60 фт.</option><option value="skill" ${originDraft.lineageTalent==="skill" ? "selected" : ""}>Владение навыком</option></select></label><label class="wide">Черта 1 уровня<select id="builder-lineage-feat"><option value="">Выбери черту</option>${featOptions}</select></label>${featAbilityControl}</div>` : ""}<div class="builder-form compact origin-custom-proficiencies">${languageControl}${proficiencyControl}</div>${(canReplaceSkill || lineageSkill) ? `<label class="origin-skill-choice">${lineageSkill ? "Навык родословной" : "Замена расового навыка"}<select id="builder-origin-skill"><option value="">Автоматически</option>${skills.map(([key,name])=>`<option value="${key}" ${originDraft.skillChoice===key ? "selected" : ""}>${name}</option>`).join("")}</select></label>` : ""}` : ""}`;
+    $("#builder-origin-enabled")?.addEventListener("change",()=>{ readOriginControls(); renderOriginControls(); if(autoStats) applyRecommendedStats(); });
+    $("#builder-lineage-talent")?.addEventListener("change",()=>{ readOriginControls(); renderOriginControls(); });
+    $("#builder-lineage-feat")?.addEventListener("change",()=>{ readOriginControls(); renderOriginControls(); });
+    $$('[data-origin-ability]').forEach(select=>select.addEventListener("change",()=>{ readOriginControls(); const values=$$('[data-origin-ability]').map(item=>item.value); if(new Set(values).size!==values.length){ toast("Расовые бонусы нужно назначить разным характеристикам"); renderOriginControls(); } if(autoStats) applyRecommendedStats(); }));
+    ["builder-origin-skill","builder-lineage-size","builder-lineage-feat-ability","builder-origin-language","builder-origin-proficiency"].forEach(id=>$("#"+id)?.addEventListener("change",readOriginControls));
+  };
 
   const applyRecommendedStats = () => {
     const { classKey, raceKey, level } = currentKeys();
-    const build = rules.abilityBuild(classKey, raceKey, level);
+    const build = rules.abilityBuild(classKey, raceKey, level, buildOptions());
     statInputs().forEach(input => {
       const key = input.dataset.builderStat;
       const raceBonus = build.bonuses[key], levelBonus = build.levelBonuses[key];
@@ -1488,7 +1650,7 @@ function openCharacterBuilderV2(quickStart = false) {
   const applySingleRolledStat = (key, roll) => {
     if (!roll) return;
     const { classKey, raceKey, level } = currentKeys();
-    const build = rules.abilityBuild(classKey,raceKey,level);
+    const build = rules.abilityBuild(classKey,raceKey,level,buildOptions());
     const input = $(`[data-builder-stat="${key}"]`);
     if (!input) return;
     const raceBonus = Number(build.bonuses[key] || 0);
@@ -1507,16 +1669,17 @@ function openCharacterBuilderV2(quickStart = false) {
   const refreshSubclasses = () => {
     const { classKey, level } = currentKeys();
     const unlock = rules.subclassLevel(classKey);
-    const options = rules.subclasses[classKey] || [];
+    const options = rules.subclassOptions?.(classKey) || (rules.subclasses[classKey] || []).map(name => ({ name, source:"srd2014" }));
     const selected = $("#builder-subclass").value || (s.classKey === classKey ? s.subclass : "");
     $("#builder-subclass").disabled = level < unlock;
-    $("#builder-subclass").innerHTML = level < unlock ? `<option value="">Выбор откроется на ${unlock} уровне</option>` : `<option value="">Без подкласса</option>${options.map(name => `<option ${name === selected ? "selected" : ""}>${name}</option>`).join("")}`;
+    $("#builder-subclass").innerHTML = level < unlock ? `<option value="">Выбор откроется на ${unlock} уровне</option>` : `<option value="">Без подкласса</option>${options.map(option => `<option value="${esc(option.name)}" ${option.name === selected ? "selected" : ""}>${esc(option.name)}${sourceSuffix(option.source)}</option>`).join("")}`;
   };
 
   const refreshConcept = () => {
     const { classKey, raceKey, backgroundKey, level } = currentKeys();
     const cls = rules.classes[classKey], race = rules.races[raceKey], background = rules.backgrounds[backgroundKey];
     refreshSubclasses();
+    renderOriginControls();
     $("#builder-concept").innerHTML = `<article><small>Класс</small><strong>${cls.name}</strong><span>к${cls.hitDie} HP · ${cls.caster === "none" ? "без магии" : cls.caster === "pact" ? "магия договора" : "заклинатель"}</span></article><article><small>Раса</small><strong>${race.name}</strong><span>${race.speed} фт. · ${race.darkvision ? `тёмное зрение ${race.darkvision}` : "обычное зрение"}</span></article><article><small>Предыстория</small><strong>${background.name}</strong><span>${background.summary}</span></article><article><small>Уровень</small><strong>${level}</strong><span>Мастерство ${signed(rules.proficiency(level))}</span></article>`;
   };
 
@@ -1533,7 +1696,9 @@ function openCharacterBuilderV2(quickStart = false) {
   const refreshSkills = (autoPick = false) => {
     const { classKey, raceKey, backgroundKey } = currentKeys();
     const background = rules.backgrounds[backgroundKey], race = rules.races[raceKey], rule = rules.classSkills[classKey];
-    const granted = [...new Set([...(background.skills || []), ...(race.skills || [])])];
+    readOriginControls();
+    const raceSkills = originDraft.skillChoice ? [originDraft.skillChoice] : (race.skills || []);
+    const granted = [...new Set([...(background.skills || []), ...raceSkills])];
     const options = (rule?.options || []).filter(key => !granted.includes(key));
     const previous = new Set($$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill));
     const chosen = options.filter(key => previous.has(key)).slice(0, rule?.count || 0);
@@ -1553,7 +1718,9 @@ function openCharacterBuilderV2(quickStart = false) {
     const root = $("#builder-expertise");
     if (!count) { root.innerHTML = ""; return; }
     const background = rules.backgrounds[backgroundKey], race = rules.races[raceKey];
-    const available = [...new Set([...(background.skills || []), ...(race.skills || []), ...$$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill)])];
+    readOriginControls();
+    const raceSkills = originDraft.skillChoice ? [originDraft.skillChoice] : (race.skills || []);
+    const available = [...new Set([...(background.skills || []), ...raceSkills, ...$$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill)])];
     const previous = new Set($$('[data-builder-expertise]:checked').map(input => input.dataset.builderExpertise));
     const selected = available.filter(key => previous.has(key) || (s.expertise || []).includes(key)).slice(0,count);
     if (autoPick || !selected.length) available.forEach(key => { if (selected.length < count && !selected.includes(key)) selected.push(key); });
@@ -1590,6 +1757,8 @@ function openCharacterBuilderV2(quickStart = false) {
     const { classKey, raceKey, backgroundKey, level } = currentKeys();
     if (instant) { applyRecommendedStats(); refreshSkills(true); refreshExpertise(true); }
     const cls = rules.classes[classKey], race = rules.races[raceKey], background = rules.backgrounds[backgroundKey], skillRule = rules.classSkills[classKey];
+    readOriginControls();
+    const raceSkills = originDraft.skillChoice ? [originDraft.skillChoice] : (race.skills || []);
     const selectedClassSkills = $$('[data-builder-skill]:checked').map(input => input.dataset.builderSkill);
     const selectedExpertise = $$('[data-builder-expertise]:checked').map(input => input.dataset.builderExpertise);
     const expertiseCount = Array.from({length:level}, (_,index) => rules.expertiseChoicesAt(classKey,index + 1)).reduce((sum,value) => sum + value, 0);
@@ -1606,18 +1775,41 @@ function openCharacterBuilderV2(quickStart = false) {
     next.stats = Object.fromEntries(statInputs().map(input => [input.dataset.builderStat, Math.max(1, Math.min(30, Number(input.value || 10)))]));
     next.autoProficiency = true; next.autoSpellSlots = true; next.autoArmorClass = $("#builder-ac").checked;
     next.proficiency = rules.proficiency(level); next.saveProficiencies = [...cls.saves];
-    next.skillProficiencies = [...new Set([...(background.skills || []), ...(race.skills || []), ...selectedClassSkills])];
+    next.skillProficiencies = [...new Set([...(background.skills || []), ...raceSkills, ...selectedClassSkills])];
     next.expertise = [...new Set(selectedExpertise)];
     next.spellcastingAbility = cls.spellAbility || "";
     next.hitDieSize = cls.hitDie; next.hitDiceMax = level; next.hitDiceCurrent = level; next.hitDicePools = [{ sides:cls.hitDie, total:level, current:level }];
-    const recommendedAdvancements = rules.abilityBuild(classKey, raceKey, level).advancements;
+    const recommendedAdvancements = rules.abilityBuild(classKey, raceKey, level, buildOptions()).advancements;
     next.abilityAdvancements = recommendedAdvancements.map(entry => autoStats || instant ? entry : { ...entry, abilityIncreases:{}, manual:true });
-    next.feats = [];
+    next.originCustomization = { ...originDraft, enabled:Boolean(originDraft.enabled || race.customLineage) };
+    if (race.customLineage && !originDraft.levelOneFeatKey) return toast("Для Особой родословной выбери черту первого уровня");
+    if (race.customLineage && !originDraft.languageChoice) return toast("Для Особой родословной выбери дополнительный язык");
+    const lineageFeat=rules.feats[originDraft.levelOneFeatKey] || null;
+    const lineageFeatSkills=[];
+    if (race.customLineage && originDraft.levelOneFeatKey) {
+      const featAbility=(lineageFeat?.abilityChoices || []).includes(originDraft.levelOneFeatAbility) ? originDraft.levelOneFeatAbility : "";
+      if (featAbility) next.stats[featAbility]=Math.min(20,Number(next.stats[featAbility] || 10)+1);
+      if (originDraft.levelOneFeatKey === "resilient" && featAbility) next.saveProficiencies=[...new Set([...next.saveProficiencies,featAbility])];
+      if (originDraft.levelOneFeatKey === "mobile") next.speed=Number(race.speed || 30)+10;
+      if (["skilled","skillexpert"].includes(originDraft.levelOneFeatKey)) {
+        const count=originDraft.levelOneFeatKey === "skilled" ? 3 : 1;
+        const available=[...(rules.classSkills[classKey]?.options || []),...skills.map(([key])=>key)].filter(key=>!next.skillProficiencies.includes(key));
+        lineageFeatSkills.push(...[...new Set(available)].slice(0,count));
+        next.skillProficiencies=[...new Set([...next.skillProficiencies,...lineageFeatSkills])];
+        if (originDraft.levelOneFeatKey === "skillexpert" && lineageFeatSkills[0]) next.expertise=[...new Set([...next.expertise,lineageFeatSkills[0]])];
+      }
+      next.feats = [{ key:originDraft.levelOneFeatKey, name:lineageFeat?.name, source:lineageFeat?.source || "srd2014", level:1, ability:featAbility, skillProficiencies:lineageFeatSkills }];
+    } else next.feats = [];
     next.armorProficiencies = cls.armor; next.weaponProficiencies = cls.weapons;
-    next.toolProficiencies = background.tools || ""; next.languages = [race.languages, background.languages].filter(value => value && value !== "—").join("; ");
-    next.size = race.size; next.speed = race.speed; next.darkvision = race.darkvision; next.ancestryTraits = race.traits;
+    next.toolProficiencies = mergeText(background.tools || "", originDraft.enabled ? originDraft.proficiencyChoice : "");
+    const ancestryLanguages=race.customLineage ? `Общий, ${originDraft.languageChoice}` : race.languages;
+    next.languages = [ancestryLanguages, originDraft.enabled && !race.customLineage ? originDraft.languageChoice : "", background.languages].filter(value => value && value !== "—").join("; ");
+    next.size = race.customLineage ? (originDraft.size || "Средний") : race.size; next.speed = race.customLineage && originDraft.levelOneFeatKey === "mobile" ? Number(race.speed || 30)+10 : race.speed;
+    next.darkvision = race.customLineage ? (originDraft.lineageTalent === "darkvision" ? 60 : 0) : race.darkvision;
+    next.ancestryTraits = `${race.traits}${originDraft.enabled && !race.customLineage ? " Настройка происхождения Таши включена." : ""}`;
+    next.optionalFeatures = $("#builder-tasha-options")?.checked ? (rules.optionalFeaturesFor?.(classKey,level) || []).map(entry=>entry.key) : [];
     next.xp = Math.max(Number(next.xp || 0), rules.xpForLevel(level));
-    if ($("#builder-hp").checked || instant) { next.hpMax = rules.fixedHp(cls.hitDie, level, modifier(next.stats.con)); next.hpCurrent = next.hpMax; next.hpTemp = 0; }
+    if ($("#builder-hp").checked || instant) { next.hpMax = rules.fixedHp(cls.hitDie, level, modifier(next.stats.con)) + (race.customLineage && originDraft.levelOneFeatKey === "tough" ? 2*level : 0); next.hpCurrent = next.hpMax; next.hpTemp = 0; }
     const totals = rules.slotsFor(classKey, level);
     next.spellSlots = Array.from({length:9}, (_,i) => ({ level:i+1, total:Number(totals[i] || 0), used:0 }));
     const automaticNames = new Set((cls.resources(level, next) || []).map(resource => resource.name));
@@ -1635,6 +1827,8 @@ function openCharacterBuilderV2(quickStart = false) {
   };
 
   ["builder-class","builder-race","builder-background","builder-level"].forEach(id => $("#" + id).addEventListener("change", () => {
+    readOriginControls();
+    if (id === "builder-race") originDraft = { enabled:false, flexibleAbilities:[], skillChoice:"", lineageTalent:"darkvision", size:"", languageChoice:"", proficiencyChoice:"", levelOneFeatKey:"", levelOneFeatAbility:"" };
     refreshConcept();
     if (autoStats) applyRecommendedStats();
     if (currentStep === "details") { refreshSkills(true); refreshExpertise(true); refreshReview(); }
@@ -1675,7 +1869,8 @@ const multiclassProficiencies = {
   monk:{ weapons:"Простое оружие, короткие мечи" },
   paladin:{ armor:"Лёгкие и средние доспехи, щиты", weapons:"Простое и воинское оружие" },
   ranger:{ armor:"Лёгкие и средние доспехи, щиты", weapons:"Простое и воинское оружие", skill:true },
-  rogue:{ armor:"Лёгкие доспехи", tools:"Воровские инструменты", skill:true }
+  rogue:{ armor:"Лёгкие доспехи", tools:"Воровские инструменты", skill:true },
+  artificer:{ armor:"Лёгкие и средние доспехи, щиты", tools:"Воровские инструменты, инструменты жестянщика" }
 };
 
 function multiclassEligibility(sheet, targetKey) {
@@ -1695,7 +1890,7 @@ function openLevelUpWizard() {
   openModal("Повышение уровня", `
     <div class="level-up-wizard">
       <header class="level-up-hero"><div><span class="eyebrow">Новая глава</span><h3>${esc(current.characterName || "Герой")}: ${oldTotal} → ${oldTotal + 1}</h3><p>Продолжи текущий путь или возьми первый уровень другого класса.</p></div><div class="level-up-number">${oldTotal + 1}</div></header>
-      <div class="level-up-grid"><label>Куда вложить уровень<select id="level-up-class">${Object.entries(rules.classes).map(([key, cls]) => `<option value="${key}" ${key === selectedKey ? "selected" : ""}>${cls.name}${hasClass(current,key) ? ` · сейчас ${classLevel(current,key)}` : " · новый класс"}</option>`).join("")}</select></label><label>Прирост HP<select id="level-up-hp"><option value="fixed">Среднее значение</option><option value="roll">Бросить кость хитов</option></select></label></div>
+      <div class="level-up-grid"><label>Куда вложить уровень<select id="level-up-class">${Object.entries(rules.classes).map(([key, cls]) => `<option value="${key}" ${key === selectedKey ? "selected" : ""}>${cls.name}${sourceSuffix(cls.source)}${hasClass(current,key) ? ` · сейчас ${classLevel(current,key)}` : " · новый класс"}</option>`).join("")}</select></label><label>Прирост HP<select id="level-up-hp"><option value="fixed">Среднее значение</option><option value="roll">Бросить кость хитов</option></select></label></div>
       <div id="level-up-eligibility"></div>
       <div id="level-up-subclass"></div>
       <div id="level-up-skill"></div>
@@ -1717,7 +1912,7 @@ function openLevelUpWizard() {
     const feat = rules.feats[select.value];
     const abilityOptions = feat?.abilityChoices || [];
     const availableSkills = skills.filter(([key]) => !current.skillProficiencies.includes(key));
-    $("#level-up-feat-detail").innerHTML = `<p>${esc(feat?.summary || "")}</p>${abilityOptions.length ? `<label>Характеристика<select id="level-up-feat-ability">${abilityOptions.map(key => `<option value="${key}">${abilities[key]}</option>`).join("")}</select></label>` : ""}${select.value === "skilled" ? `<div><small>Выбери три навыка</small><div class="level-skill-picks">${availableSkills.map(([key,name]) => `<label><input type="checkbox" data-level-feat-skill="${key}"><span>${name}</span></label>`).join("")}</div></div>` : ""}`;
+    $("#level-up-feat-detail").innerHTML = `<div class="feat-detail-head"><strong>${esc(feat?.name || "Черта")}</strong>${sourceBadge(feat?.source)}</div>${feat?.originalName ? `<small>${esc(feat.originalName)}</small>` : ""}<p>${esc(feat?.summary || "")}</p>${abilityOptions.length ? `<label>Характеристика<select id="level-up-feat-ability">${abilityOptions.map(key => `<option value="${key}">${abilities[key]}</option>`).join("")}</select></label>` : ""}${select.value === "skilled" ? `<div><small>Выбери три навыка</small><div class="level-skill-picks">${availableSkills.map(([key,name]) => `<label><input type="checkbox" data-level-feat-skill="${key}"><span>${name}</span></label>`).join("")}</div></div>` : ""}`;
     $$('[data-level-feat-skill]').forEach(input => input.addEventListener("change", () => {
       if ($$('[data-level-feat-skill]:checked').length > 3) input.checked = false;
       updatePreview();
@@ -1730,7 +1925,7 @@ function openLevelUpWizard() {
     const { key, nextClassLevel } = targetData();
     const panel = $("#level-up-advancement");
     if (!rules.isAsiLevel(key, nextClassLevel)) { panel.innerHTML = ""; return; }
-    const availableFeats = Object.entries(rules.feats).filter(([featKey]) => !hasFeat(current, featKey));
+    const availableFeats = Object.entries(rules.feats).filter(([featKey]) => !hasFeat(current, featKey) && rules.featAvailable?.(featKey,current)?.ok !== false);
     panel.innerHTML = `<section class="level-choice"><div class="panel-heading"><div><span class="eyebrow">Выбор развития</span><h3>Характеристики или черта</h3></div><span class="required-badge">обязательно</span></div><div class="advancement-tabs"><button class="active" data-advancement="asi2" type="button">+2 к одной</button><button data-advancement="asi11" type="button">+1 к двум</button><button data-advancement="feat" type="button">Черта</button></div><input id="level-up-advancement-type" type="hidden" value="asi2"><div id="level-up-advancement-detail"></div></section>`;
     const showChoice = type => {
       $("#level-up-advancement-type").value = type;
@@ -1738,7 +1933,7 @@ function openLevelUpWizard() {
       const detail = $("#level-up-advancement-detail");
       if (type === "asi2") detail.innerHTML = `<label>Повысить на 2<select id="level-up-ability-a">${Object.entries(abilities).map(([ability,name]) => `<option value="${ability}">${name} · сейчас ${Number(current.stats[ability])}</option>`).join("")}</select></label>`;
       else if (type === "asi11") detail.innerHTML = `<div class="two-col"><label>Первая +1<select id="level-up-ability-a">${Object.entries(abilities).map(([ability,name]) => `<option value="${ability}">${name}</option>`).join("")}</select></label><label>Вторая +1<select id="level-up-ability-b">${Object.entries(abilities).map(([ability,name],index) => `<option value="${ability}" ${index === 1 ? "selected" : ""}>${name}</option>`).join("")}</select></label></div>`;
-      else detail.innerHTML = `<label>Выбрать черту<select id="level-up-feat">${availableFeats.map(([featKey,feat]) => `<option value="${featKey}">${feat.name}</option>`).join("")}</select></label><div id="level-up-feat-detail" class="feat-detail"></div>`;
+      else detail.innerHTML = `<label>Выбрать черту<select id="level-up-feat">${availableFeats.map(([featKey,feat]) => `<option value="${featKey}">${feat.name}${sourceSuffix(feat.source)}</option>`).join("")}</select></label><div id="level-up-feat-detail" class="feat-detail"></div>`;
       $("#level-up-ability-a")?.addEventListener("change", updatePreview);
       $("#level-up-ability-b")?.addEventListener("change", updatePreview);
       $("#level-up-feat")?.addEventListener("change", renderFeatDetails);
@@ -1768,13 +1963,14 @@ function openLevelUpWizard() {
     const unlock = rules.subclassLevel(key);
     const oldEntry = classEntries(current).find(entry => entry.key === key);
     const chooseSubclass = nextClassLevel >= unlock && !oldEntry?.subclass;
-    $("#level-up-subclass").innerHTML = chooseSubclass ? `<section class="level-choice"><span class="eyebrow">Подкласс</span><h3>Выбери направление ${cls.name.toLowerCase()}</h3><select id="level-up-subclass-select"><option value="">Выбрать позже</option>${(rules.subclasses[key] || []).map(name => `<option>${name}</option>`).join("")}</select></section>` : "";
+    const subclassChoices = rules.subclassOptions?.(key) || (rules.subclasses[key] || []).map(name => ({ name, source:"srd2014" }));
+    $("#level-up-subclass").innerHTML = chooseSubclass ? `<section class="level-choice"><span class="eyebrow">Подкласс</span><h3>Выбери направление ${cls.name.toLowerCase()}</h3><select id="level-up-subclass-select"><option value="">Выбрать позже</option>${subclassChoices.map(option => `<option value="${esc(option.name)}">${esc(option.name)}${sourceSuffix(option.source)}</option>`).join("")}</select></section>` : "";
     const grants = !existing && multiclassProficiencies[key]?.skill;
     const skillOptions = (rules.classSkills[key]?.options || skills.map(([skillKey]) => skillKey)).filter(skillKey => !current.skillProficiencies.includes(skillKey));
     $("#level-up-skill").innerHTML = grants ? `<section class="level-choice"><span class="eyebrow">Мультикласс</span><h3>Дополнительный навык</h3><select id="level-up-multiclass-skill">${skillOptions.map(skillKey => `<option value="${skillKey}">${skillName(skillKey)}</option>`).join("")}</select></section>` : "";
     renderAdvancement();
     renderLevelExpertise();
-    $("#level-up-gains").innerHTML = levelFeaturesMarkup(key,nextClassLevel) + commonLevelFeaturesMarkup(oldTotal + 1);
+    $("#level-up-gains").innerHTML = levelFeaturesMarkup(key,nextClassLevel,classEntries(current).find(entry=>entry.key===key)?.subclass || "",current.optionalFeatures || []) + commonLevelFeaturesMarkup(oldTotal + 1);
     $("#level-up-subclass-select")?.addEventListener("change", updatePreview);
     $("#level-up-multiclass-skill")?.addEventListener("change", () => { renderLevelExpertise(); updatePreview(); });
     $("#level-up-apply").disabled = false;
@@ -1902,9 +2098,10 @@ function filterOwnedSpells() {
 function toggleSpellPrepared(id) {
   const next = structuredClone(currentSheet());
   const spell = next.spellsList.find(item => item.id === id); if (!spell) return;
+  if (spell.alwaysPreparedBySubclass) return toast(`«${spell.name}» всегда подготовлено подклассом ${spell.subclassGrantName || "персонажа"}`);
   spell.prepared = !spell.prepared;
   const limit = preparedSpellLimit(next);
-  const count = next.spellsList.filter(item => item.prepared && Number(item.level) > 0).length;
+  const count = next.spellsList.filter(item => item.prepared && !item.alwaysPreparedBySubclass && Number(item.level) > 0).length;
   if (spell.prepared && limit !== null && count > limit) toast(`Подготовлено ${count}/${limit} — лимит превышен`);
   saveNow(next, spell.prepared ? "Заклинание подготовлено" : "Заклинание убрано", "Подготовка заклинаний"); renderSheet();
 }
@@ -1916,7 +2113,7 @@ function showSpellInfoFor(sheet, id) {
   const spell = sheet.spellsList.find(item => item.id === id); if (!spell) return;
   const formula = Array.isArray(spell.effectParts) && spell.effectParts.length ? formulaFromParts(spell.effectParts,sheet) : spell.damage;
   const kind = spellRollKind(spell);
-  openModal(spell.name, `<div class="spell-detail"><div class="item-flags"><span>${Number(spell.level) ? `${spell.level} уровень` : "заговор"}</span><span>${esc(spell.school || "школа не указана")}</span>${kind === "healing" ? "<span>лечение</span>" : kind === "damage" ? "<span>урон</span>" : ""}${spell.ritual ? "<span>ритуал</span>" : ""}${spell.concentration ? "<span>концентрация</span>" : ""}</div><dl><dt>Накладывание</dt><dd>${esc(spell.castingTime || "—")}</dd><dt>Дистанция</dt><dd>${esc(spell.range || "—")}</dd><dt>Длительность</dt><dd>${esc(spell.duration || "—")}</dd>${formula ? `<dt>${kind === "healing" ? "Лечение" : "Урон"}</dt><dd>${esc(resolveDiceFormula(formula,sheet))}</dd>` : ""}${spell.upcastParts?.length ? `<dt>За круг выше</dt><dd>+${esc(resolveDiceFormula(formulaFromParts(spell.upcastParts,sheet),sheet))}</dd>` : ""}</dl><p>${esc(spell.description || "Описание не добавлено.")}</p></div><button id="spell-info-close" class="primary">Закрыть</button>`);
+  openModal(spell.name, `<div class="spell-detail"><div class="item-flags"><span>${Number(spell.level) ? `${spell.level} уровень` : "заговор"}</span>${spell.sourceId ? `<span>${esc(sourceShort(spell.sourceId) || spell.sourceId)}</span>` : ""}<span>${esc(spell.school || "школа не указана")}</span>${kind === "healing" ? "<span>лечение</span>" : kind === "damage" ? "<span>урон</span>" : ""}${spell.ritual ? "<span>ритуал</span>" : ""}${spell.concentration ? "<span>концентрация</span>" : ""}</div><dl><dt>Накладывание</dt><dd>${esc(spell.castingTime || "—")}</dd><dt>Дистанция</dt><dd>${esc(spell.range || "—")}</dd><dt>Длительность</dt><dd>${esc(spell.duration || "—")}</dd>${formula ? `<dt>${kind === "healing" ? "Лечение" : "Урон"}</dt><dd>${esc(resolveDiceFormula(formula,sheet))}</dd>` : ""}${spell.upcastParts?.length ? `<dt>За круг выше</dt><dd>+${esc(resolveDiceFormula(formulaFromParts(spell.upcastParts,sheet),sheet))}</dd>` : ""}</dl><p>${esc(spell.description || "Описание не добавлено.")}</p></div><button id="spell-info-close" class="primary">Закрыть</button>`);
   $("#spell-info-close").addEventListener("click", closeModal);
 }
 
@@ -2027,20 +2224,21 @@ function openItemCatalog() {
   let visibleLimit = 80;
   $("#game-modal").classList.add("library-open", "catalog-modal");
   openModal("Каталог предметов 5e 2014", `<section class="item-catalog-shell">
-    <header class="catalog-hero"><div><span class="eyebrow">Открытые правила 2014</span><h3>Весь арсенал в одном месте</h3><p>Обычные и магические предметы работают через одну модель. Для магического оружия, доспехов и боеприпасов можно выбрать физическую основу.</p></div><strong>${catalog.length}<small>позиций</small></strong></header>
-    <div class="item-catalog-tools"><label>Поиск<input id="item-search" type="search" placeholder="Название, свойство, ключ или редкость…" autofocus></label><label>Категория<select id="item-type"><option value="all">Все категории</option>${Object.entries(itemCategoryNames).map(([key,name]) => `<option value="${key}">${name}</option>`).join("")}</select></label><label>Редкость<select id="item-rarity"><option value="all">Любая редкость</option>${["Обычный","Необычный","Редкий","Очень редкий","Легендарный","Артефакт"].map(name => `<option>${name}</option>`).join("")}</select></label><label>Сортировка<select id="item-sort"><option value="name">По названию</option><option value="category">По категории</option><option value="rarity">По редкости</option><option value="price">По цене</option><option value="weight">По весу</option></select></label></div>
+    <header class="catalog-hero"><div><span class="eyebrow">PHB · XGtE · TCoE</span><h3>Весь арсенал в одном месте</h3><p>Базовое снаряжение, общие магические предметы Занатара, татуировки и фокусировки Таши работают через одну модель.</p></div><strong>${catalog.length}<small>позиций</small></strong></header>
+    <div class="item-catalog-tools"><label>Поиск<input id="item-search" type="search" placeholder="Название, свойство, ключ или редкость…" autofocus></label><label>Категория<select id="item-type"><option value="all">Все категории</option>${Object.entries(itemCategoryNames).map(([key,name]) => `<option value="${key}">${name}</option>`).join("")}</select></label><label>Редкость<select id="item-rarity"><option value="all">Любая редкость</option>${["Обычный","Необычный","Редкий","Очень редкий","Легендарный","Артефакт"].map(name => `<option>${name}</option>`).join("")}</select></label><label>Источник<select id="item-source"><option value="all">Все книги</option><option value="srd2014">База 2014</option><option value="xgte">Занатар</option><option value="tcoe">Таша</option></select></label><label>Сортировка<select id="item-sort"><option value="name">По названию</option><option value="category">По категории</option><option value="rarity">По редкости</option><option value="price">По цене</option><option value="weight">По весу</option></select></label></div>
     <div class="catalog-result-head"><span id="item-result-count"></span><small>Поиск проверяет весь каталог и исходные английские названия.</small></div>
     <div id="item-catalog-results" class="item-catalog-results"></div><footer id="item-catalog-more" class="catalog-more"></footer>
   </section>`);
   const matchingItems = () => {
     const query = $("#item-search").value.trim().toLowerCase();
-    const type = $("#item-type").value, rarity = $("#item-rarity").value, sort = $("#item-sort").value;
+    const type = $("#item-type").value, rarity = $("#item-rarity").value, sourceId = $("#item-source").value, sort = $("#item-sort").value;
     const rarityOrder = { "Обычный":1,"Необычный":2,"Редкий":3,"Очень редкий":4,"Легендарный":5,"Артефакт":6 };
     return catalog.filter(item => {
       const matchesType = type === "all" || item.catalogCategory === type;
       const matchesRarity = rarity === "all" || item.rarity === rarity;
+      const matchesSource = sourceId === "all" || (item.sourceId || "srd2014") === sourceId;
       const haystack = `${item.name} ${item.originalName || ""} ${item.key || ""} ${item.properties || ""} ${item.description || ""} ${item.rarity || ""} ${item.source || ""}`.toLowerCase();
-      return matchesType && matchesRarity && (!query || haystack.includes(query));
+      return matchesType && matchesRarity && matchesSource && (!query || haystack.includes(query));
     }).sort((a,b) => {
       if (sort === "category") return String(itemCategoryNames[a.catalogCategory]||"").localeCompare(String(itemCategoryNames[b.catalogCategory]||""),"ru") || String(a.name).localeCompare(String(b.name),"ru");
       if (sort === "rarity") return Number(rarityOrder[a.rarity]||0)-Number(rarityOrder[b.rarity]||0) || String(a.name).localeCompare(String(b.name),"ru");
@@ -2056,7 +2254,7 @@ function openItemCatalog() {
     $("#item-catalog-results").innerHTML = shown.length ? shown.map(item => {
       const owned = currentSheet().inventoryList.filter(entry => itemSystem.normalizeCatalogKey(entry.catalogKey) === item.key).reduce((sum,entry) => sum + Number(entry.quantity || 0),0);
       const baseNote = itemSystem.isMagicVariant(item) ? `<span>выбор основы</span>` : "";
-      return `<article class="catalog-item ${item.magical ? "magical" : ""}"><span class="catalog-item-icon">${itemCombatIcon(item)}</span><div><div class="catalog-item-title"><strong>${esc(item.name)}</strong>${item.originalName && item.originalName !== item.name ? `<small>${esc(item.originalName)}</small>` : ""}</div><div class="catalog-badges"><span>${esc(itemCategoryNames[item.catalogCategory] || "Предмет")}</span>${item.rarity ? `<span>${esc(item.rarity)}</span>` : ""}${item.requiresAttunement ? "<span>настройка</span>" : ""}${baseNote}<span>${esc(catalogPrice(item))}</span></div><p>${esc(catalogItemSummary(item))}</p><small class="catalog-source">${esc(item.source || "SRD 5.1")}${item.key ? ` · ${esc(item.key)}` : ""}</small></div><button class="primary" data-catalog-item="${esc(item.key)}">${itemSystem.isMagicVariant(item) ? `Собрать${owned ? `<small>есть ${owned}</small>` : ""}` : owned ? `Ещё +${Number(item.quantity || 1)}<small>есть ${owned}</small>` : "Добавить"}</button></article>`;
+      return `<article class="catalog-item ${item.magical ? "magical" : ""}"><span class="catalog-item-icon">${itemCombatIcon(item)}</span><div><div class="catalog-item-title"><strong>${esc(item.name)} ${sourceBadge(item.sourceId)}</strong>${item.originalName && item.originalName !== item.name ? `<small>${esc(item.originalName)}</small>` : ""}</div><div class="catalog-badges"><span>${esc(itemCategoryNames[item.catalogCategory] || "Предмет")}</span>${item.rarity ? `<span>${esc(item.rarity)}</span>` : ""}${item.requiresAttunement ? "<span>настройка</span>" : ""}${baseNote}<span>${esc(catalogPrice(item))}</span></div><p>${esc(catalogItemSummary(item))}</p><small class="catalog-source">${esc(item.source || "SRD 5.1")}${item.key ? ` · ${esc(item.key)}` : ""}</small></div><button class="primary" data-catalog-item="${esc(item.key)}">${itemSystem.isMagicVariant(item) ? `Собрать${owned ? `<small>есть ${owned}</small>` : ""}` : owned ? `Ещё +${Number(item.quantity || 1)}<small>есть ${owned}</small>` : "Добавить"}</button></article>`;
     }).join("") : `<div class="catalog-nothing"><span>⌕</span><strong>Ничего не найдено</strong><p>Сбрось редкость, выбери «Все категории» или попробуй часть названия.</p></div>`;
     $("#item-catalog-more").innerHTML = found.length > shown.length ? `<button id="item-show-more" class="secondary" type="button">Показать ещё ${Math.min(80,found.length-shown.length)}<small>осталось ${found.length-shown.length}</small></button>` : found.length ? `<span>Показаны все ${found.length} позиций</span>` : "";
     $$('[data-catalog-item]', $("#item-catalog-results")).forEach(button => button.addEventListener("click", () => {
@@ -2068,6 +2266,7 @@ function openItemCatalog() {
   $("#item-search").addEventListener("input", () => refresh(true));
   $("#item-type").addEventListener("change", () => refresh(true));
   $("#item-rarity").addEventListener("change", () => refresh(true));
+  $("#item-source").addEventListener("change", () => refresh(true));
   $("#item-sort").addEventListener("change", () => refresh(true));
   refresh();
 }
@@ -2410,6 +2609,80 @@ function changePactSlot(delta) {
   saveNow(next); renderSheet();
 }
 
+function openOptionalFeaturesManager() {
+  const sheet=currentSheet();
+  const sections=classEntries(sheet).map(entry=>{
+    const features=rules.optionalFeaturesFor?.(entry.key,entry.level,entry.subclass || "") || [];
+    if (!features.length) return "";
+    return `<section class="option-manager-section"><div class="panel-heading"><h3>${esc(entry.name || rules.classes[entry.key]?.name)}</h3><small>${entry.level} уровень</small></div>${features.map(feature=>`<label class="option-feature-row ${feature.replaces?.length ? "replacement" : ""}"><input type="checkbox" data-optional-feature="${esc(feature.key)}" ${(sheet.optionalFeatures || []).includes(feature.key) ? "checked" : ""}><span><strong>${esc(feature.name)} ${sourceBadge(feature.source)}</strong><small>${esc(feature.summary)}</small>${feature.replaces?.length ? `<i>Заменяет: ${esc(feature.replaces.join(", "))}</i>` : ""}</span></label>`).join("")}</section>`;
+  }).join("");
+  openModal("Опциональные особенности Таши",`${sections || `<div class="read-only">Для текущих классов и уровней опциональных особенностей пока нет.</div>`}<div class="read-only">Это переключатели правил, а не одноразовый выбор. Их можно изменить позже; лист пересчитает ресурсы и расширенные списки заклинаний.</div><div class="modal-actions"><button id="optional-features-save" class="primary" type="button">Сохранить</button><button id="optional-features-cancel" class="secondary" type="button">Отмена</button></div>`);
+  $("#optional-features-save")?.addEventListener("click",()=>{
+    const next=structuredClone(currentSheet());
+    next.optionalFeatures=$$('[data-optional-feature]:checked').map(input=>input.dataset.optionalFeature);
+    syncCharacterMechanics(next); closeModal(); saveNow(next,"Опции Таши обновлены","Опциональные особенности"); renderSheet();
+  });
+  $("#optional-features-cancel")?.addEventListener("click",closeModal);
+}
+
+function infusionFitsItem(infusion,item) {
+  if (!infusion || !item) return false;
+  const key=infusion.key, text=`${item.name || ""} ${item.description || ""} ${item.properties || ""} ${item.slotHint || ""}`.toLowerCase();
+  if (key === "enhanced-weapon" || key === "radiant-weapon") return item.type === "weapon";
+  if (key === "repeating-shot") return item.type === "weapon" && isRangedWeapon(item);
+  if (key === "returning-weapon") return item.type === "weapon" && /метатель|thrown|дротик|копь|топор|молот/i.test(text);
+  if (["enhanced-defense","resistant-armor","arcane-propulsion-armor","armor-of-magical-strength","mind-sharpener"].includes(key)) return item.type === "armor" || /доспех|брон|одежд|armor|clothing/i.test(text);
+  if (key === "repulsion-shield") return isShieldItem(item);
+  if (key === "enhanced-arcane-focus") return item.type === "focus" || /фокус|палочк|жезл|посох|focus|wand|rod|staff/i.test(text);
+  if (key === "boots-of-the-winding-path") return /сапог|ботин|обув|boot/i.test(text);
+  if (key === "helm-of-awareness") return /шлем|шап|обруч|helm|hat/i.test(text);
+  if (key === "spell-refueling-ring") return /кольц|ring/i.test(text);
+  if (key === "homunculus-servant") return /самоцвет|кристалл|gem|crystal/i.test(text);
+  if (key === "replicate-magic-item") return item.type === "gear" && !item.magical;
+  return !item.magical;
+}
+function openInfusionsManager() {
+  const sheet=currentSheet(), level=classLevel(sheet,"artificer");
+  if (level < 2) return toast("Инфузии открываются на 2 уровне Изобретателя");
+  const knownLimit=level >= 18 ? 12 : level >= 14 ? 10 : level >= 10 ? 8 : level >= 6 ? 6 : 4;
+  const activeLimit=level >= 18 ? 6 : level >= 14 ? 5 : level >= 10 ? 4 : level >= 6 ? 3 : 2;
+  const available=rules.infusionsFor?.(level) || [];
+  const known=new Set(sheet.infusionsKnown || []), activeIds=new Set(sheet.infusedItemIds || []);
+  const eligible=(sheet.inventoryList || []).filter(item=>item.infused || !item.magical);
+  const infusionOptions=item=>available.filter(infusion=>known.has(infusion.key) && infusionFitsItem(infusion,item)).map(infusion=>`<option value="${esc(infusion.key)}" ${item.infusionKey===infusion.key ? "selected" : ""}>${esc(infusion.name)}</option>`).join("");
+  openModal("Инфузии Изобретателя",`<div class="infusion-summary"><span><small>Известно</small><strong id="infusions-known-count">${known.size}/${knownLimit}</strong></span><span><small>Активно</small><strong id="infusions-active-count">${activeIds.size}/${activeLimit}</strong></span><span><small>Уровень</small><strong>${level}</strong></span></div><h3>Известные инфузии</h3><div class="infusion-grid">${available.map(infusion=>`<label class="option-feature-row"><input type="checkbox" data-infusion-known="${esc(infusion.key)}" ${known.has(infusion.key) ? "checked" : ""}><span><strong>${esc(infusion.name)}</strong><small>${esc(infusion.summary)}</small><i>с ${Number(infusion.level || 2)} уровня</i></span></label>`).join("")}</div><h3>Наполненные предметы</h3><p class="builder-help">Инфузия применяется только к немагическому предмету. Числовые бонусы оружия, брони и фокуса лист пересчитывает автоматически.</p><div class="infused-items">${eligible.map(item=>`<div class="infused-item-row"><label><input type="checkbox" data-infused-item="${esc(item.id)}" ${activeIds.has(item.id) ? "checked" : ""}><span><strong>${esc(item.name)}</strong><small>${item.type === "weapon" ? "оружие" : item.type === "armor" ? "броня" : "предмет"}</small></span></label><select data-item-infusion="${esc(item.id)}"><option value="">Выбери инфузию</option>${infusionOptions(item)}</select></div>`).join("") || `<div class="read-only">В инвентаре нет подходящих немагических предметов.</div>`}</div><div class="modal-actions"><button id="infusions-save" class="primary" type="button">Применить</button><button id="infusions-cancel" class="secondary" type="button">Отмена</button></div>`);
+  const refresh=()=>{
+    const selectedKnown=$$('[data-infusion-known]:checked').map(input=>input.dataset.infusionKnown);
+    $("#infusions-known-count").textContent=`${selectedKnown.length}/${knownLimit}`;
+    $$('[data-item-infusion]').forEach(select=>{
+      const item=(sheet.inventoryList || []).find(entry=>entry.id===select.dataset.itemInfusion);
+      const previous=select.value;
+      select.innerHTML=`<option value="">Выбери инфузию</option>${available.filter(infusion=>selectedKnown.includes(infusion.key)&&infusionFitsItem(infusion,item)).map(infusion=>`<option value="${esc(infusion.key)}" ${previous===infusion.key ? "selected" : ""}>${esc(infusion.name)}</option>`).join("")}`;
+    });
+    $("#infusions-active-count").textContent=`${$$('[data-infused-item]:checked').length}/${activeLimit}`;
+  };
+  $$('[data-infusion-known],[data-infused-item]').forEach(input=>input.addEventListener("change",refresh)); refresh();
+  $("#infusions-save")?.addEventListener("click",()=>{
+    const selectedKnown=$$('[data-infusion-known]:checked').map(input=>input.dataset.infusionKnown);
+    const selectedItems=$$('[data-infused-item]:checked').map(input=>input.dataset.infusedItem);
+    if (selectedKnown.length > knownLimit) return toast(`Можно знать не больше ${knownLimit} инфузий`);
+    if (selectedItems.length > activeLimit) return toast(`Можно наполнить не больше ${activeLimit} предметов`);
+    const assignments=new Map();
+    for (const itemId of selectedItems) {
+      const key=$(`[data-item-infusion="${CSS.escape(itemId)}"]`)?.value;
+      if (!key || !selectedKnown.includes(key)) return toast("Для каждого активного предмета выбери известную инфузию");
+      if ([...assignments.values()].includes(key)) return toast("Одну и ту же инфузию нельзя держать на двух предметах одновременно");
+      assignments.set(itemId,key);
+    }
+    const next=structuredClone(currentSheet()); next.infusionsKnown=selectedKnown; next.infusedItemIds=selectedItems;
+    next.inventoryList=(next.inventoryList || []).map(item=>{
+      const key=assignments.get(item.id) || ""; item.baseMagicBonus=Number(item.baseMagicBonus ?? item.magicBonus ?? 0); return applyInfusionToItem(item,key,level);
+    });
+    syncCharacterMechanics(next); closeModal(); saveNow(next,"Инфузии применены","Инфузии Изобретателя"); renderSheet();
+  });
+  $("#infusions-cancel")?.addEventListener("click",closeModal);
+}
+
 function openResourceModal(id = null) {
   const resource = currentSheet().resources.find(item => item.id === id) || { id: uuid(), name: "", current: 0, max: 1, reset: "none" };
   openModal(id ? "Настроить ресурс" : "Новый ресурс", `
@@ -2571,38 +2844,44 @@ async function openSpellLibrary() {
   } catch {
     return toast("Не удалось открыть справочник");
   }
+  const casterClasses = Object.entries(rules.classes).filter(([,cls]) => cls.caster !== "none").sort((a,b) => a[1].name.localeCompare(b[1].name,"ru"));
+  const initialClassKey = currentSheet().classKey || casterClasses[0]?.[0] || "";
   $("#game-modal").classList.add("library-open");
   openModal("Справочник заклинаний", `
     <div class="spell-library-tools">
-      <label>Поиск<input id="spell-search" autocomplete="off" placeholder="Огненный шар, лечение, щит..."></label>
+      <label>Поиск<input id="spell-search" autocomplete="off" placeholder="Огненный шар, призыв, лечение..."></label>
       <label>Уровень<select id="spell-level-filter"><option value="all">Все</option><option value="0">Заговоры</option>${Array.from({length: 9}, (_, i) => `<option value="${i + 1}">${i + 1} уровень</option>`).join("")}</select></label>
-      <label>Класс<select id="spell-class-filter"><option value="all">Все классы</option>${["Бард","Волшебник","Друид","Жрец","Колдун","Паладин","Следопыт","Чародей"].map(name => `<option ${rules.classes[currentSheet().classKey]?.name === name ? "selected" : ""}>${name}</option>`).join("")}</select></label>
+      <label>Класс<select id="spell-class-filter"><option value="all">Все классы</option>${casterClasses.map(([key,cls]) => `<option value="${key}" ${key===initialClassKey ? "selected" : ""}>${esc(cls.name)}</option>`).join("")}</select></label>
+      <label>Источник<select id="spell-source-filter"><option value="all">Все книги</option><option value="srd2014">База 2014</option><option value="xgte">Занатар</option><option value="tcoe">Таша</option></select></label>
     </div>
     <div id="spell-library-count" class="read-only"></div>
     <div id="spell-library-results" class="spell-library-results"></div>`);
   const refresh = () => {
     const query = $("#spell-search").value.trim().toLocaleLowerCase("ru");
     const level = $("#spell-level-filter").value;
-    const characterClass = $("#spell-class-filter").value;
+    const classKey = $("#spell-class-filter").value;
+    const sourceId = $("#spell-source-filter").value;
     const found = spellCatalog.filter(spell =>
       (level === "all" || Number(level) === Number(spell.level)) &&
-      (characterClass === "all" || spell.classes.includes(characterClass)) &&
-      (!query || `${spell.name} ${spell.school} ${spell.description}`.toLocaleLowerCase("ru").includes(query))
+      (classKey === "all" || spellAvailableForClass(spell,classKey)) &&
+      (sourceId === "all" || (spell.sourceId || "srd2014") === sourceId) &&
+      (!query || `${spell.name} ${spell.originalName || ""} ${spell.school} ${spell.description} ${(spell.classes || []).join(" ")}`.toLocaleLowerCase("ru").includes(query))
     );
-    $("#spell-library-count").textContent = `Найдено: ${found.length} · уже в гримуаре: ${currentSheet().spellsList.length}`;
+    $("#spell-library-count").textContent = `Найдено: ${found.length} из ${spellCatalog.length} · уже в гримуаре: ${currentSheet().spellsList.length}`;
     $("#spell-library-results").innerHTML = found.map(spell => {
       const exists = currentSheet().spellsList.some(item => item.catalogKey === spell.key || (item.name === spell.name && Number(item.level) === Number(spell.level)));
       return `
       <article class="spell-card">
         <div><span class="spell-level">${spell.level || "З"}</span></div>
-        <div><strong>${esc(spell.name)}</strong><small>${esc(spell.school)} · ${esc(spell.castingTime)} · ${esc(spell.range)}</small><p>${esc(spell.description)}</p><small>${esc(spell.classes.join(", "))}${spell.concentration ? " · концентрация" : ""}${spell.ritual ? " · ритуал" : ""}</small></div>
+        <div><strong>${esc(spell.name)} ${sourceBadge(spell.sourceId)}</strong>${spell.originalName ? `<small>${esc(spell.originalName)}</small>` : ""}<small>${esc(spell.school)} · ${esc(spell.castingTime)} · ${esc(spell.range)}</small><p>${esc(spell.description)}</p><small>${esc((spell.classes || []).join(", "))}${spell.concentration ? " · концентрация" : ""}${spell.ritual ? " · ритуал" : ""}${spell.summon ? " · призыв" : ""}</small></div>
         <button class="primary" data-catalog-spell="${esc(spell.key)}" ${exists ? "disabled" : ""}>${exists ? "Уже в гримуаре" : "Добавить"}</button>
       </article>`; }).join("") || `<div class="read-only">Ничего не найдено. Попробуй другое слово или фильтр.</div>`;
     $$('[data-catalog-spell]', $("#spell-library-results")).forEach(button => button.addEventListener("click", () => {
       const source = spellCatalog.find(spell => spell.key === button.dataset.catalogSpell);
       const next = structuredClone(currentSheet());
-      const sourceClassKey = Object.entries(rules.classes).find(([, cls]) => cls.name === $("#spell-class-filter").value)?.[0] || currentSheet().classKey;
-      next.spellsList.push({ ...structuredClone(source), id: uuid(), catalogKey:source.key, sourceClassKey, prepared: true, rollKind:healingSpellKeys.has(source.key) ? "healing" : source.damage ? "damage" : "none" });
+      const selectedClassKey = $("#spell-class-filter").value;
+      const sourceClassKey = selectedClassKey !== "all" ? selectedClassKey : currentSheet().classKey;
+      next.spellsList.push({ ...structuredClone(source), id:uuid(), catalogKey:source.key, sourceClassKey, prepared:true, rollKind:source.rollKind || (healingSpellKeys.has(source.key) ? "healing" : source.damage ? "damage" : "none") });
       delete next.spellsList.at(-1).key;
       delete next.spellsList.at(-1).classes;
       saveNow(next, "Заклинание добавлено", "Гримуар");
@@ -2610,9 +2889,9 @@ async function openSpellLibrary() {
       button.disabled = true;
     }));
   };
-  $("#spell-search").addEventListener("input", refresh);
-  $("#spell-level-filter").addEventListener("change", refresh);
-  $("#spell-class-filter").addEventListener("change", refresh);
+  ["spell-search","spell-level-filter","spell-class-filter","spell-source-filter"].forEach(id => {
+    const node=$("#"+id); node.addEventListener(id==="spell-search" ? "input" : "change",refresh);
+  });
   refresh();
   $("#spell-search").focus();
 }
@@ -2957,14 +3236,16 @@ function buildVttCharacterModels() {
     });
     const spellModels=(sheet.spellsList||[]).filter(spell=>Number(spell.level||0)===0||spell.prepared).map(spell=>{
       const formula=spellRollFormula(spell,Number(spell.level)||0,sheet);
-      return { id:spell.id,name:spell.name||"Заклинание",level:Number(spell.level||0),school:spell.school||"",prepared:Boolean(spell.prepared),concentration:Boolean(spell.concentration),ritual:Boolean(spell.ritual),formula:String(formula||"").replace(/d/gi,"к"),kind:spellRollKind(spell) };
+      return { id:spell.id,name:spell.name||"Заклинание",level:Number(spell.level||0),school:spell.school||"",prepared:Boolean(spell.prepared),concentration:Boolean(spell.concentration),ritual:Boolean(spell.ritual),formula:String(formula||"").replace(/d/gi,"к"),kind:spellRollKind(spell),sourceId:spell.sourceId||"srd2014",summon:Boolean(spell.summon),summonProfile:spell.summonProfile||"",description:spell.description||"" };
     }).slice(0,80);
     const resourceModels=(sheet.resources||[]).map(resource=>({ id:resource.id,name:resource.name||"Ресурс",current:Number(resource.current||0),max:Number(resource.max||0),reset:resource.reset||"none" }));
     const spellSlotModels=(sheet.spellSlots||[]).filter(slot=>Number(slot.total)>0).map(slot=>({ level:Number(slot.level),total:Number(slot.total),used:Number(slot.used||0),remaining:Math.max(0,Number(slot.total)-Number(slot.used||0)) }));
     const pactSlotModel=Number(sheet.pactSlots?.total||0)>0?{ level:Number(sheet.pactSlots.level||0),total:Number(sheet.pactSlots.total||0),used:Number(sheet.pactSlots.used||0),remaining:Math.max(0,Number(sheet.pactSlots.total||0)-Number(sheet.pactSlots.used||0)) }:null;
+    const companions=(rules.companionMarkersFor?.(sheet) || []).map(entry=>({ ...entry }));
     const combatFeatures=[];
     const rogueLevel=classLevel(sheet,"rogue");
     if (rogueLevel>0) combatFeatures.push({ id:"sneak-attack",name:"Скрытая атака",formula:`${rules.sneakAttackDice(rogueLevel)}к6`,note:"Раз за ход при выполнении условий" });
+    (rules.combatFeaturesFor?.(sheet) || []).forEach((feature,index) => combatFeatures.push({ id:`supplement-${index}-${feature.subclass || feature.name}`,name:feature.name,formula:String(feature.formula || "").replace(/d/gi,"к"),note:feature.note || feature.summary || feature.subclass || "",kind:feature.kind || "damage",sourceId:feature.sourceId || "" }));
     return [playerId, {
       playerId,
       name:sheet.characterName || player.name,
@@ -2996,6 +3277,7 @@ function buildVttCharacterModels() {
       spellSlots:spellSlotModels,
       pactSlots:pactSlotModel,
       combatFeatures,
+      companions,
       spells:spellModels,
       quickSheet:sheet.vttQuickSheet || { sections:["overview","combat","checks","spells"] },
       notes:(sheet.notesList||[]).slice(0,8).map(note=>({ id:note.id,title:note.title||note.name||"Заметка",text:note.text||note.description||"" })),
@@ -3048,6 +3330,40 @@ function vttChangeSpellSlot(level,delta,pact=false) {
   return Promise.resolve({ok:true});
 }
 function vttCastSpell(spellId) { castSpell(spellId); return Promise.resolve({ok:true}); }
+function vttPlaceSummon(spellId,playerId) {
+  if (state.room?.dmId !== state.clientId) return Promise.resolve({ok:false,error:"Только ведущий ставит маркеры призыва"});
+  const player=state.room?.players?.[playerId], spell=(player?.sheet?.spellsList||[]).find(entry=>entry.id===spellId);
+  if (!spell?.summon) return Promise.resolve({ok:false,error:"Заклинание призыва не найдено"});
+  const caster=(state.room.scene?.tokens||[]).find(token=>token.playerId===playerId);
+  const profileNames={ aberration:"Аберрация",beast:"Зверь",celestial:"Небожитель",construct:"Конструкт",elemental:"Элементаль",fey:"Фея",fiend:"Исчадие",shadowspawn:"Теневой дух",undead:"Нежить" };
+  const summonedName=profileNames[spell.summonProfile] || spell.name.replace(/^Призыв\s+/i,"") || "Призванное существо";
+  const payload={ name:`${summonedName} · ${player?.sheet?.characterName||player?.name||"заклинатель"}`, x:caster?Number(caster.x||0)+1:undefined, y:caster?Number(caster.y||0):undefined, size:["celestial","elemental","fiend"].includes(spell.summonProfile)?2:1, hpMax:1, hp:1, ac:10, color:"#7763a8", showHp:false, showAc:false };
+  return new Promise(resolve=>socket.emit("scene:token-add",payload,response=>{
+    if (!response?.ok) toast(response?.error||"Не удалось поставить маркер призыва");
+    else toast(`Маркер «${summonedName}» добавлен на сцену — характеристики можно настроить по ПКМ`);
+    resolve(response||{ok:false});
+  }));
+}
+function vttPlaceCompanion(companionId,playerId) {
+  if (state.room?.dmId !== state.clientId) return Promise.resolve({ok:false,error:"Только ведущий ставит спутников"});
+  const player=state.room?.players?.[playerId], companion=(rules.companionMarkersFor?.(player?.sheet || {}) || []).find(entry=>entry.id===companionId);
+  if (!player || !companion) return Promise.resolve({ok:false,error:"Спутник недоступен"});
+  const caster=(state.room.scene?.tokens||[]).find(token=>token.playerId===playerId);
+  const ownerName=player.sheet?.characterName || player.name || "герой";
+  const tokenName=`${companion.name} · ${ownerName}`;
+  const payload={ name:tokenName,x:caster?Number(caster.x||0)+1:undefined,y:caster?Number(caster.y||0):undefined,size:Number(companion.size||1),hpMax:Number(companion.hpMax||1),hp:Number(companion.hpMax||1),ac:Number(companion.ac||10),color:companion.color||"#7763a8",showHp:Number(companion.hpMax||1)>1,showAc:true };
+  return new Promise(resolve=>socket.emit("scene:token-add",payload,response=>{
+    if (!response?.ok) { toast(response?.error||"Не удалось поставить спутника"); resolve(response||{ok:false}); return; }
+    const created=[...(response.scene?.tokens||[])].reverse().find(token=>!token.playerId&&token.name===tokenName);
+    if (!created) { toast(`Маркер «${companion.name}» добавлен`); resolve(response); return; }
+    const stats={str:{value:10,public:false},dex:{value:10,public:false},con:{value:10,public:false},int:{value:10,public:false},wis:{value:10,public:false},cha:{value:10,public:false}};
+    const attacks=companion.attackFormula||companion.damageFormula?[{id:uuid(),name:companion.name,public:false,attackFormula:companion.attackFormula||"",damageFormula:companion.damageFormula||"",damageType:companion.damageType||""}]:[];
+    const formulas=[];
+    socket.emit("scene:token-update",{tokenId:created.id,badge:companion.kind||"Спутник",badgeColor:companion.color||"#f4c875",npcSheet:{stats,saves:[],checks:[],attacks,formulas}},()=>{});
+    toast(`Спутник «${companion.name}» добавлен — параметры можно уточнить по ПКМ`);
+    resolve(response);
+  }));
+}
 function vttDeathSave(tokenId,visibility="public") {
   return new Promise(resolve=>socket.emit("combat:death-save",{tokenId,visibility},response=>{
     if (!response?.ok) toast(response?.error||"Не удалось бросить спасбросок");
@@ -3103,7 +3419,7 @@ function renderMap() {
       closeModal,
       switchView,
       characters:buildVttCharacterModels(),
-      actions:{ roll:vttRollFormula, openSheet:vttOpenSheet, savePreferences:vttSavePreferences, applyCombat:vttApplyCombat, useItem:vttUseItem, changeResource:vttChangeResource, changeSpellSlot:vttChangeSpellSlot, castSpell:vttCastSpell, deathSave:vttDeathSave }
+      actions:{ roll:vttRollFormula, openSheet:vttOpenSheet, savePreferences:vttSavePreferences, applyCombat:vttApplyCombat, useItem:vttUseItem, changeResource:vttChangeResource, changeSpellSlot:vttChangeSpellSlot, castSpell:vttCastSpell, placeSummon:vttPlaceSummon, placeCompanion:vttPlaceCompanion, deathSave:vttDeathSave }
     });
     return;
   }

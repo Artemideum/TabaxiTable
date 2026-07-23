@@ -6,6 +6,8 @@ const app = fs.readFileSync("public/app.js", "utf8");
 const server = fs.readFileSync("server.js", "utf8");
 const vtt = fs.readFileSync("public/vtt.js", "utf8");
 const vttCss = fs.readFileSync("public/vtt.css", "utf8");
+const indexHtml = fs.readFileSync("public/index.html", "utf8");
+const contentPacks = fs.readFileSync("public/content-packs.js", "utf8");
 
 test("полный лист фильтрует вкладки до привязки игровых контролов", () => {
   const applyIndex = app.indexOf("applySheetTab();", app.indexOf("function renderSheet"));
@@ -37,10 +39,66 @@ test("используется только актуальный мастер п
 });
 
 test("версии схем листа и сцены не размазаны магическими числами", () => {
-  assert.match(app, /const SHEET_SCHEMA_VERSION = 11;/);
+  assert.match(app, /const SHEET_SCHEMA_VERSION = 12;/);
   assert.match(app, /sheet\.schemaVersion = SHEET_SCHEMA_VERSION;/);
   assert.doesNotMatch(app, /sheet\.schemaVersion = 8;/);
-  assert.match(server, /const SHEET_SCHEMA_VERSION = 11;/);
+  assert.match(server, /const SHEET_SCHEMA_VERSION = 12;/);
   assert.match(server, /const SCENE_SCHEMA_VERSION = 10;/);
   assert.match(server, /normalized\.schemaVersion = SHEET_SCHEMA_VERSION;/);
+});
+
+
+test("контент-паки грузятся до правил и помечаются в интерфейсе", () => {
+  assert.ok(indexHtml.indexOf('/content-packs.js') > -1);
+  assert.ok(indexHtml.indexOf('/content-packs.js') < indexHtml.indexOf('/rules-5e.js'));
+  assert.ok(indexHtml.indexOf('/subclass-spells-xgte-tcoe.js') < indexHtml.indexOf('/rules-5e.js'));
+  assert.ok(indexHtml.indexOf('/items-xgte-tcoe.js') > indexHtml.indexOf('/items-5e.js'));
+  assert.match(contentPacks, /id:"xgte"/);
+  assert.match(contentPacks, /id:"tcoe"/);
+  assert.match(app, /rules\.subclassOptions/);
+  assert.match(app, /content-source-badge/);
+});
+
+
+test("быстрый лист карты поддерживает книжные призывы", () => {
+  assert.match(app, /function vttPlaceSummon\(/);
+  assert.match(app, /placeSummon:vttPlaceSummon/);
+  assert.match(vtt, /data-vtt-place-summon/);
+  assert.match(vtt, /spell\.sourceId==="xgte"/);
+  assert.match(vttCss, /\.vtt-character-spell-row\.is-summon/);
+});
+
+test("мастер персонажа сохраняет полную настройку происхождения Таши", () => {
+  assert.match(app, /builder-origin-language/);
+  assert.match(app, /builder-origin-proficiency/);
+  assert.match(app, /builder-lineage-feat-ability/);
+  assert.match(server, /levelOneFeatAbility/);
+  assert.match(server, /languageChoice/);
+});
+
+
+test("гримуар загружает PHB-поддержку и оба книжных каталога", () => {
+  assert.match(app, /spells-phb-support-xgte-tcoe\.json/);
+  assert.match(app, /spells-xgte-tcoe\.json/);
+  assert.match(app, /const \[base, phbSupport, supplements\]/);
+  assert.match(app, /const merged = \[\.\.\.subclassStubs, \.\.\.base\.map/);
+  assert.match(app, /\.\.\.phbSupport, \.\.\.supplements/);
+});
+
+test("быстрый лист умеет ставить спутников и мигрировать старые листы", () => {
+  assert.match(app, /function vttPlaceCompanion\(/);
+  assert.match(app, /placeCompanion:vttPlaceCompanion/);
+  assert.match(vtt, /data-vtt-place-companion/);
+  assert.match(vttCss, /\.vtt-character-companion/);
+  assert.match(app, /function syncOwnMechanicsOnLoad\(/);
+  assert.match(app, /syncOwnMechanicsOnLoad\(\)/);
+});
+
+test("инфузии корректно меняют магический и заклинательный бонус", () => {
+  assert.match(app, /baseSpellBonus/);
+  assert.match(app, /infusion\.key === "enhanced-arcane-focus"/);
+  assert.match(app, /if \(!infusion\) \{ item\.magical = Boolean\(item\.baseMagical \|\| item\.baseMagicBonus \|\| item\.baseSpellBonus\)/);
+  assert.match(app, /if \(infusion\.key === "enhanced-arcane-focus"\) item\.spellBonus = Math\.max\(item\.spellBonus,improved\)/);
+  assert.match(server, /baseSpellBonus/);
+  assert.match(server, /baseMagical/);
 });

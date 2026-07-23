@@ -11,6 +11,10 @@
     [4,3,3,3,1], [4,3,3,3,1], [4,3,3,3,2], [4,3,3,3,2]
   ];
 
+  const contentSources = { srd2014:{ id:"srd2014", short:"SRD", name:"Базовые правила 2014", core:true }, ...(window.TT_CONTENT_SOURCES || {}) };
+  const contentPacks = Object.values(window.TT_CONTENT_PACKS || {});
+  const sourceInfo = sourceId => contentSources[sourceId] || { id:sourceId || "custom", short:"Свой", name:"Пользовательский источник" };
+
   const classes = {
     barbarian: { name: "Варвар", hitDie: 12, saves: ["str","con"], caster: "none", armor: "Лёгкие и средние доспехи, щиты", weapons: "Простое и воинское оружие", resources: level => [{ name:"Ярость", max: level >= 20 ? 999 : [0,2,2,3,3,3,4,4,4,4,4,4,5,5,5,5,5,6,6,6,6][level], reset:"long" }] },
     bard: { name: "Бард", hitDie: 8, saves: ["dex","cha"], caster: "full", spellAbility: "cha", armor: "Лёгкие доспехи", weapons: "Простое оружие, ручные арбалеты, длинные и короткие мечи, рапиры", resources: (_level, sheet) => [{ name:"Бардовское вдохновение", max: Math.max(1, Math.floor((Number(sheet.stats?.cha || 10)-10)/2)), reset: Number(sheet.level) >= 5 ? "short" : "long" }] },
@@ -25,22 +29,32 @@
     warlock: { name: "Колдун", hitDie: 8, saves: ["wis","cha"], caster: "pact", spellAbility: "cha", armor: "Лёгкие доспехи", weapons: "Простое оружие", resources: () => [] },
     wizard: { name: "Волшебник", hitDie: 6, saves: ["int","wis"], caster: "full", spellAbility: "int", armor: "Нет", weapons: "Кинжалы, дротики, пращи, боевые посохи, лёгкие арбалеты", resources: level => [{ name:"Магическое восстановление", max:Math.max(1, Math.ceil(level/2)), reset:"long" }] }
   };
+  contentPacks.forEach(pack => Object.assign(classes, pack.classes || {}));
+  Object.values(classes).forEach(entry => { if (!entry.source) entry.source = "srd2014"; });
 
   const races = {
-    human: { name:"Человек", size:"Средний", speed:30, darkvision:0, bonuses:{str:1,dex:1,con:1,int:1,wis:1,cha:1}, languages:"Общий и ещё один язык", traits:"Универсальность, дополнительный язык." },
-    elf: { name:"Эльф", size:"Средний", speed:30, darkvision:60, bonuses:{dex:2}, languages:"Общий, Эльфийский", skills:["perception"], traits:"Наследие фей, транс, обострённые чувства." },
-    dwarf: { name:"Дварф", size:"Средний", speed:25, darkvision:60, bonuses:{con:2}, languages:"Общий, Дварфский", traits:"Дварфская стойкость, знание камня, скорость не снижается тяжёлым доспехом." },
-    halfling: { name:"Полурослик", size:"Маленький", speed:25, darkvision:0, bonuses:{dex:2}, languages:"Общий, Полуросличий", traits:"Везучий, храбрый, проворство полурослика." },
-    dragonborn: { name:"Драконорождённый", size:"Средний", speed:30, darkvision:0, bonuses:{str:2,cha:1}, languages:"Общий, Драконий", traits:"Драконье наследие, дыхательное оружие и сопротивление стихии." },
-    gnome: { name:"Гном", size:"Маленький", speed:25, darkvision:60, bonuses:{int:2}, languages:"Общий, Гномий", traits:"Гномья хитрость." },
-    halfelf: { name:"Полуэльф", size:"Средний", speed:30, darkvision:60, bonuses:{cha:2}, flexible:[1,1], excludeFlexible:["cha"], languages:"Общий, Эльфийский и ещё один язык", traits:"Наследие фей, универсальность навыков." },
-    halforc: { name:"Полуорк", size:"Средний", speed:30, darkvision:60, bonuses:{str:2,con:1}, languages:"Общий, Орочий", skills:["intimidation"], traits:"Угрожающий вид, неукротимая стойкость, свирепые атаки." },
-    tiefling: { name:"Тифлинг", size:"Средний", speed:30, darkvision:60, bonuses:{cha:2,int:1}, languages:"Общий, Инфернальный", traits:"Адское сопротивление и врождённая магия." },
-    tabaxi: { name:"Табакси", size:"Средний", speed:30, darkvision:60, bonuses:{dex:2,cha:1}, languages:"Общий и ещё один язык", skills:["perception","stealth"], traits:"Кошачья ловкость, когти, талант к восприятию и скрытности." },
-    custom: { name:"Своя раса", size:"Средний", speed:30, darkvision:0, bonuses:{}, flexible:[2,1], languages:"Общий и ещё один язык", traits:"Собственное происхождение." }
+    human: { name:"Человек", source:"srd2014", tags:["human"], size:"Средний", speed:30, darkvision:0, bonuses:{str:1,dex:1,con:1,int:1,wis:1,cha:1}, languages:"Общий и ещё один язык", traits:"Универсальность, дополнительный язык." },
+    elf: { name:"Эльф", source:"srd2014", tags:["elf"], size:"Средний", speed:30, darkvision:60, bonuses:{dex:2}, languages:"Общий, Эльфийский", skills:["perception"], traits:"Наследие фей, транс, обострённые чувства." },
+    highelf: { name:"Высший эльф", source:"srd2014", tags:["elf","high-elf"], size:"Средний", speed:30, darkvision:60, bonuses:{dex:2,int:1}, languages:"Общий, Эльфийский и ещё один язык", skills:["perception"], traits:"Наследие фей, транс, один заговор волшебника." },
+    woodelf: { name:"Лесной эльф", source:"srd2014", tags:["elf","wood-elf"], size:"Средний", speed:35, darkvision:60, bonuses:{dex:2,wis:1}, languages:"Общий, Эльфийский", skills:["perception"], traits:"Наследие фей, транс, маскировка в природе и повышенная скорость." },
+    drow: { name:"Дроу", source:"srd2014", tags:["elf","drow"], size:"Средний", speed:30, darkvision:120, bonuses:{dex:2,cha:1}, languages:"Общий, Эльфийский", skills:["perception"], traits:"Наследие фей, транс, магия дроу и чувствительность к солнечному свету." },
+    dwarf: { source:"srd2014", tags:["dwarf"], name:"Дварф", size:"Средний", speed:25, darkvision:60, bonuses:{con:2}, languages:"Общий, Дварфский", traits:"Дварфская стойкость, знание камня, скорость не снижается тяжёлым доспехом." },
+    halfling: { source:"srd2014", tags:["halfling"], name:"Полурослик", size:"Маленький", speed:25, darkvision:0, bonuses:{dex:2}, languages:"Общий, Полуросличий", traits:"Везучий, храбрый, проворство полурослика." },
+    dragonborn: { source:"srd2014", tags:["dragonborn"], name:"Драконорождённый", size:"Средний", speed:30, darkvision:0, bonuses:{str:2,cha:1}, languages:"Общий, Драконий", traits:"Драконье наследие, дыхательное оружие и сопротивление стихии." },
+    gnome: { source:"srd2014", tags:["gnome"], name:"Гном", size:"Маленький", speed:25, darkvision:60, bonuses:{int:2}, languages:"Общий, Гномий", traits:"Гномья хитрость." },
+    halfelf: { source:"srd2014", tags:["halfelf"], name:"Полуэльф", size:"Средний", speed:30, darkvision:60, bonuses:{cha:2}, flexible:[1,1], excludeFlexible:["cha"], languages:"Общий, Эльфийский и ещё один язык", traits:"Наследие фей, универсальность навыков." },
+    halforc: { source:"srd2014", tags:["halforc"], name:"Полуорк", size:"Средний", speed:30, darkvision:60, bonuses:{str:2,con:1}, languages:"Общий, Орочий", skills:["intimidation"], traits:"Угрожающий вид, неукротимая стойкость, свирепые атаки." },
+    tiefling: { source:"srd2014", tags:["tiefling"], name:"Тифлинг", size:"Средний", speed:30, darkvision:60, bonuses:{cha:2,int:1}, languages:"Общий, Инфернальный", traits:"Адское сопротивление и врождённая магия." },
+    tabaxi: { source:"srd2014", tags:["tabaxi"], name:"Табакси", size:"Средний", speed:30, darkvision:60, bonuses:{dex:2,cha:1}, languages:"Общий и ещё один язык", skills:["perception","stealth"], traits:"Кошачья ловкость, когти, талант к восприятию и скрытности." },
+    custom: { source:"srd2014", tags:["custom"], name:"Своя раса", size:"Средний", speed:30, darkvision:0, bonuses:{}, flexible:[2,1], languages:"Общий и ещё один язык", traits:"Собственное происхождение." }
   };
+  contentPacks.forEach(pack => Object.entries(pack.races || {}).forEach(([key,entry]) => {
+    races[key] = { ...entry, source:entry.source || pack.id, tags:[...(entry.tags || []), key] };
+  }));
+  Object.values(races).forEach(entry => { if (!entry.source) entry.source = "srd2014"; entry.tags ||= []; });
+  const raceOptions = () => Object.entries(races).map(([key,entry]) => ({ key, ...entry, sourceInfo:sourceInfo(entry.source) }));
 
-  const subclasses = {
+  const baseSubclasses = {
     barbarian:["Путь берсерка","Путь тотемного воина"], bard:["Коллегия знаний","Коллегия доблести"],
     cleric:["Домен жизни","Домен света","Домен войны","Домен знаний","Домен природы","Домен бури","Домен обмана"],
     druid:["Круг земли","Круг луны"], fighter:["Чемпион","Мастер боевых искусств","Мистический рыцарь"],
@@ -50,6 +64,52 @@
     wizard:["Школа ограждения","Школа вызова","Школа воплощения","Школа иллюзии","Школа некромантии","Школа очарования","Школа прорицания","Школа преобразования"]
   };
   const subclassLevels = { cleric:1, sorcerer:1, warlock:1, druid:2, wizard:2 };
+  const subclassCatalog = Object.fromEntries(Object.entries(baseSubclasses).map(([classKey,names]) => [classKey,names.map(name => ({ name, source:"srd2014" }))]));
+  contentPacks.forEach(pack => {
+    Object.entries(pack.subclasses || {}).forEach(([classKey,entries]) => {
+      subclassCatalog[classKey] ||= [];
+      entries.forEach(entry => {
+        const normalized = typeof entry === "string" ? { name:entry, source:pack.id } : { ...entry, source:entry.source || pack.id };
+        if (!subclassCatalog[classKey].some(existing => existing.name === normalized.name)) subclassCatalog[classKey].push(normalized);
+      });
+    });
+    Object.assign(subclassLevels, pack.subclassLevels || {});
+  });
+  const subclasses = Object.fromEntries(Object.entries(subclassCatalog).map(([classKey,entries]) => [classKey,entries.map(entry => entry.name)]));
+  const subclassOptions = classKey => (subclassCatalog[classKey] || []).map(entry => ({ ...entry, sourceInfo:sourceInfo(entry.source) }));
+  const optionalClassFeatures = {};
+  const spellClassKeys = {};
+  const expandedSpellClassKeys = {};
+  const infusions = [];
+  const subclassFeatureCatalog = {};
+  const subclassResourceCatalog = {};
+  const subclassCombatCatalog = {};
+  const subclassSpellCatalog = window.TT_SUBCLASS_SPELLS_XGTE_TCOE || {};
+  contentPacks.forEach(pack => {
+    Object.entries(pack.optionalClassFeatures || {}).forEach(([classKey,entries]) => {
+      optionalClassFeatures[classKey] ||= [];
+      entries.forEach((entry,index) => {
+        const normalized = typeof entry === "string" ? { key:`${pack.id}-${classKey}-${index}`, name:entry, level:1, summary:"Опциональная классовая особенность.", source:pack.id } : { source:pack.id, ...entry };
+        if (!optionalClassFeatures[classKey].some(existing => existing.key === normalized.key || existing.name === normalized.name)) optionalClassFeatures[classKey].push(normalized);
+      });
+    });
+    Object.entries(pack.spellClassKeys || {}).forEach(([classKey,keys]) => {
+      spellClassKeys[classKey] = [...new Set([...(spellClassKeys[classKey] || []), ...keys])];
+    });
+    Object.entries(pack.expandedSpellClassKeys || {}).forEach(([classKey,keys]) => {
+      expandedSpellClassKeys[classKey] = [...new Set([...(expandedSpellClassKeys[classKey] || []), ...keys])];
+    });
+    (pack.infusions || []).forEach(entry => { if (!infusions.some(existing => existing.key === entry.key)) infusions.push({ source:pack.id, ...entry }); });
+    Object.entries(pack.subclassFeatures || {}).forEach(([classKey,entries]) => {
+      subclassFeatureCatalog[classKey] ||= {};
+      Object.entries(entries || {}).forEach(([subclass,features]) => { subclassFeatureCatalog[classKey][subclass] = features; });
+    });
+    Object.entries(pack.subclassResources || {}).forEach(([classKey,entries]) => {
+      subclassResourceCatalog[classKey] ||= {};
+      Object.assign(subclassResourceCatalog[classKey], entries || {});
+    });
+    Object.assign(subclassCombatCatalog, pack.combatFeatures || {});
+  });
 
   const backgrounds = {
     acolyte:{ name:"Прислужник", skills:["insight","religion"], tools:"—", languages:"Два дополнительных языка", item:"Священный символ", summary:"Служение храму, знание религии и людей." },
@@ -74,6 +134,8 @@
     sorcerer:["cha","con","dex","wis","int","str"], warlock:["cha","con","dex","wis","int","str"], wizard:["int","con","dex","wis","cha","str"]
   };
 
+  contentPacks.forEach(pack => Object.assign(statPriorities, pack.statPriorities || {}));
+
   const startingKits = {
     barbarian:["greatsword","handaxe","backpack"], bard:["rapier","leather","dagger","backpack"], cleric:["mace","scale","shield","backpack"],
     druid:["scimitar","leather","shield","backpack"], fighter:["longsword","chain-mail","shield","light-crossbow","backpack"],
@@ -82,12 +144,16 @@
     warlock:["light-crossbow","leather","dagger","backpack"], wizard:["quarterstaff","dagger","backpack"]
   };
 
+  contentPacks.forEach(pack => Object.assign(startingKits, pack.startingKits || {}));
+
   const recommendedSpells = {
     bard:["vicious-mockery","mage-hand","healing-word","faerie-fire"], cleric:["sacred-flame","guidance","bless","healing-word"],
     druid:["produce-flame","guidance","entangle","healing-word"], paladin:["bless","cure-wounds"], ranger:["hunters-mark","cure-wounds"],
     sorcerer:["fire-bolt","mage-hand","magic-missile","shield"], warlock:["eldritch-blast","minor-illusion","armor-of-agathys","charm-person"],
     wizard:["fire-bolt","mage-hand","minor-illusion","magic-missile","shield","detect-magic"]
   };
+
+  contentPacks.forEach(pack => Object.assign(recommendedSpells, pack.recommendedSpells || {}));
 
   const weapons = [
     ["club","Дубинка","1d4","дробящий",2,"str","лёгкое"], ["dagger","Кинжал","1d4","колющий",1,"finesse","лёгкое, метательное"],
@@ -157,6 +223,8 @@
     wizard:{ count:2, options:["arcana","history","insight","investigation","medicine","religion"] }
   };
 
+  contentPacks.forEach(pack => Object.assign(classSkills, pack.classSkills || {}));
+
   const experienceThresholds = [
     0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
     85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
@@ -167,6 +235,8 @@
     fighter:[3,7,10,15,18], monk:[3,6,11,17], paladin:[3,7,15,20], ranger:[3,7,11,15],
     rogue:[3,9,13,17], sorcerer:[1,6,14,18], warlock:[1,6,10,14], wizard:[2,6,10,14]
   };
+
+  contentPacks.forEach(pack => Object.assign(subclassFeatureLevels, pack.subclassFeatureLevels || {}));
 
   const F = (name, summary, choice = false) => ({ name, summary, choice });
   const classFeatures = {
@@ -312,6 +382,8 @@
     }
   };
 
+  contentPacks.forEach(pack => Object.assign(classFeatures, pack.classFeatures || {}));
+
   const asiLevels = {
     fighter:[4,6,8,12,14,16,19],
     rogue:[4,8,10,12,16,19],
@@ -324,6 +396,8 @@
     paladin:[["str",13],["cha",13]], ranger:[["dex",13],["wis",13]], rogue:[["dex",13]],
     sorcerer:[["cha",13]], warlock:[["cha",13]], wizard:[["int",13]]
   };
+
+  contentPacks.forEach(pack => Object.assign(multiclassRequirements, pack.multiclassRequirements || {}));
 
   const feats = {
     alert:{ name:"Бдительный", summary:"+5 к инициативе; напоминает о защите от внезапности." },
@@ -346,6 +420,8 @@
     crossbow:{ name:"Эксперт по арбалетам", summary:"Снимает часть ограничений арбалетов и помогает в ближнем бою." },
     magicinitiate:{ name:"Посвящённый в магию", summary:"Добавь выбранные заговоры и заклинание через справочник гримуара." }
   };
+  contentPacks.forEach(pack => Object.assign(feats, pack.feats || {}));
+  Object.values(feats).forEach(entry => { if (!entry.source) entry.source = "srd2014"; });
 
   function xpForLevel(level) {
     return experienceThresholds[Math.max(1, Math.min(20, Number(level) || 1)) - 1];
@@ -370,19 +446,31 @@
     if (classKey === "bard" && [3,10].includes(classLevel)) return 2;
     return 0;
   }
-  function featuresAt(classKey, classLevel) {
+  function optionalFeaturesFor(classKey, level = 20, subclass = "") {
+    level = Math.max(1, Math.min(20, Number(level) || 1));
+    return (optionalClassFeatures[classKey] || []).filter(entry => Number(entry.level || 1) <= level && (!entry.subclass || entry.subclass === subclass));
+  }
+  function subclassFeaturesAt(classKey, subclass, classLevel) {
+    classLevel = Math.max(1, Math.min(20, Number(classLevel) || 1));
+    return (subclassFeatureCatalog[classKey]?.[subclass] || []).filter(entry => Number(entry.level) === classLevel).map(entry => ({ ...entry }));
+  }
+  function featuresAt(classKey, classLevel, subclass = "", enabledOptional = []) {
     classLevel = Math.max(1, Math.min(20, Number(classLevel) || 1));
     const result = [...(classFeatures[classKey]?.[classLevel] || [])];
+    const detailedSubclass = subclassFeaturesAt(classKey,subclass,classLevel);
     const subclassLevels = subclassFeatureLevels[classKey] || [];
-    if (subclassLevels.includes(classLevel)) {
+    if (detailedSubclass.length) result.push(...detailedSubclass.map(entry => F(entry.name,entry.summary,Boolean(entry.choice))));
+    else if (subclassLevels.includes(classLevel)) {
       result.push(F(classLevel === subclassLevels[0] ? "Выбор подкласса" : "Особенность подкласса", classLevel === subclassLevels[0] ? "Выбери направление развития класса и получи его первые особенности." : "Открывается новая способность выбранного подкласса.", classLevel === subclassLevels[0]));
     }
+    const enabled = new Set(enabledOptional || []);
+    optionalFeaturesFor(classKey,classLevel,subclass).filter(entry => Number(entry.level || 1) === classLevel && enabled.has(entry.key)).forEach(entry => result.push(F(entry.name,entry.summary,Boolean(entry.choice))));
     if (isAsiLevel(classKey, classLevel)) result.push(F("Улучшение характеристик или черта","Распредели два очка характеристик либо выбери одну черту.",true));
     if (classKey === "rogue" && classLevel > 1 && classLevel % 2 === 1) result.push(F(`Скрытая атака ${sneakAttackDice(classLevel)}к6`,`Кость скрытой атаки увеличивается; значение обновляется в боевом блоке автоматически.`));
     const slots = slotsFor(classKey, classLevel), previous = classLevel > 1 ? slotsFor(classKey, classLevel - 1) : [];
     const highest = Math.max(0, ...slots.map((total, index) => total ? index + 1 : 0));
     const previousHighest = Math.max(0, ...previous.map((total, index) => total ? index + 1 : 0));
-    if (highest > previousHighest && !(classLevel === 1 && ["bard","cleric","druid","sorcerer","warlock","wizard"].includes(classKey))) result.push(F(`Заклинания ${highest} круга`,`Открывается новый круг заклинаний и соответствующие ячейки.`));
+    if (highest > previousHighest && !(classLevel === 1 && ["bard","cleric","druid","sorcerer","warlock","wizard","artificer"].includes(classKey))) result.push(F(`Заклинания ${highest} круга`,`Открывается новый круг заклинаний и соответствующие ячейки.`));
     else if (slots.reduce((sum, value) => sum + value, 0) > previous.reduce((sum, value) => sum + value, 0) && classLevel > 1) result.push(F("Дополнительные ячейки","Увеличивается количество доступных ячеек заклинаний."));
     if (!result.length) result.push(F("Развитие класса","Больше HP и новая кость хитов; основные способности становятся надёжнее."));
     return result;
@@ -400,6 +488,11 @@
     if (classKey === "rogue") return [{ label:"Скрытая атака", value:`${sneakAttackDice(level)}к6`, formula:`${sneakAttackDice(level)}к6`, accent:true },{ label:"Компетентности", value:level >= 6 ? 4 : 2 }];
     if (classKey === "sorcerer") return [{ label:"Очки чародейства", value:level >= 2 ? level : 0 },{ label:"Варианты метамагии", value:level >= 17 ? 4 : level >= 10 ? 3 : level >= 3 ? 2 : 0 }];
     if (classKey === "warlock") { const pact = pactSlotsFor(level); return [{ label:"Ячейки договора", value:`${pact.total} × ${pact.level} круг` },{ label:"Воззвания", value:level >= 18 ? 8 : level >= 15 ? 7 : level >= 12 ? 6 : level >= 9 ? 5 : level >= 7 ? 4 : level >= 5 ? 3 : level >= 2 ? 2 : 0 }]; }
+    if (classKey === "artificer") {
+      const known = level >= 18 ? 12 : level >= 14 ? 10 : level >= 10 ? 8 : level >= 6 ? 6 : level >= 2 ? 4 : 0;
+      const active = level >= 18 ? 6 : level >= 14 ? 5 : level >= 10 ? 4 : level >= 6 ? 3 : level >= 2 ? 2 : 0;
+      return [{ label:"Известные инфузии", value:known },{ label:"Наполненные предметы", value:active },{ label:"Настройка", value:level >= 18 ? 6 : level >= 14 ? 5 : level >= 10 ? 4 : 3 }];
+    }
     if (classKey === "wizard") return [{ label:"Магическое восстановление", value:`${Math.ceil(level / 2)} ур. ячеек` },{ label:"Подготовка", value:`${level}+ИНТ` }];
     return [];
   }
@@ -410,6 +503,7 @@
     if (!cls || cls.caster === "none") return [];
     if (cls.caster === "full") return fullSlots[level] || [];
     if (cls.caster === "half") return halfSlots[level] || [];
+    if (cls.caster === "artificer") return fullSlots[Math.ceil(level / 2)] || [];
     if (cls.caster === "pact") {
       const slotLevel = Math.min(5, Math.ceil(level/2));
       const total = level === 1 ? 1 : level < 11 ? 2 : level < 17 ? 3 : 4;
@@ -443,6 +537,7 @@
     let casterLevel = 0;
     let halfCombined = 0;
     let thirdCombined = 0;
+    let artificerCombined = 0;
     let warlockLevel = 0;
     entries.forEach(entry => {
       const key = entry.key || entry.classKey;
@@ -451,10 +546,11 @@
       if (!cls || !level) return;
       if (cls.caster === "full") casterLevel += level;
       else if (cls.caster === "half") halfCombined += level;
+      else if (cls.caster === "artificer") artificerCombined += level;
       else if (cls.caster === "pact") warlockLevel += level;
       else if ((key === "fighter" && entry.subclass === "Мистический рыцарь") || (key === "rogue" && entry.subclass === "Мистический ловкач")) thirdCombined += level;
     });
-    casterLevel += Math.floor(halfCombined / 2) + Math.floor(thirdCombined / 3);
+    casterLevel += Math.floor(halfCombined / 2) + Math.ceil(artificerCombined / 2) + Math.floor(thirdCombined / 3);
     casterLevel = Math.min(20, casterLevel);
     return { casterLevel, slots:fullSlots[casterLevel] || [], pact:pactSlotsFor(warlockLevel) };
   }
@@ -480,6 +576,7 @@
     abilityMod = Number(abilityMod || 0);
     if (["cleric","druid","wizard"].includes(classKey)) return Math.max(1, level + abilityMod);
     if (classKey === "paladin") return Math.max(1, Math.floor(level / 2) + abilityMod);
+    if (classKey === "artificer") return Math.max(1, Math.floor(level / 2) + abilityMod);
     return null;
   }
 
@@ -492,16 +589,18 @@
 
   function sneakAttackDice(level) { return Math.max(1, Math.ceil((Math.max(1, Number(level) || 1)) / 2)); }
 
-  function abilityBuild(classKey, raceKey, level = 1) {
+  function abilityBuild(classKey, raceKey, level = 1, options = {}) {
     const priority = statPriorities[classKey] || ["str","dex","con","int","wis","cha"];
     const base = Object.fromEntries(priority.map((ability, index) => [ability, [15,14,13,12,10,8][index]]));
     const race = races[raceKey] || races.custom;
-    const bonuses = { str:0, dex:0, con:0, int:0, wis:0, cha:0, ...(race.bonuses || {}) };
-    const blocked = new Set(race.excludeFlexible || []);
+    const bonuses = { str:0, dex:0, con:0, int:0, wis:0, cha:0, ...(options.bonuses || race.bonuses || {}) };
+    const blocked = new Set(options.excludeFlexible || race.excludeFlexible || []);
     const available = priority.filter(ability => !blocked.has(ability));
-    (race.flexible || []).forEach((bonus, index) => {
-      const ability = available[index] || priority[index] || "str";
-      bonuses[ability] += Number(bonus || 0);
+    const flexible = options.flexible || race.flexible || [];
+    const flexibleAbilities = options.flexibleAbilities || [];
+    flexible.forEach((bonus, index) => {
+      const ability = flexibleAbilities[index] || available[index] || priority[index] || "str";
+      if (ability in bonuses) bonuses[ability] += Number(bonus || 0);
     });
     const total = Object.fromEntries(Object.keys(bonuses).map(ability => [ability, Number(base[ability] || 8) + Number(bonuses[ability] || 0)]));
     const improvementLevels = classKey === "fighter" ? [4,6,8,12,14,16,19] : classKey === "rogue" ? [4,8,10,12,16,19] : [4,8,12,16,19];
@@ -520,7 +619,107 @@
     return { base, bonuses, levelBonuses, total, advancements };
   }
 
+  function resolveResourceMax(value, sheet = {}, classLevel = 1) {
+    if (Number.isFinite(Number(value))) return Math.max(0,Number(value));
+    const stat = key => Math.max(1,Math.floor((Number(sheet.stats?.[key] || 10)-10)/2));
+    const prof = proficiency(sheet.level || classLevel);
+    if (value === "proficiency") return prof;
+    if (value === "doubleProficiency") return prof * 2;
+    if (["str","dex","con","int","wis","cha"].includes(value)) return stat(value);
+    if (value === "sorcery") return Math.max(1,Number(classLevel));
+    return 1;
+  }
+  function subclassResourcesFor(classKey, subclass, classLevel, sheet = {}) {
+    const factory = subclassResourceCatalog[classKey]?.[subclass];
+    if (typeof factory !== "function") return [];
+    return (factory(Number(classLevel)||1,sheet) || []).map((entry,index) => ({ ...entry, key:entry.key || `subclass:${classKey}:${subclass}:${index}`, max:resolveResourceMax(entry.max,sheet,classLevel), automatic:true, source:"subclass" }));
+  }
+  function featAvailable(featKey, sheet = {}) {
+    const entry = feats[featKey];
+    if (!entry) return { ok:false, reason:"Неизвестная черта" };
+    const raceKey = sheet.raceKey || sheet.race || "";
+    const race = races[raceKey] || Object.values(races).find(item => item.name === sheet.race) || {};
+    if (entry.raceKeys?.length && !entry.raceKeys.includes(raceKey)) return { ok:false, reason:"Требуется другое происхождение" };
+    if (entry.raceTags?.length && !entry.raceTags.some(tag => (race.tags || []).includes(tag))) return { ok:false, reason:"Требуется подходящее наследие" };
+    const classEntries = sheet.classes || [];
+    const canCast = classEntries.some(item => classes[item.key || item.classKey]?.caster !== "none");
+    if (entry.prerequisite === "spellcasting" && !canCast) return { ok:false, reason:"Требуется исполнение заклинаний" };
+    if (entry.prerequisite === "spellcasting-or-pact" && !canCast) return { ok:false, reason:"Требуется магия или магия договора" };
+    if (entry.prerequisite === "martial-weapon" && !classEntries.some(item => /воинское/i.test(classes[item.key || item.classKey]?.weapons || ""))) return { ok:false, reason:"Требуется владение воинским оружием" };
+    return { ok:true, reason:"" };
+  }
+
+  function subclassSpellEntriesFor(classKey, subclass, classLevel = 20, mode = "all") {
+    const entries=subclassSpellCatalog[classKey]?.[subclass] || [];
+    return entries.filter(entry=>Number(entry.grantLevel || 1)<=Number(classLevel || 1) && (mode === "all" || entry.mode === mode)).map(entry=>({ ...entry, sourceClassKey:classKey, subclass }));
+  }
+  function subclassSpellsFor(sheet = {}) {
+    const result=[];
+    (sheet.classes || []).forEach(entry=>result.push(...subclassSpellEntriesFor(entry.key || entry.classKey,entry.subclass || "",entry.level || 1,"always")));
+    return result;
+  }
+  function subclassSpellKeysFor(sheet = {}, classKey = "") {
+    const result=[];
+    (sheet.classes || []).filter(entry=>!classKey || (entry.key || entry.classKey)===classKey).forEach(entry=>result.push(...subclassSpellEntriesFor(entry.key || entry.classKey,entry.subclass || "",entry.level || 1,"all").map(spell=>spell.key)));
+    return [...new Set(result)];
+  }
+
+  function spellKeysForClass(classKey, enabledOptional = []) {
+    const keys = [...(spellClassKeys[classKey] || [])];
+    const enabled = new Set(enabledOptional || []);
+    const expansionEnabled = optionalFeaturesFor(classKey,20).some(entry => entry.spellExpansion && enabled.has(entry.key));
+    if (expansionEnabled) keys.push(...(expandedSpellClassKeys[classKey] || []));
+    return [...new Set(keys)];
+  }
+  function infusionsFor(level = 20) { return infusions.filter(entry => Number(entry.level || 1) <= Number(level || 1)); }
+  function combatFeaturesFor(sheet = {}) {
+    const result = [];
+    (sheet.classes || []).forEach(classEntry => {
+      const classKey = classEntry.key || classEntry.classKey;
+      const level = Number(classEntry.level || 1);
+      const subclass = classEntry.subclass || "";
+      (subclassCombatCatalog[subclass] || []).forEach(entry => {
+        let formula=String(entry.formula || "");
+        formula=formula.replace("classLevel/2",String(Math.max(1,Math.floor(level/2))))
+          .replace("martial",`1к${level >= 17 ? 10 : level >= 11 ? 8 : level >= 5 ? 6 : 4}`)
+          .replace("sneak/2",`${Math.max(1,Math.floor(sneakAttackDice(level)/2))}к6`)
+          .replace("psi",`1к${level >= 17 ? 12 : level >= 11 ? 10 : level >= 5 ? 8 : 6}`)
+          .replace("weapon+","");
+        if (subclass === "Странник горизонта" && level >= 11) formula="2к8";
+        if (subclass === "Странник фей" && level >= 11) formula="1к6";
+        if (subclass === "Хранитель роя" && level >= 11) formula="1к8";
+        if (subclass === "Рунный рыцарь") formula=`1к${level >= 18 ? 10 : level >= 10 ? 8 : 6}`;
+        if (subclass === "Артиллерист" && level >= 9) formula="3к8";
+        if (subclass === "Боевой кузнец" && level >= 15) formula="4к6";
+        result.push({ ...entry, formula, classKey, subclass });
+      });
+    });
+    optionalFeaturesFor("cleric",20).filter(entry => entry.combatFormula && (sheet.optionalFeatures || []).includes(entry.key)).forEach(entry => result.push({ name:entry.name, formula:entry.combatFormula, note:entry.summary }));
+    return result;
+  }
+  function companionMarkersFor(sheet = {}) {
+    const result = [];
+    const proficiencyBonus = proficiency((sheet.classes || []).reduce((sum,entry)=>sum+Number(entry.level||0),0) || sheet.level || 1);
+    const statMod = key => Math.floor((Number(sheet.stats?.[key] || 10)-10)/2);
+    const add = entry => { if (!result.some(existing => existing.id === entry.id)) result.push(entry); };
+    (sheet.classes || []).forEach(classEntry => {
+      const classKey=classEntry.key || classEntry.classKey, level=Number(classEntry.level || 1), subclass=classEntry.subclass || "";
+      if (classKey === "artificer" && subclass === "Артиллерист" && level >= 3) add({ id:"eldritch-cannon",name:"Магическая пушка",kind:"Конструкт",size:1,color:"#a35f35",hpMax:Math.max(1,level*5),ac:18,attackFormula:`1к20+${proficiencyBonus+statMod("int")}`,damageFormula:level>=9?"3к8":"2к8",damageType:"огонь или силовой",note:"Огнемёт, силовая баллиста или защитник; выбери вариант в имени/заметке токена." });
+      if (classKey === "artificer" && subclass === "Боевой кузнец" && level >= 3) add({ id:"steel-defender",name:"Стальной защитник",kind:"Конструкт",size:1,color:"#687785",hpMax:Math.max(1,2+statMod("int")+level*5),ac:15,attackFormula:`1к20+${proficiencyBonus+statMod("int")}`,damageFormula:`1к8+${proficiencyBonus}`,damageType:"силовой",note:"Защитная реакция и лечение доступны по правилам специализации." });
+      if (classKey === "bard" && subclass === "Коллегия творения" && level >= 6) add({ id:"dancing-item",name:"Танцующий предмет",kind:"Конструкт",size:1,color:"#a86c9d",hpMax:10+level*5,ac:16,attackFormula:`1к20+${proficiencyBonus+statMod("cha")}`,damageFormula:`1к10+${proficiencyBonus}`,damageType:"силовой",note:"Оживлённый предмет Коллегии творения." });
+      if (classKey === "druid" && subclass === "Круг лесного пожара" && level >= 2) add({ id:"wildfire-spirit",name:"Дух лесного пожара",kind:"Элементаль",size:1,color:"#d2693d",hpMax:5+level*5,ac:13,attackFormula:`1к20+${proficiencyBonus+statMod("wis")}`,damageFormula:`1к6+${proficiencyBonus}`,damageType:"огонь",note:"Огненное семя и телепортация духа." });
+      if (classKey === "druid" && subclass === "Круг пастыря" && level >= 2) add({ id:"spirit-totem",name:"Духовный тотем",kind:"Эффект",size:1,color:"#6d9865",hpMax:1,ac:10,attackFormula:"",damageFormula:"",damageType:"",note:"Метка ауры Медведя, Единорога или Ястреба; токен не является существом." });
+      if (classKey === "ranger" && subclass === "Повелитель зверей" && level >= 3 && (sheet.optionalFeatures || []).includes("primal-companion")) add({ id:"primal-companion",name:"Первобытный спутник",kind:"Зверь",size:1,color:"#778c4f",hpMax:5+level*5,ac:13+proficiencyBonus,attackFormula:`1к20+${proficiencyBonus+statMod("wis")}`,damageFormula:`1к8+2+${proficiencyBonus}`,damageType:"по облику",note:"Зверь земли, моря или неба; подправь скорость и размер выбранного облика." });
+      if (classKey === "sorcerer" && subclass === "Теневая магия" && level >= 6) add({ id:"hound-of-ill-omen",name:"Зловещий пёс",kind:"Монстр",size:2,color:"#4f485f",hpMax:37,ac:14,attackFormula:"1к20+5",damageFormula:"2к6+3",damageType:"колющий",note:"Использует основу лютого волка и преследует выбранную цель." });
+      if (classKey === "warlock" && subclass === "Ведьмовской клинок" && level >= 6) add({ id:"accursed-specter",name:"Проклятый призрак",kind:"Нежить",size:1,color:"#59647c",hpMax:22,ac:12,attackFormula:"1к20+4",damageFormula:"3к6",damageType:"некротический",note:"Спектр поверженного гуманоидa; бонусы зависят от Харизмы колдуна." });
+      if (classKey === "warlock" && subclass === "Бездонный" && level >= 1) add({ id:"tentacle-of-the-deep",name:"Щупальце глубин",kind:"Эффект",size:1,color:"#376d82",hpMax:1,ac:10,attackFormula:`1к20+${proficiencyBonus+statMod("cha")}`,damageFormula:level>=10?"2к8":"1к8",damageType:"холод",note:"Метка магического щупальца; это не отдельное существо." });
+    });
+    if ((sheet.optionalFeatures || []).includes("wild-companion")) add({ id:"wild-companion",name:"Дикий спутник",kind:"Фамильяр",size:.5,color:"#6e8e62",hpMax:1,ac:10,attackFormula:"",damageFormula:"",damageType:"",note:"Временный фамильяр, призванный за использование Дикого облика." });
+    if ((sheet.inventoryList || []).some(item => item?.infused && item?.infusionKey === "homunculus-servant")) add({ id:"homunculus-servant",name:"Слуга-гомункул",kind:"Конструкт",size:.5,color:"#86705b",hpMax:Math.max(1,1+statMod("int")+Number((sheet.classes||[]).find(entry=>(entry.key||entry.classKey)==="artificer")?.level||1)),ac:13,attackFormula:`1к20+${proficiencyBonus+statMod("int")}`,damageFormula:`1к4+${proficiencyBonus}`,damageType:"силовой",note:"Гомункул от активной инфузии; предмет с этой инфузией занимает один из доступных слотов наполнения." });
+    return result;
+  }
+
   function subclassLevel(classKey) { return subclassLevels[classKey] || 3; }
 
-  window.TT_RULES = { classes, races, subclasses, backgrounds, statPriorities, startingKits, recommendedSpells, weapons, armor, gear, conditionInfo, exhaustionInfo, classSkills, feats, asiLevels, multiclassRequirements, experienceThresholds, classFeatures, subclassFeatureLevels, proficiency, slotsFor, pactSlotsFor, multiclassSpellcasting, hitDicePoolsFor, levelsForAsi, isAsiLevel, meetsRequirement, requirementText, fixedHp, preparedLimit, pointBuyTotal, sneakAttackDice, abilityBuild, subclassLevel, xpForLevel, levelFromXp, xpProgress, expertiseChoicesAt, featuresAt, classHighlights };
+  window.TT_RULES = { classes, races, raceOptions, subclasses, subclassCatalog, subclassOptions, backgrounds, statPriorities, startingKits, recommendedSpells, weapons, armor, gear, conditionInfo, exhaustionInfo, classSkills, feats, asiLevels, multiclassRequirements, experienceThresholds, classFeatures, subclassFeatureLevels, optionalClassFeatures, expandedSpellClassKeys, infusions, spellClassKeys, contentSources, contentPacks, sourceInfo, proficiency, slotsFor, pactSlotsFor, multiclassSpellcasting, hitDicePoolsFor, levelsForAsi, isAsiLevel, meetsRequirement, requirementText, fixedHp, preparedLimit, pointBuyTotal, sneakAttackDice, abilityBuild, subclassLevel, xpForLevel, levelFromXp, xpProgress, expertiseChoicesAt, featuresAt, subclassFeaturesAt, optionalFeaturesFor, subclassResourcesFor, resolveResourceMax, featAvailable, spellKeysForClass, subclassSpellEntriesFor, subclassSpellsFor, subclassSpellKeysFor, infusionsFor, combatFeaturesFor, companionMarkersFor, classHighlights };
 })();

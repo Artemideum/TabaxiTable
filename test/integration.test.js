@@ -172,7 +172,7 @@ test("комната, лист, броски, история и резервна
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 11);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 12);
     assert.equal(created.room.scene.grid.columns, 24);
     assert.equal(created.room.scene.schemaVersion, 10);
     assert.deepEqual(created.room.scene.annotations, []);
@@ -231,7 +231,7 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 11);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 12);
     assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
     assert.equal(updatedRoom.players["test-player"].sheet.passivePerceptionBonus, 3);
     assert.equal(updatedRoom.players["test-player"].sheet.diceColor, "#3366cc");

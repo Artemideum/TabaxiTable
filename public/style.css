@@ -835,6 +835,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .advancement-tabs button { border: 1px solid transparent; border-radius: 8px; padding: 10px 7px; color: var(--muted); background: transparent; cursor: pointer; font-weight: 800; }
 .advancement-tabs button.active { color: var(--gold-2); border-color: #745737; background: #9f78421c; }
 .feat-detail { display: grid; gap: 10px; margin-top: 8px; color: var(--muted); }
+.feat-detail-head { display:flex; align-items:center; gap:8px; color:var(--text); }
+.feat-detail-head strong { font-size:14px; }
+.content-source-badge { display:inline-flex; align-items:center; justify-content:center; min-height:20px; padding:2px 7px; border:1px solid rgba(211,173,110,.45); border-radius:999px; color:var(--gold-2); background:rgba(211,173,110,.09); font:800 9px/1 Manrope,sans-serif; letter-spacing:.06em; text-transform:uppercase; }
 .feat-detail p { margin: 0; line-height: 1.5; }
 .level-skill-picks { display: grid; grid-template-columns: repeat(3,1fr); gap: 6px; margin-top: 8px; }
 .level-skill-picks label { position: relative; display: block; }

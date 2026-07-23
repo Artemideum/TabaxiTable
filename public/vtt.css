@@ -1367,3 +1367,21 @@ body.vtt-active { overflow: hidden; }
   .vtt-character-slot { grid-template-columns:32px minmax(0,1fr) 30px 30px; }
   .vtt-character-slot > small { grid-column:1/-1; }
 }
+
+/* XGtE/TCoE spell rows: summoning spells may expose a separate DM marker action. */
+.vtt-character-spell-row.is-summon { grid-template-columns:minmax(0,1fr) auto auto auto; border-color:#594574; }
+.vtt-character-spell-row .vtt-summon-marker { border-color:#765c99; color:#e5d4ff; background:#21172e; }
+@media (max-width:620px) {
+  .vtt-character-spell-row.is-summon { grid-template-columns:minmax(0,1fr) auto; }
+  .vtt-character-spell-row.is-summon .vtt-formula-button,
+  .vtt-character-spell-row.is-summon .vtt-summon-marker { grid-column:1/-1; }
+}
+
+/* XGtE/TCoE class companions and created creatures. */
+.vtt-character-companions { display:grid; gap:8px; }
+.vtt-character-companion { display:grid; grid-template-columns:30px minmax(0,1fr) auto; gap:9px; align-items:center; padding:9px; border:1px solid #4f435d; border-radius:10px; background:#191520; }
+.vtt-character-companion > span { display:grid; place-items:center; width:30px; height:30px; border-radius:50%; background:#2e2538; color:#e7d2ff; }
+.vtt-character-companion strong,.vtt-character-companion small { display:block; }
+.vtt-character-companion p { margin:3px 0 0; color:#a99db1; font-size:11px; line-height:1.3; }
+.vtt-character-companion button { white-space:nowrap; }
+@media (max-width:620px) { .vtt-character-companion { grid-template-columns:30px minmax(0,1fr); } .vtt-character-companion button { grid-column:1/-1; } }
