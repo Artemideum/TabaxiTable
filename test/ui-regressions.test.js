@@ -6,6 +6,7 @@ const app = fs.readFileSync("public/app.js", "utf8");
 const server = fs.readFileSync("server.js", "utf8");
 const vtt = fs.readFileSync("public/vtt.js", "utf8");
 const vttCss = fs.readFileSync("public/vtt.css", "utf8");
+const css = fs.readFileSync("public/style.css", "utf8");
 const indexHtml = fs.readFileSync("public/index.html", "utf8");
 const contentPacks = fs.readFileSync("public/content-packs.js", "utf8");
 
@@ -101,4 +102,20 @@ test("инфузии корректно меняют магический и з�
   assert.match(app, /if \(infusion\.key === "enhanced-arcane-focus"\) item\.spellBonus = Math\.max\(item\.spellBonus,improved\)/);
   assert.match(server, /baseSpellBonus/);
   assert.match(server, /baseMagical/);
+});
+
+
+test("контент-менеджеры и строки листа используют обновлённую карточную вёрстку", () => {
+  assert.match(app, /class="section-action-buttons"/);
+  assert.match(app, /class="resource-title"/);
+  assert.match(app, /class="inventory-item-metrics"/);
+  assert.match(app, /class="infusion-manager"/);
+  assert.match(app, /content-manager-modal/);
+  assert.match(app, /select\.disabled=!itemToggle\?\.checked \|\| !options\.length/);
+  assert.match(css, /\.resource-controls \{ display:flex/);
+  assert.match(css, /\.game-modal\.content-manager-modal/);
+  assert.match(vttCss, /quick character sheet consistency/);
+  assert.match(vttCss, /grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);
+  assert.match(vtt, /class="vtt-character-spell-actions"/);
+  assert.match(vttCss, /\.vtt-character-spell-actions \{ display:flex/);
 });

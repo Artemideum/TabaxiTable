@@ -1,6 +1,6 @@
 {
   "name": "tabaxi-table",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "private": true,
   "description": "Онлайн-стол TabaxiTable и интерактивные листы персонажей D&D 5e",
   "main": "server.js",
