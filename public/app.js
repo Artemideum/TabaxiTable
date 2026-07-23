@@ -954,8 +954,10 @@ function updateSheetGrid(root = $("#sheet-view")) {
   const visibleCount = stacks.filter(stack => !stack.classList.contains("hidden")).length;
   const grid = $(".sheet-grid", root);
   if (grid) {
+    let columnCount = Math.max(1, Math.min(3, visibleCount));
+    if (state.sheetTab === "features" && columnCount >= 3) columnCount = 2;
     grid.classList.remove("columns-1", "columns-2", "columns-3");
-    grid.classList.add(`columns-${Math.max(1, Math.min(3, visibleCount))}`);
+    grid.classList.add(`columns-${columnCount}`);
   }
 }
 
