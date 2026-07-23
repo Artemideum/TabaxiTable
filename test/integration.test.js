@@ -186,7 +186,7 @@ test("комната, лист, броски, история и резервна
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 13);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 12);
+    assert.equal(created.room.scene.schemaVersion, 13);
     assert.deepEqual(created.room.scene.annotations, []);
     assert.deepEqual(created.room.scene.fog.operations, []);
     assert.equal(created.room.scene.fog.enabled, true);
@@ -777,6 +777,9 @@ test("комната, лист, броски, история и резервна
     assert.equal(bestiaryGoblin.hpMax,7);
     assert.equal(bestiaryGoblin.ac,15);
     assert.equal(bestiaryGoblin.disposition,"hostile");
+    assert.equal(bestiaryGoblin.badge,"");
+    assert.equal(bestiaryGoblin.npcSheet.profile.cr,"0.25");
+    assert.ok(Array.isArray(bestiaryGoblin.npcSheet.features));
     assert.equal(bestiaryGoblin.assetId,bestiaryAsset.asset.id);
     assert.equal(bestiaryGoblin.tokenShape,"hex");
     assert.equal(bestiaryGoblin.npcSheet.saves.length,6);

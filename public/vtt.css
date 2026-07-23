@@ -1494,3 +1494,50 @@ body.vtt-active { overflow: hidden; }
   .vtt-library-search { grid-template-columns:minmax(0,1fr) 34px; }
   .vtt-library-search > input { grid-column:1/-1; }
 }
+
+/* 2.5.2: полноценный быстрый лист NPC с независимой прокруткой. */
+.vtt-npc-tabs {
+  display:flex;
+  grid-template-columns:none;
+  overflow-x:auto;
+  overflow-y:hidden;
+  scrollbar-width:thin;
+  scrollbar-color:#765536 #0a0807;
+  overscroll-behavior-x:contain;
+}
+.vtt-npc-tabs::-webkit-scrollbar { height:7px; }
+.vtt-npc-tabs::-webkit-scrollbar-track { background:#0a0807; border-radius:999px; }
+.vtt-npc-tabs::-webkit-scrollbar-thumb { border:2px solid #0a0807; border-radius:999px; background:#765536; }
+.vtt-npc-tabs button { flex:0 0 auto; min-width:68px; padding-inline:8px; }
+.vtt-npc-sheet .vtt-character-page {
+  min-height:0;
+  flex:1 1 0;
+  overflow-x:hidden;
+  overflow-y:scroll;
+  scrollbar-gutter:stable;
+  overscroll-behavior:contain;
+  touch-action:pan-y;
+}
+.vtt-npc-vitals article { min-width:0; }
+.vtt-npc-profile { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:7px; padding:8px; }
+.vtt-npc-profile article { min-width:0; padding:8px; border:1px solid #382b22; border-radius:10px; background:#12100d; }
+.vtt-npc-profile article.wide { grid-column:1/-1; }
+.vtt-npc-profile small,.vtt-npc-profile strong { display:block; }
+.vtt-npc-profile small { color:#7d6e5d; font-size:7px; text-transform:uppercase; letter-spacing:.08em; }
+.vtt-npc-profile strong { margin-top:4px; color:#d8c6aa; font-size:9px; line-height:1.45; overflow-wrap:anywhere; }
+.vtt-npc-attack-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
+.vtt-character-attacks article > div > p { margin:5px 0 0; color:#9e8e7b; font-size:8px; line-height:1.45; }
+.vtt-npc-feature-list { display:grid; gap:7px; padding:8px; }
+.vtt-npc-feature-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; padding:9px; border:1px solid #3a2d23; border-radius:11px; background:linear-gradient(145deg,#15110e,#0e0c0a); }
+.vtt-npc-feature-card small,.vtt-npc-feature-card strong { display:block; }
+.vtt-npc-feature-card small { color:#8a765f; font-size:7px; text-transform:uppercase; letter-spacing:.07em; }
+.vtt-npc-feature-card strong { margin-top:3px; color:#e3d2b9; font-size:9px; }
+.vtt-npc-feature-card p,.vtt-npc-sheet .vtt-character-spell-row p { margin:5px 0 0; color:#9f8f7d; font-size:8px; line-height:1.5; }
+.vtt-npc-sheet .vtt-character-spell-row { align-items:start; }
+@media (max-width:620px) {
+  .vtt-npc-profile { grid-template-columns:1fr; }
+  .vtt-npc-profile article.wide { grid-column:auto; }
+  .vtt-npc-feature-card { grid-template-columns:1fr; }
+  .vtt-npc-attack-actions { grid-column:1/-1; justify-content:stretch; }
+  .vtt-npc-attack-actions > * { flex:1; }
+}

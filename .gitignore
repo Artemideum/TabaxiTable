@@ -8,3 +8,8 @@ upload/
 .env
 
 data/assets/
+
+# Временные результаты массового импорта; финальные monsters.json и portraits/ остаются отслеживаемыми
+private-content/**/import-progress.ndjson
+private-content/**/imported-monsters.json
+private-content/**/backups/

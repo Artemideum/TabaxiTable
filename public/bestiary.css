@@ -29,3 +29,11 @@
 .bestiary-forge-button { grid-column:1/-1; color:#e3c990; border-color:#745532!important; background:linear-gradient(135deg,#2a1d10,#15100b)!important; }
 @media (max-width:980px) { .bestiary-roll-block > div { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 @media (max-width:620px) { .bestiary-roll-block > div { grid-template-columns:1fr; } }
+
+/* 2.6.0 — каталог на сотни существ и длинные магические статблоки. */
+.bestiary-load-more{width:100%;display:grid;place-items:center;gap:3px;padding:12px;border:1px dashed #6b5036;border-radius:12px;background:#15100c;color:#d9bb83;cursor:pointer}
+.bestiary-load-more:hover{border-style:solid;background:#1b140e}.bestiary-load-more small{color:#7f7162;font-size:8px}
+.bestiary-detail-section>h3 small{margin-left:6px;color:#6f6254;font-size:8px}.bestiary-spell-level{float:right;color:#ab8d61;font-size:9px}
+.bestiary-spell-section .bestiary-feature-list{grid-template-columns:repeat(2,minmax(0,1fr))}
+.bestiary-spell-section article{min-width:0}.bestiary-description p{white-space:pre-line}
+@media(max-width:760px){.bestiary-spell-section .bestiary-feature-list{grid-template-columns:1fr}}

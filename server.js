@@ -17,7 +17,7 @@ const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const SHEET_SCHEMA_VERSION = 13;
-const SCENE_SCHEMA_VERSION = 12;
+const SCENE_SCHEMA_VERSION = 13;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(ASSET_DIR, { recursive: true });
@@ -104,8 +104,9 @@ const NPC_ABILITY_KEYS = ["str","dex","con","int","wis","cha"];
 
 function defaultNpcSheet() {
   return {
+    profile:{ public:false, cr:"", type:"", size:"", speed:"", passivePerception:0, senses:"", languages:"", defenses:"" },
     stats:Object.fromEntries(NPC_ABILITY_KEYS.map(key => [key,{ value:10, public:false }])),
-    saves:[], checks:[], attacks:[], formulas:[]
+    saves:[], checks:[], attacks:[], formulas:[], features:[], spells:[]
   };
 }
 
@@ -113,11 +114,27 @@ function normalizeNpcFormulaEntry(source, kind = "formula") {
   const item = source && typeof source === "object" ? source : {};
   const base = {
     id:cleanText(item.id,80) || id(),
-    name:cleanText(item.name,60) || (kind === "save" ? "Спасбросок" : kind === "check" ? "Проверка" : kind === "attack" ? "Атака" : "Формула"),
+    name:cleanText(item.name,80) || (kind === "save" ? "Спасбросок" : kind === "check" ? "Проверка" : kind === "attack" ? "Атака" : kind === "spell" ? "Заклинание" : kind === "feature" ? "Особенность" : "Формула"),
     public:Boolean(item.public)
   };
-  if (kind === "attack") return { ...base, attackFormula:cleanText(item.attackFormula,120), damageFormula:cleanText(item.damageFormula,120), damageType:cleanText(item.damageType,40) };
+  if (kind === "attack") return { ...base, category:cleanText(item.category,60), attackFormula:cleanText(item.attackFormula,120), damageFormula:cleanText(item.damageFormula,120), damageType:cleanText(item.damageType,60), text:cleanText(item.text,6000) };
+  if (kind === "feature" || kind === "spell") return { ...base, formula:cleanText(item.formula,120), text:cleanText(item.text,6000), category:cleanText(item.category,60), level:Math.max(0,Math.min(9,Number(item.level)||0)) };
   return { ...base, formula:cleanText(item.formula,120) || "1d20" };
+}
+
+function normalizeNpcProfile(source) {
+  const raw = source && typeof source === "object" ? source : {};
+  return {
+    public:Boolean(raw.public),
+    cr:cleanText(raw.cr,20),
+    type:cleanText(raw.type,160),
+    size:cleanText(raw.size,60),
+    speed:cleanText(raw.speed,240),
+    passivePerception:Math.max(0,Math.min(1000,Number(raw.passivePerception)||0)),
+    senses:cleanText(raw.senses,400),
+    languages:cleanText(raw.languages,500),
+    defenses:cleanText(raw.defenses,1000)
+  };
 }
 
 function normalizeNpcSheet(source) {
@@ -130,22 +147,28 @@ function normalizeNpcSheet(source) {
   }));
   const list = (value,kind,max=40) => (Array.isArray(value) ? value : []).slice(0,max).map(entry => normalizeNpcFormulaEntry(entry,kind));
   return {
+    profile:normalizeNpcProfile(raw.profile),
     stats,
     saves:list(raw.saves,"save",30),
     checks:list(raw.checks,"check",50),
-    attacks:list(raw.attacks,"attack",30),
-    formulas:list(raw.formulas,"formula",50)
+    attacks:list(raw.attacks,"attack",120),
+    formulas:list(raw.formulas,"formula",60),
+    features:list(raw.features,"feature",240),
+    spells:list(raw.spells,"spell",400)
   };
 }
 
 function publicNpcSheet(source) {
   const sheet = normalizeNpcSheet(source);
   return {
+    profile:sheet.profile.public ? sheet.profile : normalizeNpcProfile({}),
     stats:Object.fromEntries(Object.entries(sheet.stats).filter(([,entry]) => entry.public)),
     saves:sheet.saves.filter(entry => entry.public),
     checks:sheet.checks.filter(entry => entry.public),
     attacks:sheet.attacks.filter(entry => entry.public),
-    formulas:sheet.formulas.filter(entry => entry.public)
+    formulas:sheet.formulas.filter(entry => entry.public),
+    features:sheet.features.filter(entry => entry.public),
+    spells:sheet.spells.filter(entry => entry.public)
   };
 }
 
@@ -320,7 +343,7 @@ function normalizeEncounterTemplates(source) {
       color:/^#[0-9a-f]{6}$/i.test(token?.color) ? token.color : "#9f7842",
       vision:Math.max(0,Math.min(10000,Number(token?.vision)||0)),
       initiativeBonus:Math.max(-100,Math.min(100,Number(token?.initiativeBonus)||0)),
-      badge:cleanText(token?.badge,32), badgeColor:/^#[0-9a-f]{6}$/i.test(token?.badgeColor) ? token.badgeColor : "#f4c875",
+      badge:cleanText(token?.bestiaryKey,80) && /^cr\s/i.test(cleanText(token?.badge,32)) ? "" : cleanText(token?.badge,32), badgeColor:/^#[0-9a-f]{6}$/i.test(token?.badgeColor) ? token.badgeColor : "#f4c875",
       showName:token?.showName !== false, showHp:token?.showHp !== false, showAc:Boolean(token?.showAc),
       hpMax:Math.max(1,Math.min(1000000,Number(token?.hpMax)||1)), hp:Math.max(0,Math.min(1000000,Number(token?.hp)||0)),
       tempHp:Math.max(0,Math.min(1000000,Number(token?.tempHp)||0)), ac:Math.max(0,Math.min(1000,Number(token?.ac)||10)),
@@ -430,7 +453,7 @@ function normalizeScene(source, players = {}) {
       initiativeBonus: Math.max(-100, Math.min(100, Number(player ? sheetInitiativeBonus(sheet) : raw?.initiativeBonus) || 0)),
       initiativeAdvantage: Boolean(player ? sheet.initiativeAdvantage : raw?.initiativeAdvantage),
       initiative,
-      badge: cleanText(raw?.badge, 32),
+      badge: !player && cleanText(raw?.bestiaryKey,80) && /^cr\s/i.test(cleanText(raw?.badge,32)) ? "" : cleanText(raw?.badge, 32),
       badgeColor: /^#[0-9a-f]{6}$/i.test(raw?.badgeColor) ? raw.badgeColor : "#f4c875",
       showName: raw?.showName !== false,
       showHp: raw?.showHp !== false,

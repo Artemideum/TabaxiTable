@@ -5,6 +5,7 @@ const path = require("node:path");
 global.window = {};
 require(path.join(process.cwd(), "public", "content-packs.js"));
 require(path.join(process.cwd(), "public", "content-details-xgte-tcoe.js"));
+require(path.join(process.cwd(), "public", "races-mm-generated.js"));
 require(path.join(process.cwd(), "public", "subclass-spells-xgte-tcoe.js"));
 require(path.join(process.cwd(), "public", "rules-5e.js"));
 const rules = global.window.TT_RULES;
@@ -218,10 +219,21 @@ test("опциональные спутники учитывают подкла�
   assert.equal(rules.companionMarkersFor({ ...artificerBase, inventoryList:[{ infused:true, infusionKey:"homunculus-servant" }] }).some(entry => entry.id === "homunculus-servant"), true);
 });
 
+
+test("происхождения Monster Manual доступны мастеру персонажа как отдельный пакет", () => {
+  assert.equal(rules.races["mm-goblin"].name, "Гоблин");
+  assert.equal(rules.races["mm-yuan-ti-pureblood"].darkvision, 60);
+  assert.deepEqual(rules.races["mm-orc"].flexible, [2,1]);
+  const build=rules.abilityBuild("barbarian","mm-orc",1,{flexible:[2,1],flexibleAbilities:["str","con"],bonuses:{}});
+  assert.equal(build.total.str,17);
+  assert.equal(build.total.con,15);
+  assert.equal(rules.sourceInfo("mm14-races").short,"MM расы");
+});
+
 test("глубокий пакет Таши и Занатара имеет ожидаемые объёмы", () => {
   assert.equal(Object.values(rules.optionalClassFeatures).flat().length, 43);
   assert.equal(rules.infusions.length, 16);
   assert.equal(Object.keys(rules.feats).length, 49);
-  assert.equal(Object.keys(rules.races).length, 15);
+  assert.equal(Object.keys(rules.races).length, 38);
   assert.equal(Object.keys(rules.classes).reduce((sum, classKey) => sum + rules.subclassOptions(classKey).length, 0), 101);
 });
