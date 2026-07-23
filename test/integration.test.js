@@ -172,7 +172,7 @@ test("комната, лист, броски, история и резервна
     const created = await emit(dm, "room:create", { name:"Мастер", title:"Тестовая кампания", clientId:"test-dm" });
     assert.equal(created.ok, true);
     assert.match(created.code, /^[A-Z2-9]{6}$/);
-    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 12);
+    assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 13);
     assert.equal(created.room.scene.grid.columns, 24);
     assert.equal(created.room.scene.schemaVersion, 11);
     assert.deepEqual(created.room.scene.annotations, []);
@@ -231,7 +231,7 @@ test("комната, лист, броски, история и резервна
     assert.equal(saved.ok, true);
     const updatedRoom = await roomUpdate;
     assert.equal(updatedRoom.players["test-player"].sheet.characterName, "Шёпот");
-    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 12);
+    assert.equal(updatedRoom.players["test-player"].sheet.schemaVersion, 13);
     assert.equal(updatedRoom.players["test-player"].sheet.xp, 6500);
     assert.equal(updatedRoom.players["test-player"].sheet.passivePerceptionBonus, 3);
     assert.equal(updatedRoom.players["test-player"].sheet.diceColor, "#3366cc");
@@ -409,6 +409,29 @@ test("комната, лист, броски, история и резервна
     assert.equal((await hiddenRollForPlayer).rollLog.some(entry => entry.label === "Инициатива · Скрытый гоблин"), false);
 
     const tinyPng = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const playerSource = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
+      method:"POST", headers:{"content-type":"application/json","x-client-id":"test-player"},
+      body:JSON.stringify({name:"Шёпот — исходник",fileName:"whisper.png",category:"source",characterSource:true,dataUrl:tinyPng,width:1,height:1})
+    }).then(response=>response.json());
+    assert.equal(playerSource.ok,true);
+    assert.equal(playerSource.asset.ownerId,"test-player");
+    const oldPlayerToken=npcDmRoom.scene.tokens.find(token=>token.playerId==="test-player");
+    const oldHp=oldPlayerToken?.hp;
+    const appearanceState=waitFor(dm,"room:state",room=>room.players["test-player"]?.sheet?.tokenAppearances?.length===1&&room.players["test-player"].sheet.tokenShape==="raw");
+    const appearanceResponse=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/character-appearances`,{
+      method:"POST",headers:{"content-type":"application/json","x-client-id":"test-player"},
+      body:JSON.stringify({name:"Скрытность",dataUrl:tinyPng,setActive:true,tokenRecipe:{version:2,sourceAssetId:playerSource.asset.id,sourceName:playerSource.asset.name,name:"Шёпот",shape:"raw",image:{fit:"contain",scale:1,offsetX:0,offsetY:0,rotation:0},frame:{preset:"none",primary:"#d3ad6e",secondary:"#17120e",width:0,glow:0,shadow:.2},backgroundColor:"#000000",defaults:{size:1,hp:1,hpMax:1,ac:1,vision:0,disposition:"friendly",showName:true,showHp:true,showAc:false}}})
+    }).then(response=>response.json());
+    assert.equal(appearanceResponse.ok,true);
+    const appearanceRoom=await appearanceState;
+    const appearanceSheet=appearanceRoom.players["test-player"].sheet;
+    assert.equal(appearanceSheet.activeTokenAppearanceId,appearanceResponse.appearance.id);
+    assert.equal(appearanceSheet.tokenAppearances[0].name,"Скрытность");
+    assert.equal(appearanceSheet.hpCurrent,npcDmRoom.players["test-player"].sheet.hpCurrent);
+    const updatedPlayerToken=appearanceRoom.scene.tokens.find(token=>token.playerId==="test-player");
+    assert.equal(updatedPlayerToken?.forged,true);
+    assert.equal(updatedPlayerToken?.tokenShape,"raw");
+    assert.equal(updatedPlayerToken?.hp,oldHp);
     const assetState = waitFor(dm, "room:state", room => room.assets.some(asset => asset.name === "Красный гоблин"));
     const uploadedAsset = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
       method:"POST",
@@ -418,10 +441,11 @@ test("комната, лист, броски, история и резервна
     assert.equal(uploadedAsset.ok, true);
     assert.match(uploadedAsset.asset.url, new RegExp(`/assets/${created.code}/`));
     const assetRoom = await assetState;
-    assert.equal(assetRoom.assets[0].usageCount, 0);
-    assert.equal(assetRoom.assets[0].folder, "Противники");
-    assert.equal(assetRoom.assets[0].tokenRecipe.shape, "hex");
-    assert.equal(assetRoom.assets[0].tokenRecipe.defaults.hpMax, 17);
+    const goblinAsset=assetRoom.assets.find(asset=>asset.id===uploadedAsset.asset.id);
+    assert.equal(goblinAsset.usageCount, 0);
+    assert.equal(goblinAsset.folder, "Противники");
+    assert.equal(goblinAsset.tokenRecipe.shape, "hex");
+    assert.equal(goblinAsset.tokenRecipe.defaults.hpMax, 17);
     const assetFile = await fetch(`http://127.0.0.1:${PORT}${uploadedAsset.asset.url}`);
     assert.equal(assetFile.status, 200);
     assert.equal(assetFile.headers.get("content-type"), "image/png");
@@ -741,8 +765,9 @@ test("комната, лист, броски, история и резервна
     await new Promise(resolve => setTimeout(resolve, 250));
     const persistedRooms = JSON.parse(fs.readFileSync(path.join(DATA_DIR, "rooms.json"), "utf8"));
     assert.ok(persistedRooms[created.code].scenes.length >= 2);
-    assert.equal(persistedRooms[created.code].assets[0].name, "Красный гоблин — новая рамка");
-    assert.ok(fs.existsSync(path.join(DATA_DIR, "assets", created.code, persistedRooms[created.code].assets[0].filename)));
+    const persistedGoblinAsset = persistedRooms[created.code].assets.find(asset => asset.id === uploadedAsset.asset.id);
+    assert.equal(persistedGoblinAsset?.name, "Красный гоблин — новая рамка");
+    assert.ok(fs.existsSync(path.join(DATA_DIR, "assets", created.code, persistedGoblinAsset.filename)));
   } finally {
     dm.disconnect();
     player.disconnect();

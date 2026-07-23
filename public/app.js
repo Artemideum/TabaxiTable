@@ -1,7 +1,7 @@
 const socket = io();
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-const SHEET_SCHEMA_VERSION = 12;
+const SHEET_SCHEMA_VERSION = 13;
 function uuid() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
   const bytes = new Uint8Array(16);
@@ -28,6 +28,7 @@ const state = {
   selectedLoadoutItemId: "",
   mapSelectedTokenId: "",
   currentView: "sheet",
+  previousView: "sheet",
   editMode: localStorage.getItem("tt-edit-mode") === "1",
   resuming: false,
   rollPlayerFilter: "all",
@@ -517,6 +518,7 @@ socket.on("room:state", room => {
   renderRolls();
   renderDiceTray();
   if (state.currentView === "map") renderMap();
+  if (state.currentView === "forge") renderForge();
   const editing = $("#sheet-view").contains(document.activeElement);
   if (!editing) renderSheet();
 });
@@ -527,6 +529,7 @@ function renderAll() {
   renderRolls();
   renderDiceTray();
   if (state.currentView === "map") renderMap();
+  else if (state.currentView === "forge") { window.TT_VTT?.deactivate?.(); renderForge(); }
   else {
     window.TT_VTT?.deactivate?.();
     if (state.currentView === "dice") window.TT_DICE_PHYSICS?.activate?.(roomDiceColors());
@@ -3427,6 +3430,28 @@ function vttSavePreferences(patch = {}) {
   }));
 }
 
+function forgeSocketEmit(event,payload={}) {
+  return new Promise(resolve=>socket.emit(event,payload,response=>resolve(response||{ok:false})));
+}
+function renderForge() {
+  const root=$("#forge-view");
+  if (!root || !state.room || state.currentView!=="forge") return;
+  const ownPlayer=state.room.players?.[state.clientId];
+  const ctx={room:state.room,clientId:state.clientId,isDm:state.room.dmId===state.clientId,ownSheet:ownPlayer?.sheet||{},ownPlayer};
+  if (!window.TT_TOKEN_FORGE?.markup) { root.innerHTML='<div class="read-only">Модуль Кузницы не загрузился.</div>'; return; }
+  root.innerHTML=window.TT_TOKEN_FORGE.markup(ctx);
+  const helpers={
+    close:()=>switchView(state.previousView||"sheet"),
+    rerender:renderForge,
+    toast,
+    refreshButtons:disabled=>root.querySelectorAll('[data-forge-save],[data-forge-save-place],[data-forge-apply-character]').forEach(button=>button.disabled=Boolean(disabled)),
+    cameraCenterGrid:()=>window.TT_VTT?.cameraCenterGrid?.()||{x:0,y:0},
+    emit:forgeSocketEmit,
+    switchView
+  };
+  window.TT_TOKEN_FORGE.bind(root,ctx,helpers);
+}
+
 function renderMap() {
   const root = $("#map-view");
   if (!root || !state.room || state.currentView !== "map") {
@@ -3482,19 +3507,24 @@ function renderRolls() {
 }
 
 function switchView(view) {
-  state.currentView = ["sheet","dice","map"].includes(view) ? view : "sheet";
-  const mapActive = state.currentView === "map";
-  $$('[data-view]').forEach(button => button.classList.toggle("active", button.dataset.view === state.currentView));
-  $("#sheet-view").classList.toggle("hidden", state.currentView !== "sheet");
-  $("#dice-view").classList.toggle("hidden", state.currentView !== "dice");
-  $("#map-view").classList.toggle("hidden", !mapActive);
-  $("#room").classList.toggle("map-fullscreen", mapActive);
-  document.body.classList.toggle("vtt-active", mapActive);
-  $("#roll-peek")?.classList.toggle("hidden", state.currentView === "dice");
+  const next=["sheet","dice","map","forge"].includes(view) ? view : "sheet";
+  if (state.currentView!=="forge" && next==="forge") state.previousView=state.currentView;
+  state.currentView=next;
+  const mapActive=state.currentView==="map", forgeActive=state.currentView==="forge";
+  $$('[data-view]').forEach(button=>button.classList.toggle("active",button.dataset.view===state.currentView));
+  $("#sheet-view").classList.toggle("hidden",state.currentView!=="sheet");
+  $("#dice-view").classList.toggle("hidden",state.currentView!=="dice");
+  $("#map-view").classList.toggle("hidden",!mapActive);
+  $("#forge-view").classList.toggle("hidden",!forgeActive);
+  $("#room").classList.toggle("map-fullscreen",mapActive);
+  $("#room").classList.toggle("forge-active",forgeActive);
+  document.body.classList.toggle("vtt-active",mapActive);
+  $("#roll-peek")?.classList.toggle("hidden",state.currentView==="dice"||forgeActive);
   if (mapActive) renderMap();
   else {
     window.TT_VTT?.deactivate?.();
-    if (state.currentView === "dice") window.TT_DICE_PHYSICS?.activate?.(roomDiceColors());
+    if (forgeActive) renderForge();
+    else if (state.currentView==="dice") window.TT_DICE_PHYSICS?.activate?.(roomDiceColors());
   }
 }
 $$('[data-view]').forEach(button => button.addEventListener("click", () => switchView(button.dataset.view)));

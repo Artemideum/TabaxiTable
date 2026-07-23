@@ -15,7 +15,7 @@ const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : pat
 const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
-const SHEET_SCHEMA_VERSION = 12;
+const SHEET_SCHEMA_VERSION = 13;
 const SCENE_SCHEMA_VERSION = 11;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -400,6 +400,7 @@ function normalizeScene(source, players = {}) {
     const playerId = cleanText(raw?.playerId, 80);
     const player = players[playerId];
     const sheet = player?.sheet || {};
+    const playerVisual = player ? playerTokenVisual(sheet) : null;
     const fallbackName = player ? cleanText(sheet.characterName || player.name, 60) : `Токен ${index + 1}`;
     const initiative = raw?.initiative === null || raw?.initiative === undefined || raw?.initiative === "" ? null : Math.max(-100, Math.min(200, Number(raw.initiative) || 0));
     return {
@@ -413,9 +414,9 @@ function normalizeScene(source, players = {}) {
       rotation: Math.max(-3600, Math.min(3600, Number(raw?.rotation) || 0)),
       opacity: Math.max(0.05, Math.min(1, Number(raw?.opacity) || 1)),
       color: /^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : raw?.color) ? (player ? sheet.tokenColor : raw.color) : "#9f7842",
-      imageUrl: cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : raw?.imageUrl, 1000),
-      forged: player ? false : Boolean(raw?.forged),
-      tokenShape: ["circle","square","hex"].includes(raw?.tokenShape) ? raw.tokenShape : "circle",
+      imageUrl: cleanText(player ? playerVisual.imageUrl : raw?.imageUrl, 1000),
+      forged: player ? playerVisual.forged : Boolean(raw?.forged),
+      tokenShape: player ? playerVisual.tokenShape : (["circle","square","hex","raw"].includes(raw?.tokenShape) ? raw.tokenShape : "circle"),
       disposition: ["friendly","neutral","hostile"].includes(raw?.disposition) ? raw.disposition : player ? "friendly" : "neutral",
       vision: Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : raw?.vision) || 0)),
       hidden: Boolean(raw?.hidden),
@@ -562,18 +563,20 @@ function normalizeTokenRecipe(source) {
   const hpMax = Math.max(1,Math.min(1000000,numberOr(defaults.hpMax,10)));
   const hp = Math.max(0,Math.min(hpMax,numberOr(defaults.hp,hpMax)));
   return {
-    version:1,
+    version:2,
     sourceAssetId:cleanText(source.sourceAssetId,80),
     sourceName:cleanText(source.sourceName,80),
     name:cleanText(source.name,80) || "Новый токен",
-    shape:["circle","square","hex"].includes(source.shape) ? source.shape : "circle",
+    shape:["circle","square","hex","raw"].includes(source.shape) ? source.shape : "circle",
     image:{
+      fit:["cover","contain"].includes(image.fit) ? image.fit : (source.shape === "raw" ? "contain" : "cover"),
       scale:Math.max(.5,Math.min(4,numberOr(image.scale,1.15))),
       offsetX:Math.max(-100,Math.min(100,numberOr(image.offsetX,0))),
       offsetY:Math.max(-100,Math.min(100,numberOr(image.offsetY,0))),
       rotation:Math.max(-180,Math.min(180,numberOr(image.rotation,0)))
     },
     frame:{
+      preset:["none","thin","classic","double","silver","obsidian","blood","arcane","nature","artificer","boss"].includes(frame.preset) ? frame.preset : "classic",
       primary:color(frame.primary,"#d3ad6e"),
       secondary:color(frame.secondary,"#3a2415"),
       width:Math.max(0,Math.min(42,numberOr(frame.width,18))),
@@ -618,6 +621,7 @@ function normalizeAsset(raw, roomCodeValue = "") {
     tags: Array.isArray(raw.tags) ? [...new Set(raw.tags.map(tag => cleanText(tag, 30)).filter(Boolean))].slice(0, 20) : [],
     hash: cleanText(raw.hash, 128),
     tokenRecipe: category === "token" ? normalizeTokenRecipe(raw.tokenRecipe) : null,
+    ownerId:cleanText(raw.ownerId,80),
     createdAt: Math.max(0, Number(raw.createdAt) || Date.now())
   };
 }
@@ -1042,6 +1046,50 @@ function initiativeOrder(scene) {
   return scene.tokens.filter(token => token.initiative !== null).sort((a, b) => Number(b.initiative) - Number(a.initiative) || a.name.localeCompare(b.name, "ru"));
 }
 
+function normalizeTokenAppearance(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const appearanceId=cleanText(raw.id,80);
+  const imageUrl=cleanText(raw.imageUrl,1000);
+  if (!appearanceId || !imageUrl) return null;
+  return {
+    id:appearanceId,
+    name:cleanText(raw.name,80) || "Облик",
+    imageUrl,
+    filename:cleanText(raw.filename,160).replace(/[^a-zA-Z0-9._-]/g,""),
+    forged:raw.forged !== false,
+    tokenShape:["circle","square","hex","raw"].includes(raw.tokenShape) ? raw.tokenShape : "circle",
+    tokenRecipe:normalizeTokenRecipe(raw.tokenRecipe),
+    createdAt:Math.max(0,Number(raw.createdAt)||Date.now())
+  };
+}
+
+function activeTokenAppearance(sheet) {
+  const appearances=Array.isArray(sheet?.tokenAppearances) ? sheet.tokenAppearances : [];
+  return appearances.find(item=>item.id===sheet?.activeTokenAppearanceId) || null;
+}
+
+function playerTokenVisual(sheet={}) {
+  const appearance=activeTokenAppearance(sheet);
+  return {
+    imageUrl:cleanText(appearance?.imageUrl || sheet.tokenImageUrl || sheet.portraitUrl,1000),
+    forged:Boolean(appearance?.forged ?? sheet.tokenForged),
+    tokenShape:["circle","square","hex","raw"].includes(appearance?.tokenShape || sheet.tokenShape) ? (appearance?.tokenShape || sheet.tokenShape) : "circle"
+  };
+}
+
+function syncPlayerTokenVisuals(room,playerId) {
+  const player=room?.players?.[playerId];
+  if (!player) return;
+  const visual=playerTokenVisual(player.sheet || {});
+  (room.scenes || []).forEach(scene => (scene.tokens || []).forEach(token => {
+    if (token.playerId !== playerId) return;
+    token.imageUrl=visual.imageUrl;
+    token.forged=visual.forged;
+    token.tokenShape=visual.tokenShape;
+  }));
+  room.scene=(room.scenes || []).find(scene=>scene.id===room.activeSceneId) || room.scenes?.[0];
+}
+
 function defaultSheet(playerName) {
   return {
     schemaVersion: SHEET_SCHEMA_VERSION,
@@ -1121,6 +1169,10 @@ function defaultSheet(playerName) {
     spellsList: [],
     portraitUrl: "",
     tokenImageUrl: "",
+    tokenForged:false,
+    tokenShape:"circle",
+    tokenAppearances:[],
+    activeTokenAppearanceId:"",
     tokenColor: "#9f7842",
     tokenVision: 60,
     tokenScale: 1,
@@ -1333,6 +1385,8 @@ function normalizeSheet(sheet, playerName) {
     summon:Boolean(spell?.summon),
     summonProfile:cleanText(spell?.summonProfile,40)
   }));
+  const normalizedAppearances=(Array.isArray(incoming.tokenAppearances) ? incoming.tokenAppearances : []).slice(0,20).map(normalizeTokenAppearance).filter(Boolean);
+  const normalizedActiveAppearanceId=normalizedAppearances.some(item=>item.id===cleanText(incoming.activeTokenAppearanceId,80)) ? cleanText(incoming.activeTokenAppearanceId,80) : (normalizedAppearances[0]?.id || "");
   const normalized = {
     ...base,
     ...incoming,
@@ -1346,6 +1400,10 @@ function normalizeSheet(sheet, playerName) {
     spellsList: normalizedSpells,
     goalsList: Array.isArray(incoming.goalsList) ? incoming.goalsList : [],
     notesList: Array.isArray(incoming.notesList) ? incoming.notesList : [],
+    tokenAppearances:normalizedAppearances,
+    activeTokenAppearanceId:normalizedActiveAppearanceId,
+    tokenShape:["circle","square","hex","raw"].includes(incoming.tokenShape) ? incoming.tokenShape : "circle",
+    tokenForged:Boolean(incoming.tokenForged),
     classes: normalizedClasses,
     levelProgression: savedProgression,
     abilityAdvancements: Array.isArray(incoming.abilityAdvancements) ? incoming.abilityAdvancements.slice(0, 20) : [],
@@ -1375,6 +1433,12 @@ function normalizeSheet(sheet, playerName) {
     if (!normalized.infusedItemIds.includes(item.id)) { item.infused=false; item.infusionKey=""; item.infusionName=""; item.magicBonus=Number(item.baseMagicBonus || 0); item.spellBonus=Number(item.baseSpellBonus || 0); item.magical=Boolean(item.baseMagical || item.baseMagicBonus || item.baseSpellBonus); }
   });
   normalized.schemaVersion = SHEET_SCHEMA_VERSION;
+  const activeAppearance=activeTokenAppearance(normalized);
+  if (activeAppearance) {
+    normalized.tokenImageUrl=activeAppearance.imageUrl;
+    normalized.tokenShape=activeAppearance.tokenShape;
+    normalized.tokenForged=activeAppearance.forged;
+  }
   normalized.diceColor = normalizeDiceColor(incoming.diceColor, base.diceColor);
   normalized.vttUiMode = incoming.vttUiMode === "assistant" ? "assistant" : "veteran";
   const quick = incoming.vttQuickSheet && typeof incoming.vttQuickSheet === "object" ? incoming.vttQuickSheet : {};
@@ -1529,9 +1593,12 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
   const code = cleanText(req.params.code, 8).toUpperCase();
   const clientId = cleanText(req.get("x-client-id"), 80);
   const room = rooms[code];
-  if (!room || room.dmId !== clientId) return res.status(403).json({ ok:false, error:"Только ведущий загружает ресурсы" });
+  if (!room || !room.players?.[clientId]) return res.status(403).json({ ok:false, error:"Участник комнаты не найден" });
   ensureRoomVtt(room);
   const category = ["token", "map", "prop", "source"].includes(req.body?.category) ? req.body.category : "token";
+  const characterSource = room.dmId !== clientId && category === "source" && req.body?.characterSource === true;
+  if (room.dmId !== clientId && !characterSource) return res.status(403).json({ ok:false, error:"Игрок может загружать только исходники своего персонажа" });
+  if (characterSource && room.assets.filter(asset=>asset.ownerId===clientId&&asset.category==="source").length >= 30) return res.status(409).json({ok:false,error:"Лимит исходников персонажа: 30"});
   const dataUrl = String(req.body?.dataUrl || "");
   const match = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([a-zA-Z0-9+/=\r\n]+)$/);
   if (!match) return res.status(400).json({ ok:false, error:"Поддерживаются PNG, JPG, WebP и GIF" });
@@ -1543,6 +1610,7 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
   const extension = { "image/png":"png", "image/jpeg":"jpg", "image/webp":"webp", "image/gif":"gif" }[mimeType];
   const hash = crypto.createHash("sha256").update(buffer).digest("hex");
   const replaceAssetId = cleanText(req.body?.replaceAssetId,80);
+  if (replaceAssetId && room.dmId !== clientId) return res.status(403).json({ok:false,error:"Только ведущий обновляет библиотечные токены"});
   if (replaceAssetId) {
     const replacement = room.assets.find(asset => asset.id === replaceAssetId && asset.category === "token");
     if (!replacement) return res.status(404).json({ ok:false, error:"Редактируемый токен не найден" });
@@ -1605,6 +1673,7 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
     tags:Array.isArray(req.body?.tags) ? req.body.tags : [],
     hash,
     tokenRecipe:category === "token" ? req.body?.tokenRecipe : null,
+    ownerId:characterSource ? clientId : "",
     createdAt:Date.now()
   }, code);
   room.assets.push(asset);
@@ -1658,6 +1727,53 @@ app.delete("/api/rooms/:code/assets/:assetId", async (req, res) => {
   saveRooms();
   await emitRoom(code);
   res.json({ ok:true });
+});
+
+app.post("/api/rooms/:code/character-appearances", async (req,res) => {
+  const code=cleanText(req.params.code,8).toUpperCase();
+  const clientId=cleanText(req.get("x-client-id"),80);
+  const room=rooms[code], player=room?.players?.[clientId];
+  if (!room || !player) return res.status(403).json({ok:false,error:"Участник комнаты не найден"});
+  ensureRoomVtt(room);
+  const dataUrl=String(req.body?.dataUrl||"");
+  const match=dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,([a-zA-Z0-9+/=\r\n]+)$/);
+  if (!match) return res.status(400).json({ok:false,error:"Нужен PNG, JPG или WebP"});
+  let buffer; try { buffer=Buffer.from(match[2],"base64"); } catch { return res.status(400).json({ok:false,error:"Изображение не прочиталось"}); }
+  if (!buffer.length || buffer.length>15*1024*1024) return res.status(413).json({ok:false,error:"Файл должен быть меньше 15 МБ"});
+  if (!imageSignatureMatches(buffer,match[1])) return res.status(400).json({ok:false,error:"Содержимое не соответствует формату"});
+  const extension={"image/png":"png","image/jpeg":"jpg","image/webp":"webp"}[match[1]];
+  const sheet=normalizeSheet(player.sheet,player.name);
+  const appearanceId=cleanText(req.body?.appearanceId,80) || id();
+  const existing=(sheet.tokenAppearances||[]).find(item=>item.id===appearanceId);
+  const directory=path.join(ASSET_DIR,code); fs.mkdirSync(directory,{recursive:true});
+  const filename=`character-${clientId.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,24)}-${appearanceId.replace(/[^a-zA-Z0-9_-]/g,"").slice(0,32)}-${Date.now().toString(36)}.${extension}`;
+  fs.writeFileSync(path.join(directory,filename),buffer);
+  if (existing?.filename && existing.filename!==filename) try { fs.rmSync(path.join(directory,existing.filename),{force:true}); } catch {}
+  const tokenRecipe=normalizeTokenRecipe(req.body?.tokenRecipe);
+  const appearance=normalizeTokenAppearance({id:appearanceId,name:req.body?.name,imageUrl:`/assets/${code}/${filename}`,filename,forged:true,tokenShape:tokenRecipe?.shape||"circle",tokenRecipe,createdAt:existing?.createdAt||Date.now()});
+  sheet.tokenAppearances=(sheet.tokenAppearances||[]).filter(item=>item.id!==appearanceId);
+  sheet.tokenAppearances.push(appearance);
+  if (req.body?.setActive !== false || !sheet.activeTokenAppearanceId) sheet.activeTokenAppearanceId=appearanceId;
+  player.sheet=normalizeSheet(sheet,player.name);
+  syncPlayerTokenVisuals(room,clientId);
+  saveRooms(); await emitRoom(code);
+  res.json({ok:true,appearance,activeId:player.sheet.activeTokenAppearanceId});
+});
+
+app.patch("/api/rooms/:code/character-appearances/:appearanceId/activate", async (req,res) => {
+  const code=cleanText(req.params.code,8).toUpperCase();
+  const clientId=cleanText(req.get("x-client-id"),80);
+  const room=rooms[code], player=room?.players?.[clientId];
+  if (!room || !player) return res.status(403).json({ok:false,error:"Участник комнаты не найден"});
+  ensureRoomVtt(room);
+  const sheet=normalizeSheet(player.sheet,player.name);
+  const appearanceId=cleanText(req.params.appearanceId,80);
+  if (!(sheet.tokenAppearances||[]).some(item=>item.id===appearanceId)) return res.status(404).json({ok:false,error:"Облик не найден"});
+  sheet.activeTokenAppearanceId=appearanceId;
+  player.sheet=normalizeSheet(sheet,player.name);
+  syncPlayerTokenVisuals(room,clientId);
+  saveRooms(); await emitRoom(code);
+  res.json({ok:true,activeId:appearanceId});
 });
 
 app.use(express.static(path.join(__dirname, "public")));
@@ -1935,7 +2051,7 @@ io.on("connection", (socket) => {
           name:count > 1 || existing ? `${baseName} ${existing + index + 1}` : baseName,
           x:x + index, y, size:Math.max(.25,Math.min(12,Number(payload.size ?? defaults.size)||asset.defaultSize||1)), rotation:0, opacity:1,
           color:/^#[0-9a-f]{6}$/i.test(payload.color) ? payload.color : asset.tokenRecipe?.frame?.primary || "#9f7842", imageUrl:asset.url,
-          forged:Boolean(payload.forged ?? asset.tokenRecipe), tokenShape:["circle","square","hex"].includes(payload.tokenShape) ? payload.tokenShape : asset.tokenRecipe?.shape || "circle",
+          forged:Boolean(payload.forged ?? asset.tokenRecipe), tokenShape:["circle","square","hex","raw"].includes(payload.tokenShape) ? payload.tokenShape : asset.tokenRecipe?.shape || "circle",
           disposition:["friendly","neutral","hostile"].includes(payload.disposition) ? payload.disposition : defaults.disposition || "neutral",
           vision:Math.max(0,Math.min(10000,Number(payload.vision ?? defaults.vision)||60)), hidden:Boolean(payload.hidden), locked:false, z:100,
           showName:(payload.showName ?? defaults.showName) !== false, showHp:(payload.showHp ?? defaults.showHp) !== false, showAc:Boolean(payload.showAc ?? defaults.showAc), attachment:null,
@@ -2067,14 +2183,15 @@ io.on("connection", (socket) => {
     rememberScene(room, scene);
     const position = nextScenePosition(scene);
     const sheet = player?.sheet || {};
+    const visual = player ? playerTokenVisual(sheet) : null;
     scene.tokens.push({
       id:id(), assetId:cleanText(payload.assetId,80), playerId:player ? playerId : "",
       name:cleanText(player ? (sheet.characterName || player.name) : payload.name, 60) || "Безымянный противник",
       x:payload.x === undefined ? position.x : Number(payload.x)||0, y:payload.y === undefined ? position.y : Number(payload.y)||0,
       size:Math.max(0.25, Math.min(12, Number(player ? sheet.tokenScale : payload.size) || 1)), rotation:Number(payload.rotation)||0, opacity:Number(payload.opacity)||1,
       color:/^#[0-9a-f]{6}$/i.test(player ? sheet.tokenColor : payload.color) ? (player ? sheet.tokenColor : payload.color) : "#9f7842",
-      imageUrl:cleanText(player ? (sheet.tokenImageUrl || sheet.portraitUrl) : payload.imageUrl, 1000),
-      forged:player ? false : Boolean(payload.forged), tokenShape:["circle","square","hex"].includes(payload.tokenShape) ? payload.tokenShape : "circle",
+      imageUrl:cleanText(player ? visual.imageUrl : payload.imageUrl, 1000),
+      forged:player ? visual.forged : Boolean(payload.forged), tokenShape:player ? visual.tokenShape : (["circle","square","hex","raw"].includes(payload.tokenShape) ? payload.tokenShape : "circle"),
       disposition:player ? "friendly" : ["friendly","neutral","hostile"].includes(payload.disposition) ? payload.disposition : "neutral",
       vision:Math.max(0, Math.min(10000, Number(player ? sheet.tokenVision : payload.vision) || 0)),
       hidden:isDm ? Boolean(payload.hidden) : false, locked:isDm ? Boolean(payload.locked) : false, z:100,
@@ -2099,8 +2216,8 @@ io.on("connection", (socket) => {
     let added = 0;
     Object.entries(room.players).forEach(([playerId, player]) => {
       if (sceneTokenForPlayer(scene, playerId)) return;
-      const position = nextScenePosition(scene), sheet = player.sheet || {};
-      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:cleanText(sheet.tokenImageUrl || sheet.portraitUrl,1000), vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, showName:true, showHp:true, showAc:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false, npcSheet:null, attachment:null });
+      const position = nextScenePosition(scene), sheet = player.sheet || {}, visual=playerTokenVisual(sheet);
+      scene.tokens.push({ id:id(), playerId, name:cleanText(sheet.characterName || player.name,60), x:position.x, y:position.y, size:Number(sheet.tokenScale)||1, color:sheet.tokenColor||"#9f7842", imageUrl:visual.imageUrl, forged:visual.forged, tokenShape:visual.tokenShape, vision:Number(sheet.tokenVision)||0, hidden:false, locked:false, showName:true, showHp:true, showAc:false, initiativeBonus:sheetInitiativeBonus(sheet), initiativeAdvantage:Boolean(sheet.initiativeAdvantage), initiative:null, hpMax:Math.max(1,Number(sheet.hpMax)||1), hp:Math.max(0,Number(sheet.hpCurrent)||0), tempHp:Math.max(0,Number(sheet.hpTemp)||0), ac:Math.max(0,Number(sheet.ac)||10), conditions:[], concentration:"", deathSuccess:Number(sheet.deathSuccess)||0, deathFail:Number(sheet.deathFail)||0, stable:false, npcSheet:null, attachment:null });
       added += 1;
     });
     setActiveScene(room, scene);

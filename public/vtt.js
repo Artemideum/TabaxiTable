@@ -39,6 +39,9 @@
   let controller = null;
   let spaceHeld = false;
   let active = false;
+  let currentCameraCenterGrid = () => ({ x:0, y:0 });
+
+  const cameraCenterGrid = () => currentCameraCenterGrid();
 
   const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || 0));
   const roundTenth = value => Math.round((Number(value) || 0) * 10) / 10;
@@ -303,6 +306,7 @@
         ${canEdit ? button("initiative", "⚔ Бросить инициативу") : ""}
         ${isDm ? button("transform", "⌖ Трансформировать") + button("attach", token.attachment ? "⛓ Изменить привязку" : "⛓ Прикрепить к…") + (token.attachment ? button("detach","Разорвать привязку") : "") : ""}
         ${canEdit ? button("settings", "⚙ Настроить") : ""}
+        ${token.playerId===clientId ? button("appearances", "⬡ Облики персонажа") : ""}
         ${canEdit ? `<div class="vtt-context-submenu">${button("toggle-name", token.showName !== false ? "Скрыть имя" : "Показать имя")}${button("toggle-hp", token.showHp !== false ? "Скрыть HP" : "Показать HP")}${button("toggle-ac", token.showAc ? "Скрыть КД" : "Показать КД")}</div>` : ""}
         ${isDm ? `<div class="vtt-context-submenu">${button("toggle-hidden", token.hidden ? "Показать токен" : "Скрыть токен")}${button("toggle-locked", token.locked ? "Разблокировать" : "Заблокировать")}</div>${button("duplicate", "⧉ Дублировать")}${button("delete", "Удалить", 'class="danger-action"')}` : ""}`;
     } else if (entry.kind === "object") {
@@ -540,7 +544,6 @@
     const selectedNpc = entries.length === 1 && entries[0].kind === "token" && !entries[0].value.playerId ? entries[0].value : null;
     if (linkedCharacterId && ui.rightPanel === "character") ui.characterPlayerId = linkedCharacterId;
     const characterId = ui.characterPlayerId && ctx.characters?.[ui.characterPlayerId] ? ui.characterPlayerId : ctx.characters?.[ctx.clientId] ? ctx.clientId : Object.keys(ctx.characters || {})[0];
-    const forgeOpen = ui.leftPanel === "forge" && isDm;
     const leftContent = ui.leftPanel === "library" && isDm ? libraryPanel(room, assets) : ui.leftPanel === "scenes" ? scenesPanel(room, isDm) : ui.leftPanel === "tools" ? toolsPanel(grid, entries.length, isDm, diceColor) : ui.leftPanel === "encounters" && isDm ? encounterPanel(room) : "";
     const rightContent = ui.rightPanel === "inspector" ? inspectorMarkup(entries, isDm, ctx.clientId) : ui.rightPanel === "initiative" ? initiativePanelMarkup(scene, order, isDm) : ui.rightPanel === "character" ? (selectedNpc ? npcCharacterPanelMarkup(selectedNpc,isDm) : characterPanelMarkup(ctx.characters || {}, characterId, isDm, ctx.clientId, scene)) : "";
 
@@ -569,7 +572,7 @@
       </header>
 
       <nav class="vtt-left-rail">
-        ${isDm ? `<button data-vtt-panel-left="forge" class="${ui.leftPanel === "forge" ? "active" : ""}" title="Кузница токенов"><span>⬡</span></button><button data-vtt-panel-left="library" class="${ui.leftPanel === "library" ? "active" : ""}" title="Ресурсы"><span>▧</span></button><button data-vtt-panel-left="encounters" class="${ui.leftPanel === "encounters" ? "active" : ""}" title="Группы противников"><span>⚔</span></button>` : ""}
+        ${isDm ? `<button data-vtt-panel-left="library" class="${ui.leftPanel === "library" ? "active" : ""}" title="Ресурсы"><span>▧</span></button><button data-vtt-panel-left="encounters" class="${ui.leftPanel === "encounters" ? "active" : ""}" title="Группы противников"><span>⚔</span></button>` : ""}
         <button data-vtt-panel-left="scenes" class="${ui.leftPanel === "scenes" ? "active" : ""}" title="Сцены"><span>▤</span></button>
         <button data-vtt-panel-left="tools" class="${ui.leftPanel === "tools" ? "active" : ""}" title="Инструменты"><span>⌘</span></button>
         <i></i>${toolRailMarkup(isDm)}
@@ -577,7 +580,6 @@
 
       <nav class="vtt-right-rail"><button data-vtt-panel-right="character" class="${ui.rightPanel === "character" ? "active" : ""}" title="Мини-лист персонажа"><span>☷</span></button><button data-vtt-panel-right="inspector" class="${ui.rightPanel === "inspector" ? "active" : ""}" title="Инспектор"><span>◆</span>${entries.length ? `<b>${entries.length}</b>` : ""}</button><button data-vtt-panel-right="initiative" class="${ui.rightPanel === "initiative" ? "active" : ""}" title="Инициатива"><span>⚔</span>${order.length ? `<b>${order.length}</b>` : ""}</button></nav>
 
-      ${forgeOpen ? window.TT_TOKEN_FORGE?.markup?.(ctx) || "" : ""}
       ${leftContent ? `<aside class="vtt-floating-panel vtt-panel-left">${leftContent}</aside>` : ""}
       ${rightContent ? `<aside class="vtt-floating-panel vtt-panel-right ${ui.rightPanel === "initiative" ? "vtt-initiative-panel" : ui.rightPanel === "character" ? "vtt-character-panel" : ""}">${rightContent}</aside>` : ""}
       ${contextMenuMarkup(room,isDm,ctx.clientId)}
@@ -706,7 +708,7 @@
       return metrics.fromWorldRaw(point.x, point.y);
     };
 
-    const cameraCenterGrid = () => {
+    currentCameraCenterGrid = () => {
       const rect = viewport.getBoundingClientRect();
       return screenToGrid(rect.left + rect.width / 2, rect.top + rect.height / 2, "cell");
     };
@@ -724,18 +726,6 @@
       ui.leftPanel = ui.leftPanel === panel ? null : panel;
       render(root, ctx);
     }, { signal }));
-    if (ui.leftPanel === "forge" && isDm) {
-      const refreshForgeButtons = disabled => root.querySelectorAll("[data-forge-save],[data-forge-save-place]").forEach(button => { button.disabled = Boolean(disabled); });
-      window.TT_TOKEN_FORGE?.bind?.(root,ctx,{
-        rerender:()=>render(root,ctx),
-        close:()=>{ui.leftPanel=null;render(root,ctx);},
-        cameraCenterGrid,
-        emit:(event,payload)=>emit(ctx,event,payload),
-        toast:message=>ctx.toast(message),
-        refreshButtons:refreshForgeButtons
-      });
-    }
-
     root.querySelectorAll("[data-vtt-panel-right]").forEach(button => button.addEventListener("click", () => {
       const panel = button.dataset.vttPanelRight;
       ui.rightPanel = ui.rightPanel === panel ? null : panel;
@@ -835,6 +825,9 @@
         if (entry.kind === "token") return openTokenEditor(ctx,entry.value);
         if (entry.kind === "object") return openObjectEditor(ctx,entry.value);
         return openAnnotationEditor(ctx,entry.value);
+      }
+      if (action === "appearances" && entry.kind === "token" && entry.value.playerId===ctx.clientId) {
+        closeContextMenu(); ctx.switchView?.("forge"); return;
       }
       if (action === "open-character" && entry.kind === "token" && entry.value.playerId) {
         ui.characterPlayerId = entry.value.playerId; ui.rightPanel = "character"; closeContextMenu(); saveUiState(); return render(root,ctx);
@@ -1000,7 +993,7 @@
     }
 
     bindSceneItems(root, ctx, viewport, metrics, screenToGridRaw, signal);
-    bindPanels(root, ctx, metrics, centerCamera, cameraCenterGrid, signal);
+    bindPanels(root, ctx, metrics, centerCamera, currentCameraCenterGrid, signal);
     window.TT_DICE_PHYSICS?.play(scene.diceRolls?.length ? scene.diceRolls : scene.diceRoll);
   }
 
@@ -1427,7 +1420,8 @@
     root.querySelectorAll("[data-vtt-asset-edit]").forEach(button => button.addEventListener("click", () => openAssetEditor(ctx, (room.assets || []).find(asset => asset.id === button.dataset.vttAssetEdit)), { signal }));
     root.querySelectorAll("[data-vtt-forge-edit]").forEach(button => button.addEventListener("click", () => {
       const asset=(room.assets||[]).find(entry=>entry.id===button.dataset.vttForgeEdit);
-      window.TT_TOKEN_FORGE?.openAsset?.(asset,room); ui.leftPanel="forge"; render(root,ctx);
+      window.TT_TOKEN_FORGE?.openAsset?.(asset,room);
+      ctx.switchView?.("forge");
     }, { signal }));
 
     let uploadCategory = "token";
@@ -1646,10 +1640,11 @@
   function deactivate() {
     active = false;
     spaceHeld = false;
+    currentCameraCenterGrid = () => ({ x:0, y:0 });
     if (controller) controller.abort();
     controller = null;
     window.TT_DICE_PHYSICS?.deactivate();
   }
 
-  window.TT_VTT = { render, deactivate };
+  window.TT_VTT = { render, deactivate, cameraCenterGrid };
 })();
