@@ -17,3 +17,15 @@
 @media(max-width:980px){.bestiary-browser{grid-template-columns:320px minmax(0,1fr)}.bestiary-detail{padding:18px}.bestiary-detail-hero{grid-template-columns:145px minmax(0,1fr)}.bestiary-portrait{height:175px}.bestiary-vitals{grid-template-columns:repeat(2,minmax(0,1fr))}.bestiary-vitals>span:last-child{grid-column:1/-1}}
 @media(max-width:760px){.bestiary-shell{height:auto;min-height:100%}.bestiary-browser{grid-template-columns:1fr}.bestiary-sidebar{height:430px;border-right:0;border-bottom:1px solid #33271f}.bestiary-detail{overflow:visible;padding:16px}.bestiary-head{padding:16px}.bestiary-head-mark{display:none}.bestiary-place-panel{flex-wrap:wrap}.bestiary-place-panel>a{width:100%;margin:0}.bestiary-detail-hero{grid-template-columns:110px minmax(0,1fr)}.bestiary-portrait{height:145px}.bestiary-abilities{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:480px){.bestiary-filters{grid-template-columns:1fr}.bestiary-filters input{grid-column:auto}.bestiary-entry{grid-template-columns:42px minmax(0,1fr)}.bestiary-entry-image{width:40px;height:40px}.bestiary-entry-stats{grid-column:2;justify-items:start;display:flex;gap:8px}.bestiary-detail-hero{grid-template-columns:1fr}.bestiary-portrait{height:240px}.bestiary-vitals{grid-template-columns:1fr}.bestiary-vitals>span:last-child{grid-column:auto}.bestiary-place-panel>div:first-child{width:100%}.bestiary-place-panel select{width:100%}.bestiary-place-buttons{width:100%}.bestiary-place-buttons button{flex:1}}
+
+/* 2.5.1 — полный набор проверок и переход в Кузницу. */
+.bestiary-roll-reference { display:grid; gap:12px; }
+.bestiary-roll-block { display:grid; gap:8px; }
+.bestiary-roll-block h4 { margin:0; color:#b7a58f; font-size:10px; text-transform:uppercase; letter-spacing:.09em; }
+.bestiary-roll-block > div { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:7px; }
+.bestiary-roll-block span { min-width:0; display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 9px; border:1px solid #392e25; border-radius:10px; background:#0c0a08; }
+.bestiary-roll-block small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#a9967f; }
+.bestiary-roll-block strong { flex:0 0 auto; color:#dfbf82; font:700 10px Unbounded; }
+.bestiary-forge-button { grid-column:1/-1; color:#e3c990; border-color:#745532!important; background:linear-gradient(135deg,#2a1d10,#15100b)!important; }
+@media (max-width:980px) { .bestiary-roll-block > div { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media (max-width:620px) { .bestiary-roll-block > div { grid-template-columns:1fr; } }

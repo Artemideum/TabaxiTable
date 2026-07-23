@@ -71,3 +71,25 @@ test("черновой импортёр извлекает основу карт
   assert.equal(monster.actions[0].damageFormula,"1d6+2");
   assert.match(monster.portrait,/test_s\.jpg$/);
 });
+
+test("NPC из бестиария получает все шесть спасбросков и восемнадцать навыков",()=>{
+  const goblin=loaded.byKey.get("goblin");
+  const sheet=bestiary.npcSheetFromMonster(goblin);
+  assert.equal(sheet.saves.length,6);
+  assert.equal(sheet.checks.length,18);
+  assert.equal(new Set(sheet.saves.map(entry=>entry.name)).size,6);
+  assert.equal(new Set(sheet.checks.map(entry=>entry.name)).size,18);
+  assert.equal(sheet.saves.find(entry=>entry.name==="Ловкость").formula,"1d20+2");
+  assert.equal(sheet.checks.find(entry=>entry.name==="Скрытность").formula,"1d20+6");
+  assert.equal(sheet.checks.find(entry=>entry.name==="Атлетика").formula,"1d20-1");
+  assert.equal(sheet.checks.find(entry=>entry.name==="Восприятие").formula,"1d20-1");
+});
+
+test("детальная карточка отдаёт полный справочник бросков, а исходные данные остаются компактными",()=>{
+  const goblin=loaded.byKey.get("goblin");
+  assert.equal(goblin.saves.length,0);
+  assert.equal(goblin.skills.length,1);
+  const detail=bestiary.detailEntry(goblin);
+  assert.equal(detail.saves.length,6);
+  assert.equal(detail.skills.length,18);
+});

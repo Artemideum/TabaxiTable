@@ -87,6 +87,13 @@
     return `<section class="bestiary-detail-section"><h3>${esc(title)}</h3><div class="bestiary-feature-list">${items.map(item => `<article><strong>${esc(item.name)}</strong>${item.attackFormula ? `<div class="bestiary-action-formulas"><code>${esc(item.attackFormula)}</code>${item.damageFormula ? `<code>${esc(item.damageFormula)} ${esc(item.damageType)}</code>` : ""}</div>` : item.formula ? `<div class="bestiary-action-formulas"><code>${esc(item.formula)}</code></div>` : ""}<p>${esc(item.text)}</p></article>`).join("")}</div></section>`;
   }
 
+  function rollReferenceSection(monster) {
+    const saves=(monster.saves||[]).map(item=>`<span><small>${esc(item.name)}</small><strong>${esc(item.formula)}</strong></span>`).join("");
+    const skills=(monster.skills||[]).map(item=>`<span><small>${esc(item.name)}</small><strong>${esc(item.formula)}</strong></span>`).join("");
+    if(!saves&&!skills)return "";
+    return `<section class="bestiary-detail-section bestiary-roll-reference"><h3>Проверки и спасброски</h3><div class="bestiary-roll-block"><h4>Все спасброски</h4><div>${saves}</div></div><div class="bestiary-roll-block"><h4>Все навыки</h4><div>${skills}</div></div></section>`;
+  }
+
   function detailMarkup(ctx) {
     const monster = state.selected;
     if (!monster) return `<div class="bestiary-detail-loading">Выбери существо.</div>`;
@@ -101,6 +108,7 @@
       <div class="bestiary-abilities">${Object.entries(monster.abilities || {}).map(([key,value]) => `<span><small>${abilityLabels[key] || key}</small><strong>${value}</strong><b>${signed(abilityMod(value))}</b></span>`).join("")}</div>
       <div class="bestiary-meta"><span><b>Чувства</b>${esc(senses)}</span><span><b>Языки</b>${esc(monster.languages?.join(", ") || "—")}</span><span><b>Местность</b>${esc(monster.environment?.join(", ") || "—")}</span></div>
       ${defenseRow(monster)}
+      ${rollReferenceSection(monster)}
       ${featureSection("Особенности",monster.traits)}
       ${featureSection("Действия",monster.actions)}
       ${featureSection("Бонусные действия",monster.bonusActions)}
@@ -108,7 +116,7 @@
       ${featureSection("Легендарные действия",monster.legendaryActions)}
       ${monster.description ? `<section class="bestiary-detail-section bestiary-description"><h3>Кратко</h3><p>${esc(monster.description)}</p></section>` : ""}
       <footer class="bestiary-place-panel">
-        ${ctx.isDm ? `<div><label>Отношение<select data-bestiary-disposition><option value="hostile" ${state.disposition==="hostile"?"selected":""}>Противник</option><option value="neutral" ${state.disposition==="neutral"?"selected":""}>Нейтральный</option><option value="friendly" ${state.disposition==="friendly"?"selected":""}>Союзник</option></select></label></div><div class="bestiary-place-buttons"><button type="button" class="primary" data-bestiary-place="1">Поставить</button><button type="button" data-bestiary-place="3">×3</button><button type="button" data-bestiary-place="5">×5</button></div>` : `<div class="read-only">Размещать существ на карте может ведущий.</div>`}
+        ${ctx.isDm ? `<div><label>Отношение<select data-bestiary-disposition><option value="hostile" ${state.disposition==="hostile"?"selected":""}>Противник</option><option value="neutral" ${state.disposition==="neutral"?"selected":""}>Нейтральный</option><option value="friendly" ${state.disposition==="friendly"?"selected":""}>Союзник</option></select></label></div><div class="bestiary-place-buttons"><button type="button" class="primary" data-bestiary-place="1">Поставить</button><button type="button" data-bestiary-place="3">×3</button><button type="button" data-bestiary-place="5">×5</button><button type="button" class="bestiary-forge-button" data-bestiary-forge>✦ Подогнать токен</button></div>` : `<div class="read-only">Размещать существ на карте может ведущий.</div>`}
         ${monster.sourceUrl ? `<a href="${esc(monster.sourceUrl)}" target="_blank" rel="noreferrer">Открыть источник ↗</a>` : ""}
       </footer>
     </article>`;
@@ -117,7 +125,7 @@
   function shellMarkup(ctx) {
     const items = state.catalog || [];
     return `<div class="bestiary-shell">
-      <header class="bestiary-head"><div><span class="eyebrow">TabaxiTable 2.5</span><h1>Бестиарий</h1><p>${esc(state.manifest?.name || "Каталог существ")} · ${items.length} существ</p></div><div class="bestiary-head-mark">☷</div></header>
+      <header class="bestiary-head"><div><span class="eyebrow">TabaxiTable 2.5.1</span><h1>Бестиарий</h1><p>${esc(state.manifest?.name || "Каталог существ")} · ${items.length} существ</p></div><div class="bestiary-head-mark">☷</div></header>
       <section class="bestiary-browser">
         <aside class="bestiary-sidebar">
           <div class="bestiary-filters"><input type="search" data-bestiary-search value="${esc(state.query)}" placeholder="Поиск по имени или типу"><select data-bestiary-type><option value="all">Все типы</option>${optionValues(items,"type",item=>item.typeLabel)}</select><select data-bestiary-size><option value="all">Все размеры</option>${optionValues(items,"size",item=>sizeLabels[item.size]||item.size)}</select><select data-bestiary-cr><option value="all">Любая опасность</option><option value="0:0.5">CR 0–1/2</option><option value="1:4">CR 1–4</option><option value="5:10">CR 5–10</option><option value="11:30">CR 11+</option></select></div>
@@ -142,6 +150,11 @@
       paint(root,ctx,helpers,false);
     }));
     root.querySelector("[data-bestiary-disposition]")?.addEventListener("change", event => { state.disposition=event.target.value; });
+    root.querySelector("[data-bestiary-forge]")?.addEventListener("click",async()=>{
+      if(state.busy||!state.selected)return;
+      state.busy=true;
+      try{await helpers.openForge?.(state.selected);}catch(error){helpers.toast(error.message||"Не удалось открыть Кузницу");}finally{state.busy=false;}
+    });
     root.querySelectorAll("[data-bestiary-place]").forEach(button => button.addEventListener("click", async () => {
       if (state.busy || !state.selectedKey) return;
       state.busy=true;

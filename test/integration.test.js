@@ -99,6 +99,9 @@ test("комната, лист, броски, история и резервна
     assert.equal("actions" in bestiaryCatalog.monsters[0],false);
     const goblinCard = await fetch(`http://127.0.0.1:${PORT}/api/bestiary/goblin`).then(response => response.json());
     assert.equal(goblinCard.monster.hp.average,7);
+    assert.equal(goblinCard.monster.saves.length,6);
+    assert.equal(goblinCard.monster.skills.length,18);
+    assert.equal(goblinCard.monster.skills.find(entry=>entry.name==="Скрытность").formula,"1d20+6");
     assert.ok(goblinCard.monster.actions.length>=2);
     const catalog = await fetch(`http://127.0.0.1:${PORT}/spells-5e.json`).then(response => response.json());
     assert.equal(catalog.length, 120);
@@ -755,6 +758,15 @@ test("комната, лист, броски, история и резервна
     assert.equal(deathSave.roll?.sets?.[0]?.sides,20);
     assert.equal(deathSave.roll?.label,`Спасбросок от смерти · Шёпот`);
 
+    const bestiaryTokenImage="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
+    const bestiaryAsset=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`,{method:"POST",headers:{"content-type":"application/json","x-client-id":"test-dm"},body:JSON.stringify({name:"Гоблин · кастомный токен",category:"token",dataUrl:bestiaryTokenImage,width:512,height:512,defaultSize:1,folder:"Бестиарий/Гуманоиды",tags:["bestiary","goblin"],bestiaryKey:"goblin",tokenRecipe:{version:2,bestiaryKey:"goblin",shape:"hex",sourceUrl:"/test-source.png",frame:{preset:"obsidian",primary:"#765f9e"},defaults:{size:1,hp:7,hpMax:7,ac:15,vision:60,disposition:"hostile",showName:true,showHp:true,showAc:true}}})}).then(response=>response.json());
+    assert.equal(bestiaryAsset.ok,true);
+    assert.equal(bestiaryAsset.asset.bestiaryKey,"goblin");
+    const preparedSource=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/bestiary/goblin/source`,{method:"POST",headers:{"x-client-id":"test-dm"}}).then(response=>response.json());
+    assert.equal(preparedSource.ok,true);
+    assert.equal(preparedSource.tokenAsset,true);
+    assert.equal(preparedSource.asset.id,bestiaryAsset.asset.id);
+
     const bestiaryPlacedState = waitFor(dm,"room:state",room => room.scene.tokens.filter(token=>token.bestiaryKey==="goblin").length===3);
     const bestiaryPlaced = await emit(dm,"bestiary:place",{key:"goblin",count:3,x:11,y:9,disposition:"hostile"});
     assert.equal(bestiaryPlaced.ok,true);
@@ -765,7 +777,25 @@ test("комната, лист, броски, история и резервна
     assert.equal(bestiaryGoblin.hpMax,7);
     assert.equal(bestiaryGoblin.ac,15);
     assert.equal(bestiaryGoblin.disposition,"hostile");
+    assert.equal(bestiaryGoblin.assetId,bestiaryAsset.asset.id);
+    assert.equal(bestiaryGoblin.tokenShape,"hex");
+    assert.equal(bestiaryGoblin.npcSheet.saves.length,6);
+    assert.equal(bestiaryGoblin.npcSheet.checks.length,18);
+    assert.equal(bestiaryGoblin.npcSheet.checks.find(entry=>entry.name==="Скрытность").formula,"1d20+6");
     assert.ok(bestiaryGoblin.npcSheet.attacks.some(attack=>attack.name==="Скимитар"));
+    const woundedBestiaryState=waitFor(dm,"room:state",room=>room.scene.tokens.find(token=>token.id===bestiaryGoblin.id)?.hp===3);
+    assert.equal((await emit(dm,"scene:token-hp",{tokenId:bestiaryGoblin.id,hp:3,hpMax:7,tempHp:0})).ok,true);
+    await woundedBestiaryState;
+    const visualUpdateState=waitFor(dm,"room:state",room=>room.scene.tokens.find(token=>token.id===bestiaryGoblin.id)?.tokenShape==="square");
+    const updatedBestiaryAsset=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`,{method:"POST",headers:{"content-type":"application/json","x-client-id":"test-dm"},body:JSON.stringify({name:"Гоблин · новый кадр",category:"token",dataUrl:tinyPng,width:512,height:512,defaultSize:1,folder:"Бестиарий/Гуманоиды",tags:["bestiary","goblin"],bestiaryKey:"goblin",replaceAssetId:bestiaryAsset.asset.id,tokenRecipe:{version:2,bestiaryKey:"goblin",shape:"square",sourceUrl:"/test-source.png",frame:{preset:"classic",primary:"#d3ad6e"},defaults:{size:1,hp:7,hpMax:7,ac:15,vision:60,disposition:"hostile",showName:true,showHp:true,showAc:true}}})}).then(response=>response.json());
+    assert.equal(updatedBestiaryAsset.ok,true);
+    const visualRoom=await visualUpdateState;
+    const visuallyUpdatedGoblin=visualRoom.scene.tokens.find(token=>token.id===bestiaryGoblin.id);
+    assert.equal(visuallyUpdatedGoblin.hp,3);
+    assert.equal(visuallyUpdatedGoblin.hpMax,7);
+    assert.equal(visuallyUpdatedGoblin.x,bestiaryGoblin.x);
+    assert.equal(visuallyUpdatedGoblin.y,bestiaryGoblin.y);
+    assert.equal(visuallyUpdatedGoblin.tokenShape,"square");
     assert.equal((await emit(player,"bestiary:place",{key:"orc",count:1,x:0,y:0})).ok,false);
 
     const sceneCreatedState = waitFor(dm, "room:state", room => room.scenes.some(scene => scene.name === "Тайная лаборатория"));

@@ -626,6 +626,7 @@ function normalizeAsset(raw, roomCodeValue = "") {
     tags: Array.isArray(raw.tags) ? [...new Set(raw.tags.map(tag => cleanText(tag, 30)).filter(Boolean))].slice(0, 20) : [],
     hash: cleanText(raw.hash, 128),
     tokenRecipe: category === "token" ? normalizeTokenRecipe(raw.tokenRecipe) : null,
+    bestiaryKey:cleanText(raw.bestiaryKey,80),
     ownerId:cleanText(raw.ownerId,80),
     createdAt: Math.max(0, Number(raw.createdAt) || Date.now())
   };
@@ -1587,6 +1588,25 @@ async function emitRoom(code) {
   }
 }
 
+function bestiaryVisualAsset(room, monsterKey) {
+  const key = cleanText(monsterKey,80);
+  return [...(room?.assets || [])].reverse().find(asset => asset.category === "token" && asset.bestiaryKey === key) || null;
+}
+
+function syncBestiaryAssetVisuals(room, asset) {
+  if (!room || !asset?.bestiaryKey || asset.category !== "token") return;
+  const shape = asset.tokenRecipe?.shape || "circle";
+  const colorValue = asset.tokenRecipe?.frame?.primary || "#9f443d";
+  (room.scenes || []).forEach(scene => (scene.tokens || []).forEach(token => {
+    if (token.bestiaryKey !== asset.bestiaryKey) return;
+    token.assetId = asset.id;
+    token.imageUrl = asset.url;
+    token.forged = Boolean(asset.tokenRecipe);
+    token.tokenShape = shape;
+    token.color = colorValue;
+  }));
+}
+
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 1e6 });
@@ -1637,12 +1657,14 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
     replacement.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag=>cleanText(tag,30)).filter(Boolean))].slice(0,20) : [];
     replacement.hash = hash;
     replacement.tokenRecipe = normalizeTokenRecipe(req.body?.tokenRecipe);
+    replacement.bestiaryKey = cleanText(req.body?.bestiaryKey,80) || replacement.bestiaryKey || "";
     room.scenes.forEach(scene => scene.tokens.forEach(token => {
       if (token.assetId !== replacement.id) return;
       token.imageUrl = replacement.url;
       token.forged = Boolean(replacement.tokenRecipe);
       token.tokenShape = replacement.tokenRecipe?.shape || token.tokenShape || "circle";
     }));
+    syncBestiaryAssetVisuals(room,replacement);
     room.scene = room.scenes.find(scene => scene.id === room.activeSceneId) || room.scenes[0];
     saveRooms(); await emitRoom(code);
     return res.json({ ok:true, asset:{ ...replacement, usageCount:assetUsageCount(room,replacement.id,true) }, updated:true });
@@ -1655,6 +1677,8 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
       duplicate.folder = cleanText(req.body?.folder,60) || duplicate.folder;
       duplicate.tags = Array.isArray(req.body?.tags) ? [...new Set(req.body.tags.map(tag=>cleanText(tag,30)).filter(Boolean))].slice(0,20) : duplicate.tags;
       duplicate.tokenRecipe = normalizeTokenRecipe(req.body.tokenRecipe);
+      duplicate.bestiaryKey = cleanText(req.body?.bestiaryKey,80) || duplicate.bestiaryKey || "";
+      syncBestiaryAssetVisuals(room,duplicate);
       saveRooms(); await emitRoom(code);
     }
     return res.json({ ok:true, asset:{ ...duplicate, usageCount:assetUsageCount(room, duplicate.id, true) }, duplicate:true });
@@ -1678,10 +1702,12 @@ app.post("/api/rooms/:code/assets", async (req, res) => {
     tags:Array.isArray(req.body?.tags) ? req.body.tags : [],
     hash,
     tokenRecipe:category === "token" ? req.body?.tokenRecipe : null,
+    bestiaryKey:cleanText(req.body?.bestiaryKey,80),
     ownerId:characterSource ? clientId : "",
     createdAt:Date.now()
   }, code);
   room.assets.push(asset);
+  syncBestiaryAssetVisuals(room,asset);
   saveRooms();
   await emitRoom(code);
   res.json({ ok:true, asset:{ ...asset, usageCount:0 } });
@@ -1782,12 +1808,52 @@ app.patch("/api/rooms/:code/character-appearances/:appearanceId/activate", async
 });
 
 app.use(express.static(path.join(__dirname, "public")));
+app.post("/api/rooms/:code/bestiary/:key/source", async (req,res) => {
+  const code=cleanText(req.params.code,8).toUpperCase();
+  const clientId=cleanText(req.get("x-client-id"),80);
+  const room=rooms[code];
+  if(!room||room.dmId!==clientId)return res.status(403).json({ok:false,error:"Только ведущий редактирует токены бестиария"});
+  ensureRoomVtt(room);
+  const monster=bestiary.byKey.get(cleanText(req.params.key,80));
+  if(!monster)return res.status(404).json({ok:false,error:"Существо не найдено"});
+  const existingToken=bestiaryVisualAsset(room,monster.key);
+  if(existingToken)return res.json({ok:true,asset:existingToken,tokenAsset:true});
+  const existingSource=[...(room.assets||[])].reverse().find(asset=>asset.category==="source"&&asset.bestiaryKey===monster.key);
+  if(existingSource)return res.json({ok:true,asset:existingSource,tokenAsset:false});
+  const sourceUrl=monster.portrait||monster.token;
+  if(!sourceUrl)return res.status(404).json({ok:false,error:"У существа нет портрета"});
+  let buffer,mimeType;
+  try{
+    if(sourceUrl.startsWith("/bestiary-content/")){
+      const relative=decodeURIComponent(sourceUrl.slice("/bestiary-content/".length)).replace(/\\/g,"/");
+      const filepath=path.resolve(bestiary.directory,relative);
+      if(!filepath.startsWith(path.resolve(bestiary.directory)+path.sep))throw new Error("Недопустимый путь изображения");
+      buffer=fs.readFileSync(filepath);
+      const ext=path.extname(filepath).toLowerCase();
+      mimeType=ext===".webp"?"image/webp":ext===".png"?"image/png":ext===".gif"?"image/gif":"image/jpeg";
+    }else{
+      const response=await fetch(sourceUrl,{headers:{"user-agent":"Mozilla/5.0 TabaxiTable/2.5"}});
+      if(!response.ok)throw new Error(`Источник ответил ${response.status}`);
+      mimeType=String(response.headers.get("content-type")||"").split(";")[0];
+      const length=Number(response.headers.get("content-length")||0);
+      if(length>15*1024*1024)throw new Error("Портрет больше 15 МБ");
+      buffer=Buffer.from(await response.arrayBuffer());
+    }
+  }catch(error){return res.status(502).json({ok:false,error:`Не удалось получить портрет: ${error.message}`});}
+  if(!["image/png","image/jpeg","image/webp","image/gif"].includes(mimeType)||!buffer?.length||buffer.length>15*1024*1024||!imageSignatureMatches(buffer,mimeType))return res.status(400).json({ok:false,error:"Источник вернул неподдерживаемое изображение"});
+  const extension={"image/png":"png","image/jpeg":"jpg","image/webp":"webp","image/gif":"gif"}[mimeType];
+  const assetId=id(),filename=`${assetId}.${extension}`,directory=path.join(ASSET_DIR,code);
+  fs.mkdirSync(directory,{recursive:true});fs.writeFileSync(path.join(directory,filename),buffer);
+  const asset=normalizeAsset({id:assetId,name:`${monster.name} · исходник`,category:"source",filename,mimeType,bytes:buffer.length,width:0,height:0,defaultSize:monster.tokenDefaults.size,folder:"Бестиарий/Исходники",tags:["bestiary-source",`bestiary:${monster.key}`],hash:crypto.createHash("sha256").update(buffer).digest("hex"),bestiaryKey:monster.key,createdAt:Date.now()},code);
+  room.assets.push(asset);saveRooms();await emitRoom(code);res.json({ok:true,asset,tokenAsset:false});
+});
+
 app.use("/bestiary-content", express.static(bestiary.directory, { fallthrough:true, dotfiles:"deny", maxAge:"1h" }));
 app.get("/api/bestiary/catalog", (_req, res) => res.json({ ok:true, manifest:bestiary.manifest, monsters:bestiary.monsters.map(bestiaryData.catalogEntry) }));
 app.get("/api/bestiary/:key", (req, res) => {
   const monster = bestiary.byKey.get(cleanText(req.params.key,80));
   if (!monster) return res.status(404).json({ ok:false, error:"Существо не найдено" });
-  res.json({ ok:true, monster });
+  res.json({ ok:true, monster:bestiaryData.detailEntry(monster) });
 });
 
 app.get("/health", (_req, res) => res.json({ ok: true, bestiary:bestiary.monsters.length }));
@@ -2196,6 +2262,8 @@ io.on("connection", (socket) => {
       const dx = index % columns;
       const dy = Math.floor(index / columns);
       const token = bestiaryData.tokenFromMonster(monster, { id, x:sceneCoordinate(scene,Number(x)+dx*(monster.tokenDefaults.size+0.25)), y:sceneCoordinate(scene,Number(y)+dy*(monster.tokenDefaults.size+0.25)), index, count:amount, disposition });
+      const visual=bestiaryVisualAsset(room,monster.key);
+      if(visual){token.assetId=visual.id;token.imageUrl=visual.url;token.forged=Boolean(visual.tokenRecipe);token.tokenShape=visual.tokenRecipe?.shape||"circle";token.color=visual.tokenRecipe?.frame?.primary||token.color;}
       scene.tokens.push(token);
       created.push(token.id);
     }

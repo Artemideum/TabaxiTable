@@ -3435,6 +3435,16 @@ function vttSavePreferences(patch = {}) {
 function bestiarySocketEmit(event,payload={}) {
   return new Promise(resolve=>socket.emit(event,payload,response=>resolve(response||{ok:false})));
 }
+async function openBestiaryForge(monster) {
+  if (!monster || !state.room || state.room.dmId !== state.clientId) return;
+  const response=await fetch(`/api/rooms/${state.room.code}/bestiary/${encodeURIComponent(monster.key)}/source`,{method:"POST",headers:{"x-client-id":state.clientId}}).then(result=>result.json());
+  if(!response.ok)throw new Error(response.error||"Не удалось подготовить портрет для Кузницы");
+  if(response.tokenAsset) window.TT_TOKEN_FORGE?.openAsset?.(response.asset,state.room);
+  else window.TT_TOKEN_FORGE?.openBestiary?.(monster,response.asset,state.room);
+  state.previousView="bestiary";
+  switchView("forge");
+}
+
 function renderBestiary() {
   const root=$("#bestiary-view");
   if (!root || !state.room || state.currentView!=="bestiary") return;
@@ -3444,6 +3454,7 @@ function renderBestiary() {
     toast,
     switchView,
     emit:bestiarySocketEmit,
+    openForge:openBestiaryForge,
     cameraCenterGrid:()=>window.TT_VTT?.cameraCenterGrid?.()||{x:0,y:0}
   });
 }

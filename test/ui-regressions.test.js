@@ -11,6 +11,7 @@ const indexHtml = fs.readFileSync("public/index.html", "utf8");
 const contentPacks = fs.readFileSync("public/content-packs.js", "utf8");
 const tokenForge = fs.readFileSync("public/token-forge.js", "utf8");
 const tokenForgeCss = fs.readFileSync("public/token-forge.css", "utf8");
+const bestiaryClient = fs.readFileSync("public/bestiary.js", "utf8");
 
 test("полный лист фильтрует вкладки до привязки игровых контролов", () => {
   const applyIndex = app.indexOf("applySheetTab();", app.indexOf("function renderSheet"));
@@ -191,4 +192,16 @@ test("Бестиарий подключён отдельным модулем и
   assert.match(vtt, /data-vtt-open-bestiary/);
   assert.match(server, /app\.get\("\/api\/bestiary\/catalog"/);
   assert.match(server, /socket\.on\("bestiary:place"/);
+});
+
+test("Бестиарий открывает портрет в Кузнице и сохраняет визуал по ключу существа",()=>{
+  assert.match(bestiaryClient,/data-bestiary-forge/);
+  assert.match(bestiaryClient,/helpers\.openForge/);
+  assert.match(app,/function openBestiaryForge\(/);
+  assert.match(app,/bestiary\/\$\{encodeURIComponent\(monster\.key\)\}\/source/);
+  assert.match(tokenForge,/function openBestiary\(/);
+  assert.match(tokenForge,/bestiaryKey:state\.bestiaryKey/);
+  assert.match(tokenForge,/state\.bestiaryKey\?"Сохранить токен существа"/);
+  assert.match(server,/function syncBestiaryAssetVisuals\(/);
+  assert.match(server,/bestiaryVisualAsset\(room,monster\.key\)/);
 });
