@@ -82,7 +82,7 @@ test("комната, лист, броски, история и резервна
   let observer = null;
   try {
     const health = await fetch(`http://127.0.0.1:${PORT}/health`).then(response => response.json());
-    assert.deepEqual(health, { ok:true });
+    assert.deepEqual(health, { ok:true, bestiary:10 });
     const index = await fetch(`http://127.0.0.1:${PORT}/`).then(response => response.text());
     assert.match(index, /TabaxiTable/);
     assert.match(index, /roll-peek[^>]*>[\s\S]*?<small>/);
@@ -91,6 +91,15 @@ test("комната, лист, броски, история и резервна
     assert.match(index, /dice-tray\.js/);
     assert.match(index, /dice-physics\.js/);
     assert.match(index, /dice-tray-roll/);
+    assert.match(index, /data-view="bestiary"/);
+    assert.match(index, /bestiary\.js/);
+    const bestiaryCatalog = await fetch(`http://127.0.0.1:${PORT}/api/bestiary/catalog`).then(response => response.json());
+    assert.equal(bestiaryCatalog.ok,true);
+    assert.equal(bestiaryCatalog.monsters.length,10);
+    assert.equal("actions" in bestiaryCatalog.monsters[0],false);
+    const goblinCard = await fetch(`http://127.0.0.1:${PORT}/api/bestiary/goblin`).then(response => response.json());
+    assert.equal(goblinCard.monster.hp.average,7);
+    assert.ok(goblinCard.monster.actions.length>=2);
     const catalog = await fetch(`http://127.0.0.1:${PORT}/spells-5e.json`).then(response => response.json());
     assert.equal(catalog.length, 120);
     const itemCatalogScript = await fetch(`http://127.0.0.1:${PORT}/items-5e.js`).then(response => response.text());
@@ -174,7 +183,7 @@ test("комната, лист, броски, история и резервна
     assert.match(created.code, /^[A-Z2-9]{6}$/);
     assert.equal(created.room.players["test-dm"].sheet.schemaVersion, 13);
     assert.equal(created.room.scene.grid.columns, 24);
-    assert.equal(created.room.scene.schemaVersion, 11);
+    assert.equal(created.room.scene.schemaVersion, 12);
     assert.deepEqual(created.room.scene.annotations, []);
     assert.deepEqual(created.room.scene.fog.operations, []);
     assert.equal(created.room.scene.fog.enabled, true);
@@ -432,6 +441,25 @@ test("комната, лист, броски, история и резервна
     assert.equal(updatedPlayerToken?.forged,true);
     assert.equal(updatedPlayerToken?.tokenShape,"raw");
     assert.equal(updatedPlayerToken?.hp,oldHp);
+
+    const appearanceUpdateState=waitFor(dm,"room:state",room=>room.players["test-player"]?.sheet?.tokenAppearances?.length===1&&room.players["test-player"].sheet.tokenAppearances[0]?.name==="Скрытность обновлена");
+    const appearanceUpdate=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/character-appearances`,{
+      method:"POST",headers:{"content-type":"application/json","x-client-id":"test-player"},
+      body:JSON.stringify({appearanceId:appearanceResponse.appearance.id,name:"Скрытность обновлена",dataUrl:tinyPng,setActive:true,tokenRecipe:appearanceResponse.appearance.tokenRecipe})
+    }).then(response=>response.json());
+    assert.equal(appearanceUpdate.ok,true);
+    assert.equal(appearanceUpdate.appearance.id,appearanceResponse.appearance.id);
+    assert.equal((await appearanceUpdateState).players["test-player"].sheet.tokenAppearances.length,1);
+
+    const appearanceCopyState=waitFor(dm,"room:state",room=>room.players["test-player"]?.sheet?.tokenAppearances?.length===2);
+    const appearanceCopy=await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/character-appearances`,{
+      method:"POST",headers:{"content-type":"application/json","x-client-id":"test-player"},
+      body:JSON.stringify({name:"Ярость",dataUrl:tinyPng,setActive:true,tokenRecipe:appearanceResponse.appearance.tokenRecipe})
+    }).then(response=>response.json());
+    assert.equal(appearanceCopy.ok,true);
+    assert.notEqual(appearanceCopy.appearance.id,appearanceResponse.appearance.id);
+    assert.equal((await appearanceCopyState).players["test-player"].sheet.tokenAppearances.length,2);
+
     const assetState = waitFor(dm, "room:state", room => room.assets.some(asset => asset.name === "Красный гоблин"));
     const uploadedAsset = await fetch(`http://127.0.0.1:${PORT}/api/rooms/${created.code}/assets`, {
       method:"POST",
@@ -468,6 +496,11 @@ test("комната, лист, броски, история и резервна
     assert.equal(forgedToken.vision,90);
     assert.equal(forgedToken.showAc,true);
 
+    const forgedEditState=waitFor(dm,"room:state",room=>{const token=room.scene.tokens.find(entry=>entry.id===forgedToken.id);return token?.hp===9&&token?.hpMax===22&&token?.tempHp===3&&token?.ac===18&&token?.vision===45&&token?.disposition==="neutral";});
+    assert.equal((await emit(dm,"scene:token-update",{tokenId:forgedToken.id,hp:9,hpMax:22,tempHp:3,ac:18,vision:45,disposition:"neutral"})).ok,true);
+    const forgedEditRoom=await forgedEditState;
+    assert.equal(forgedEditRoom.scene.tokens.find(token=>token.id===forgedToken.id).ac,18);
+
     const replacedState=waitFor(dm,"room:state",room=>{
       const asset=room.assets.find(entry=>entry.id===uploadedAsset.asset.id);
       const token=room.scene.tokens.find(entry=>entry.assetId===uploadedAsset.asset.id);
@@ -485,8 +518,8 @@ test("комната, лист, броски, история и резервна
     assert.equal(replacedAsset.asset.tokenRecipe.defaults.ac,0);
     const replacedRoom=await replacedState;
     const replacedToken=replacedRoom.scene.tokens.find(token=>token.assetId===uploadedAsset.asset.id);
-    assert.equal(replacedToken.hp,12);
-    assert.equal(replacedToken.hpMax,17);
+    assert.equal(replacedToken.hp,9);
+    assert.equal(replacedToken.hpMax,22);
     assert.equal(replacedToken.tokenShape,"circle");
     const attachedChild=replacedToken;
     const childStart={x:attachedChild.x,y:attachedChild.y};
@@ -499,13 +532,15 @@ test("комната, лист, броски, история и резервна
 
     const placedTokenIds = placedRoom.scene.tokens.filter(token => token.assetId === uploadedAsset.asset.id).map(token => token.id);
     const batchTokenState = waitFor(dm, "room:state", room => placedTokenIds.every(id => room.scene.tokens.some(token => token.id === id && token.initiative === 12 && token.badge === "Отряд" && token.locked)));
-    const batchTokenUpdate = await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:12, badge:"Отряд", badgeColor:"#d3ad6e", locked:true, hp:8, hpMax:8, size:1.5, opacity:.75, rotation:30, vision:90, color:"#884422" } });
+    const batchTokenUpdate = await emit(dm, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:12, badge:"Отряд", badgeColor:"#d3ad6e", locked:true, hp:8, hpMax:8, ac:16, disposition:"hostile", size:1.5, opacity:.75, rotation:30, vision:90, color:"#884422" } });
     assert.equal(batchTokenUpdate.ok, true);
     assert.equal(batchTokenUpdate.updated, 3);
     assert.equal((await emit(player, "scene:tokens-batch-update", { tokenIds:placedTokenIds, patch:{ initiative:99 } })).ok, false);
     const batchedRoom = await batchTokenState;
     assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).hp === 8));
     assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).size === 1.5));
+    assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).ac === 16));
+    assert.ok(placedTokenIds.every(id => batchedRoom.scene.tokens.find(token => token.id === id).disposition === "hostile"));
     const batchInitiativeState = waitFor(dm, "room:state", room => placedTokenIds.every(id => {
       const value = room.scene.tokens.find(token => token.id === id)?.initiative;
       return Number.isInteger(value) && value >= 3 && value <= 22;
@@ -719,6 +754,19 @@ test("комната, лист, броски, история и резервна
     assert.equal(deathSave.ok,true);
     assert.equal(deathSave.roll?.sets?.[0]?.sides,20);
     assert.equal(deathSave.roll?.label,`Спасбросок от смерти · Шёпот`);
+
+    const bestiaryPlacedState = waitFor(dm,"room:state",room => room.scene.tokens.filter(token=>token.bestiaryKey==="goblin").length===3);
+    const bestiaryPlaced = await emit(dm,"bestiary:place",{key:"goblin",count:3,x:11,y:9,disposition:"hostile"});
+    assert.equal(bestiaryPlaced.ok,true);
+    assert.equal(bestiaryPlaced.created.length,3);
+    const bestiaryRoom = await bestiaryPlacedState;
+    const bestiaryGoblin = bestiaryRoom.scene.tokens.find(token=>token.bestiaryKey==="goblin");
+    assert.equal(bestiaryGoblin.hp,7);
+    assert.equal(bestiaryGoblin.hpMax,7);
+    assert.equal(bestiaryGoblin.ac,15);
+    assert.equal(bestiaryGoblin.disposition,"hostile");
+    assert.ok(bestiaryGoblin.npcSheet.attacks.some(attack=>attack.name==="Скимитар"));
+    assert.equal((await emit(player,"bestiary:place",{key:"orc",count:1,x:0,y:0})).ok,false);
 
     const sceneCreatedState = waitFor(dm, "room:state", room => room.scenes.some(scene => scene.name === "Тайная лаборатория"));
     const sceneCreated = await emit(dm, "scene:create", { name:"Тайная лаборатория", activate:false });

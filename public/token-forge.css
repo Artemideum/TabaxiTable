@@ -147,3 +147,25 @@
   .token-appearance-card { grid-template-columns:38px minmax(0,1fr) 30px; }
   .token-appearance-card > button:last-child { grid-column:1/-1; }
 }
+
+/* 2.4.3: explicit appearance slots and library folders. */
+.token-appearance-editing {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:8px 10px;
+  border:1px solid #765738;
+  border-radius:10px;
+  background:linear-gradient(90deg,#9f78421a,#0b0908);
+}
+.token-appearance-editing span { color:#8f8170; font-size:8px; text-transform:uppercase; letter-spacing:.08em; }
+.token-appearance-editing strong { min-width:0; overflow:hidden; color:#efd39d; font-size:9px; text-overflow:ellipsis; white-space:nowrap; }
+.token-forge-folder-picker { grid-column:1/-1; display:grid; gap:7px; }
+.token-forge-folder-picker select,
+.token-forge-folder-picker input { width:100%; min-height:40px; color:#eadfce; border:1px solid #403329; border-radius:10px; background:#090706; }
+.token-forge-footer { justify-content:flex-end; }
+.token-forge-footer > div:empty { display:none; }
+@media (max-width:820px) {
+  .token-forge-footer > div { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); width:100%; }
+}

@@ -6,6 +6,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
 const itemSystem = require("./public/item-system.js");
+const bestiaryData = require("./bestiary-data.js");
 
 const cliPortIndex = process.argv.indexOf("--port");
 const cliPort = cliPortIndex >= 0 ? Number(process.argv[cliPortIndex + 1]) : 0;
@@ -16,11 +17,13 @@ const DATA_FILE = path.join(DATA_DIR, "rooms.json");
 const ASSET_DIR = path.join(DATA_DIR, "assets");
 const BACKUP_DIR = path.join(DATA_DIR, "backups");
 const SHEET_SCHEMA_VERSION = 13;
-const SCENE_SCHEMA_VERSION = 11;
+const SCENE_SCHEMA_VERSION = 12;
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(ASSET_DIR, { recursive: true });
 fs.mkdirSync(BACKUP_DIR, { recursive: true });
+
+const bestiary = bestiaryData.loadBestiary(__dirname);
 
 function readRooms() {
   try {
@@ -307,6 +310,7 @@ function normalizeEncounterTemplates(source) {
     tokens:(Array.isArray(raw?.tokens) ? raw.tokens : []).slice(0,100).map(token => ({
       ...token,
       id:cleanText(token?.id,80) || id(), playerId:"",
+      bestiaryKey:cleanText(token?.bestiaryKey,80),
       name:cleanText(token?.name,60) || "NPC",
       imageUrl:cleanText(token?.imageUrl,1000), assetId:cleanText(token?.assetId,80),
       x:Number(token?.x)||0, y:Number(token?.y)||0,
@@ -405,6 +409,7 @@ function normalizeScene(source, players = {}) {
     const initiative = raw?.initiative === null || raw?.initiative === undefined || raw?.initiative === "" ? null : Math.max(-100, Math.min(200, Number(raw.initiative) || 0));
     return {
       id: tokenId,
+      bestiaryKey: player ? "" : cleanText(raw?.bestiaryKey, 80),
       assetId: cleanText(raw?.assetId, 80),
       playerId: player ? playerId : "",
       name: cleanText(player ? (sheet.characterName || player.name) : raw?.name, 60) || fallbackName,
@@ -1777,7 +1782,15 @@ app.patch("/api/rooms/:code/character-appearances/:appearanceId/activate", async
 });
 
 app.use(express.static(path.join(__dirname, "public")));
-app.get("/health", (_req, res) => res.json({ ok: true }));
+app.use("/bestiary-content", express.static(bestiary.directory, { fallthrough:true, dotfiles:"deny", maxAge:"1h" }));
+app.get("/api/bestiary/catalog", (_req, res) => res.json({ ok:true, manifest:bestiary.manifest, monsters:bestiary.monsters.map(bestiaryData.catalogEntry) }));
+app.get("/api/bestiary/:key", (req, res) => {
+  const monster = bestiary.byKey.get(cleanText(req.params.key,80));
+  if (!monster) return res.status(404).json({ ok:false, error:"Существо не найдено" });
+  res.json({ ok:true, monster });
+});
+
+app.get("/health", (_req, res) => res.json({ ok: true, bestiary:bestiary.monsters.length }));
 
 io.on("connection", (socket) => {
   socket.on("room:create", ({ name, title, clientId }, reply = () => {}) => {
@@ -2168,6 +2181,29 @@ io.on("connection", (socket) => {
     saveRooms(); emitRoom(code); reply({ ok:true, scene:updated });
   });
 
+  socket.on("bestiary:place", ({ key, count=1, x=0, y=0, disposition="hostile" } = {}, reply = () => {}) => {
+    const { code, clientId } = socket.data || {};
+    const room = rooms[code];
+    if (!room || room.dmId !== clientId) return reply({ ok:false, error:"Только ведущий размещает существ из бестиария" });
+    const monster = bestiary.byKey.get(cleanText(key,80));
+    if (!monster) return reply({ ok:false, error:"Существо не найдено" });
+    const scene = activeScene(room);
+    rememberScene(room, scene);
+    const amount = Math.max(1, Math.min(50, Number(count) || 1));
+    const columns = Math.ceil(Math.sqrt(amount));
+    const created = [];
+    for (let index=0; index<amount; index+=1) {
+      const dx = index % columns;
+      const dy = Math.floor(index / columns);
+      const token = bestiaryData.tokenFromMonster(monster, { id, x:sceneCoordinate(scene,Number(x)+dx*(monster.tokenDefaults.size+0.25)), y:sceneCoordinate(scene,Number(y)+dy*(monster.tokenDefaults.size+0.25)), index, count:amount, disposition });
+      scene.tokens.push(token);
+      created.push(token.id);
+    }
+    setActiveScene(room,scene);
+    saveRooms(); emitRoom(code);
+    reply({ ok:true, created, monster:{ key:monster.key, name:monster.name } });
+  });
+
   socket.on("scene:token-add", (payload = {}, reply = () => {}) => {
     const { code, clientId } = socket.data || {};
     const room = rooms[code];
@@ -2268,6 +2304,7 @@ io.on("connection", (socket) => {
       token.opacity = Math.max(.05,Math.min(1,Number(payload.opacity)||1));
       token.vision = Math.max(0,Math.min(10000,Number(payload.vision)||0));
       token.initiativeBonus = Math.max(-100,Math.min(100,Number(payload.initiativeBonus)||0));
+      if (["friendly","neutral","hostile"].includes(payload.disposition)) token.disposition = payload.disposition;
       if (payload.hpMax !== undefined) token.hpMax = Math.max(1,Math.min(1000000,Number(payload.hpMax)||1));
       if (payload.hp !== undefined) token.hp = Math.max(0,Math.min(token.hpMax,Number(payload.hp)||0));
       if (payload.tempHp !== undefined) token.tempHp = Math.max(0,Math.min(1000000,Number(payload.tempHp)||0));
@@ -2312,6 +2349,8 @@ io.on("connection", (socket) => {
       if (has("rotation")) token.rotation = Math.max(-3600,Math.min(3600,Number(patch.rotation)||0));
       if (has("opacity")) token.opacity = Math.max(.05,Math.min(1,Number(patch.opacity)||1));
       if (has("vision")) token.vision = Math.max(0,Math.min(10000,Number(patch.vision)||0));
+      if (has("ac")) token.ac = Math.max(0,Math.min(1000,Number(patch.ac)||0));
+      if (has("disposition") && ["friendly","neutral","hostile"].includes(patch.disposition)) token.disposition = patch.disposition;
       if (has("z")) token.z = Math.max(-1000,Math.min(1000,Number(patch.z)||100));
       if (has("color") && /^#[0-9a-f]{6}$/i.test(String(patch.color||""))) token.color = patch.color;
       if (token.playerId && room.players?.[token.playerId]?.sheet && (has("hp") || has("hpMax") || has("tempHp"))) {

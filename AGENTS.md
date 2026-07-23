@@ -9,6 +9,9 @@ TabaxiTable — русскоязычный виртуальный стол и и
 - Клиент без сборщика: `public/index.html`, `public/style.css`, `public/app.js`.
 - Виртуальный стол вынесен в `public/vtt.js` и `public/vtt.css`; не возвращать его в монолит `app.js`.
 - Кузница токенов вынесена в `public/token-forge.js` и `public/token-forge.css`; не смешивать Canvas-редактор с основным рендером VTT.
+- Бестиарий вынесен в `public/bestiary.js` и `public/bestiary.css`; серверная нормализация и преобразование монстров находятся в `bestiary-data.js`.
+- Приватные пакеты существ хранятся в `private-content/`; данные каталога не переносить в `data/rooms.json`.
+- Импорт DnD.su выполняется через `scripts/import-bestiary-dndsu.mjs`; импортированные данные всегда проходят ручную проверку перед слиянием.
 - Загруженные пользователем карты и токены хранятся в `data/assets/`, а метаданные — внутри комнаты в `data/rooms.json`.
 - Базовые правила: `public/rules-5e.js`; дополнительные источники подключаются через `public/content-packs.js` и `public/content-details-xgte-tcoe.js`.
 - Автоматические списки магии подклассов: `public/subclass-spells-xgte-tcoe.js`.
@@ -22,7 +25,7 @@ TabaxiTable — русскоязычный виртуальный стол и и
 - Никогда не удалять и не коммитить `data/rooms.json`: там живые комнаты и персонажи пользователя.
 - Не коммитить `node_modules`, `.env`, архивы, `data/assets/` и загруженные скриншоты.
 - Сохранять обратную совместимость старых листов через `normalizeSheet`.
-- После изменений запускать `node --check server.js`, `node --check public/app.js` и `npm test`.
+- После изменений запускать `npm run check`; минимум — `node --check server.js`, `node --check public/app.js`, `node --check public/vtt.js` и `npm test`.
 - Не копировать чужой сайт или закрытые тексты дословно. Реализовывать аналогичный функционал самостоятельно.
 - Не ломать `start.bat`, `update.bat` и автоматическое восстановление комнаты после обновления страницы.
 - Интерфейс должен оставаться удобным на телефоне и не перегружать один экран.

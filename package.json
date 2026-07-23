@@ -1,14 +1,15 @@
 {
   "name": "tabaxi-table",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "private": true,
   "description": "Онлайн-стол TabaxiTable и интерактивные листы персонажей D&D 5e",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "check": "node --check server.js && node --check public/app.js && node --check public/vtt.js && node --check public/dice-physics.js && node --check public/dice-tray.js && node --test",
-    "test": "node --test"
+    "check": "node --check server.js && node --check bestiary-data.js && node --check public/app.js && node --check public/vtt.js && node --check public/bestiary.js && node --check public/token-forge.js && node --check public/dice-physics.js && node --check public/dice-tray.js && node --check scripts/import-bestiary-dndsu.mjs && node --test",
+    "test": "node --test",
+    "import:bestiary": "node scripts/import-bestiary-dndsu.mjs --download-images"
   },
   "engines": {
     "node": ">=20"

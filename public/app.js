@@ -433,7 +433,7 @@ $("#join-form").addEventListener("submit", event => {
   socket.emit("room:join", { ...data, clientId: state.clientId }, enterResponse);
 });
 function openQuickGuide(firstVisit = false) {
-  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.3" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группы, сохранять встречи и вручную скрывать карту туманом войны.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
+  openModal(firstVisit ? "Добро пожаловать в TabaxiTable 2.5" : "Краткая справка", `<div class="quick-guide"><section><span>☷</span><div><strong>Лист</strong><p>Игровой режим защищает значения от случайной правки. Нажимай на бонусы, формулы атак, навыки и спасброски, чтобы кидать кости.</p></div></section><section><span>🎲</span><div><strong>Дайстрей</strong><p>Собери горсть вручную или введи физическую формулу вроде 3d6+1. Переключатель «Всем / Закрыто» действует и на карте.</p></div></section><section><span>▦</span><div><strong>Карта</strong><p>V — выбор, H — рука, M — линейка, K — кубики. Ведущий может выделять группы, сохранять встречи и вручную скрывать карту туманом войны.</p></div></section><section><span>♜</span><div><strong>Бестиарий</strong><p>Выбери существо, посмотри статблок и поставь одну или несколько готовых копий на карту. Токен сразу получает HP, КД, размер и NPC-лист.</p></div></section><section><span>?</span><div><strong>Справка всегда рядом</strong><p>Эту памятку можно снова открыть кнопкой «?» в верхней панели.</p></div></section><button id="quick-guide-close" class="primary" type="button">К столу</button></div>`);
   $("#quick-guide-close")?.addEventListener("click", () => { localStorage.setItem("tt-2-tour","1"); closeModal(); });
 }
 
@@ -518,6 +518,7 @@ socket.on("room:state", room => {
   renderRolls();
   renderDiceTray();
   if (state.currentView === "map") renderMap();
+  if (state.currentView === "bestiary") renderBestiary();
   if (state.currentView === "forge") renderForge();
   const editing = $("#sheet-view").contains(document.activeElement);
   if (!editing) renderSheet();
@@ -529,6 +530,7 @@ function renderAll() {
   renderRolls();
   renderDiceTray();
   if (state.currentView === "map") renderMap();
+  else if (state.currentView === "bestiary") { window.TT_VTT?.deactivate?.(); renderBestiary(); }
   else if (state.currentView === "forge") { window.TT_VTT?.deactivate?.(); renderForge(); }
   else {
     window.TT_VTT?.deactivate?.();
@@ -3430,6 +3432,22 @@ function vttSavePreferences(patch = {}) {
   }));
 }
 
+function bestiarySocketEmit(event,payload={}) {
+  return new Promise(resolve=>socket.emit(event,payload,response=>resolve(response||{ok:false})));
+}
+function renderBestiary() {
+  const root=$("#bestiary-view");
+  if (!root || !state.room || state.currentView!=="bestiary") return;
+  const ctx={room:state.room,clientId:state.clientId,isDm:state.room.dmId===state.clientId};
+  if (!window.TT_BESTIARY?.render) { root.innerHTML='<div class="read-only">Модуль Бестиария не загрузился.</div>'; return; }
+  window.TT_BESTIARY.render(root,ctx,{
+    toast,
+    switchView,
+    emit:bestiarySocketEmit,
+    cameraCenterGrid:()=>window.TT_VTT?.cameraCenterGrid?.()||{x:0,y:0}
+  });
+}
+
 function forgeSocketEmit(event,payload={}) {
   return new Promise(resolve=>socket.emit(event,payload,response=>resolve(response||{ok:false})));
 }
@@ -3444,7 +3462,7 @@ function renderForge() {
     close:()=>switchView(state.previousView||"sheet"),
     rerender:renderForge,
     toast,
-    refreshButtons:disabled=>root.querySelectorAll('[data-forge-save],[data-forge-save-place],[data-forge-apply-character]').forEach(button=>button.disabled=Boolean(disabled)),
+    refreshButtons:disabled=>root.querySelectorAll('[data-forge-save],[data-forge-save-place],[data-forge-apply-character],[data-forge-appearance-update]').forEach(button=>button.disabled=Boolean(disabled)),
     cameraCenterGrid:()=>window.TT_VTT?.cameraCenterGrid?.()||{x:0,y:0},
     emit:forgeSocketEmit,
     switchView
@@ -3507,23 +3525,26 @@ function renderRolls() {
 }
 
 function switchView(view) {
-  const next=["sheet","dice","map","forge"].includes(view) ? view : "sheet";
-  if (state.currentView!=="forge" && next==="forge") state.previousView=state.currentView;
+  const next=["sheet","dice","map","bestiary","forge"].includes(view) ? view : "sheet";
+  if (!["forge","bestiary"].includes(state.currentView) && ["forge","bestiary"].includes(next)) state.previousView=state.currentView;
   state.currentView=next;
-  const mapActive=state.currentView==="map", forgeActive=state.currentView==="forge";
+  const mapActive=state.currentView==="map", bestiaryActive=state.currentView==="bestiary", forgeActive=state.currentView==="forge";
   $$('[data-view]').forEach(button=>button.classList.toggle("active",button.dataset.view===state.currentView));
   $("#sheet-view").classList.toggle("hidden",state.currentView!=="sheet");
   $("#dice-view").classList.toggle("hidden",state.currentView!=="dice");
   $("#map-view").classList.toggle("hidden",!mapActive);
+  $("#bestiary-view").classList.toggle("hidden",!bestiaryActive);
   $("#forge-view").classList.toggle("hidden",!forgeActive);
   $("#room").classList.toggle("map-fullscreen",mapActive);
+  $("#room").classList.toggle("bestiary-active",bestiaryActive);
   $("#room").classList.toggle("forge-active",forgeActive);
   document.body.classList.toggle("vtt-active",mapActive);
-  $("#roll-peek")?.classList.toggle("hidden",state.currentView==="dice"||forgeActive);
+  $("#roll-peek")?.classList.toggle("hidden",state.currentView==="dice"||bestiaryActive||forgeActive);
   if (mapActive) renderMap();
   else {
     window.TT_VTT?.deactivate?.();
-    if (forgeActive) renderForge();
+    if (bestiaryActive) renderBestiary();
+    else if (forgeActive) renderForge();
     else if (state.currentView==="dice") window.TT_DICE_PHYSICS?.activate?.(roomDiceColors());
   }
 }

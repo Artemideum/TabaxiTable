@@ -1486,3 +1486,11 @@ body.vtt-active { overflow: hidden; }
 .vtt-token.is-forged.token-shape-square.is-selected::before { border-radius:14%; }
 .vtt-token.is-forged.token-shape-hex.is-selected::before { border-radius:0; clip-path:polygon(50% 0,93% 25%,93% 75%,50% 100%,7% 75%,7% 25%); }
 @keyframes token-turn-forged { 0%,100%{filter:brightness(1) drop-shadow(0 0 0 #d3ad6e00)} 50%{filter:brightness(1.2) drop-shadow(0 0 12px #d3ad6eaa)} }
+
+/* 2.4.3: library folder picker. */
+.vtt-library-search { grid-template-columns:minmax(0,1fr) 120px 34px; }
+#vtt-folder-new { width:34px; min-width:34px; height:34px; align-self:center; padding:0; }
+@media(max-width:620px) {
+  .vtt-library-search { grid-template-columns:minmax(0,1fr) 34px; }
+  .vtt-library-search > input { grid-column:1/-1; }
+}
