@@ -1,6 +1,6 @@
 {
   "name": "tabaxi-table",
-  "version": "2.6.0",
+  "version": "2.6.8",
   "private": true,
   "description": "Онлайн-стол TabaxiTable и интерактивные листы персонажей D&D 5e",
   "main": "server.js",
@@ -9,8 +9,8 @@
     "dev": "node --watch server.js",
     "check": "node --check server.js && node --check bestiary-data.js && node --check public/app.js && node --check public/vtt.js && node --check public/bestiary.js && node --check public/token-forge.js && node --check public/dice-physics.js && node --check public/dice-tray.js && node --check public/races-mm-generated.js && node --check scripts/import-bestiary-dndsu.mjs && node --check scripts/generate-mm-races.mjs && node --test",
     "test": "node --test",
-    "import:bestiary": "node scripts/import-bestiary-dndsu.mjs --discover --source-id=103 --resume --download-images --merge --generate-races",
-    "import:bestiary:partial": "node scripts/import-bestiary-dndsu.mjs --discover --source-id=103 --resume --download-images --merge --generate-races --allow-partial",
+    "import:bestiary": "node scripts/import-bestiary-dndsu.mjs --discover --source-id=103 --minimum=200 --maximum=650 --resume --download-images --merge --generate-races",
+    "import:bestiary:partial": "node scripts/import-bestiary-dndsu.mjs --discover --source-id=103 --minimum=200 --maximum=650 --resume --download-images --merge --generate-races --allow-partial",
     "generate:mm-races": "node scripts/generate-mm-races.mjs"
   },
   "engines": {

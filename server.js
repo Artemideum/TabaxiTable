@@ -1871,7 +1871,7 @@ app.post("/api/rooms/:code/bestiary/:key/source", async (req,res) => {
   room.assets.push(asset);saveRooms();await emitRoom(code);res.json({ok:true,asset,tokenAsset:false});
 });
 
-app.use("/bestiary-content", express.static(bestiary.directory, { fallthrough:true, dotfiles:"deny", maxAge:"1h" }));
+app.use("/bestiary-content", express.static(bestiary.directory, { fallthrough:true, dotfiles:"deny", maxAge:0, etag:true, setHeaders(res){ res.setHeader("Cache-Control","no-cache, max-age=0, must-revalidate"); } }));
 app.get("/api/bestiary/catalog", (_req, res) => res.json({ ok:true, manifest:bestiary.manifest, monsters:bestiary.monsters.map(bestiaryData.catalogEntry) }));
 app.get("/api/bestiary/:key", (req, res) => {
   const monster = bestiary.byKey.get(cleanText(req.params.key,80));

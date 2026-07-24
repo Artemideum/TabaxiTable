@@ -45,7 +45,7 @@
     "skills": [
       "stealth"
     ],
-    "traits": "Длинные конечности, могучее телосложение, скрытность и внезапный удар. Жестокость Внезапная атака"
+    "traits": "Длинные конечности, могучее телосложение, скрытность и внезапный удар."
   },
   "mm-bullywug": {
     "name": "Булливаг",
@@ -136,7 +136,7 @@
   },
   "mm-githyanki": {
     "name": "Гитьянки",
-    "originalName": "Githyanki Warrior",
+    "originalName": "Githyanki warrior",
     "source": "mm14-races",
     "tags": [
       "monster-lineage",
@@ -159,7 +159,7 @@
   },
   "mm-githzerai": {
     "name": "Гитцерай",
-    "originalName": "Githzerai Monk",
+    "originalName": "Githzerai monk",
     "source": "mm14-races",
     "tags": [
       "monster-lineage",
@@ -222,7 +222,7 @@
     "skills": [
       "stealth"
     ],
-    "traits": "Проворный отход, ярость малого народа и привычка действовать из засады. Ловкий побег"
+    "traits": "Проворный отход, ярость малого народа и привычка действовать из засады."
   },
   "mm-grimlock": {
     "name": "Гримлок",

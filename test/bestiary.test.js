@@ -106,6 +106,31 @@ test("массовый импортёр находит карточки инде
   ]);
 });
 
+test("source-фильтр индекса принимает только карточки с явной меткой MM14",()=>{
+  const html=`
+  <div class="card" data-cardlink="/bestiary/1-aboleth/"><span class="source-plaque" title="Monster Manual">MM14</span></div>
+  <div class="card" data-cardlink="/bestiary/2-other/"><span class="source-plaque" title="Volo's Guide to Monsters">VGM</span></div>
+  <div class="card" data-cardlink="/bestiary/3-roper/"><span class="source-plaque" title="Monster Manual">MM14</span><span>MM24</span></div>`;
+  assert.deepEqual(importer.extractBestiaryIndexLinks(html,"https://dnd.su",{sourceId:"103",sourceCode:"MM14",sourceTitle:"Monster Manual"}),[
+    "https://dnd.su/bestiary/1-aboleth/",
+    "https://dnd.su/bestiary/3-roper/"
+  ]);
+});
+
+test("source-фильтр не использует опасный generic fallback для общего индекса",()=>{
+  const html=Array.from({length:700},(_,index)=>`<a href="/bestiary/${index+1}-other-${index}/">Чужая карточка</a>`).join("");
+  assert.deepEqual(importer.extractBestiaryIndexLinks(html,"https://dnd.su",{sourceId:"103",sourceCode:"MM14"}),[]);
+});
+
+test("piece-индекс фильтруется по data-source до добавления URL",()=>{
+  const html=`
+  <div class="col list-item__beast for_filter" data-source="103"><a href="/bestiary/4-goblin/">Гоблин</a></div>
+  <div class="col list-item__beast for_filter" data-source="111"><a href="/bestiary/500-other/">Чужой</a></div>`;
+  assert.deepEqual(importer.extractBestiaryIndexLinks(html,"https://dnd.su",{sourceId:"103",sourceCode:"MM14"}),[
+    "https://dnd.su/bestiary/4-goblin/"
+  ]);
+});
+
 test("сложный статблок раскладывается на магию, реакции, легендарные и логовные действия",()=>{
   const html=`<!doctype html><html><head><meta property="og:image" content="/gallery/bestiary/archmage.jpg"></head><body>
   <h1>Тестовый архимаг [Test Archmage]</h1>
@@ -155,4 +180,82 @@ test("расширенный NPC-лист сохраняет атаки всех
   assert.ok(sheet.features.some(entry=>entry.category==="Региональный эффект"));
   assert.ok(sheet.formulas.some(entry=>entry.name==="Обвал"));
   assert.ok(sheet.spells.some(entry=>entry.name==="Щит"));
+});
+
+
+test("импортёр распознаёт родовые формы размера и не теряет тип",()=>{
+  const cases=[
+    ["Средняя нежить, хаотично-злая","medium","undead"],
+    ["Среднее исчадие, законно-злое","medium","fiend"],
+    ["Большая аберрация, нейтрально-злая","large","aberration"],
+    ["Огромное растение, без мировоззрения","huge","plant"],
+    ["Маленькая фея, хаотично-добрая","small","fey"]
+  ];
+  for(const [identity,size,type] of cases){
+    const html=`<html><body><h1>Тест [Test ${type}]</h1><p>${identity}</p>
+      <p>Класс Доспеха 12</p><p>Хиты 9 (2к8)</p><p>Скорость 30 футов</p>
+      <p>СИЛ ЛОВ ТЕЛ ИНТ МДР ХАР</p><p>10 (+0) 10 (+0) 10 (+0) 10 (+0) 10 (+0) 10 (+0)</p>
+      <p>Опасность 1/2 (100 опыта)</p><h2>Действия</h2>
+      <p>Удар. Рукопашная атака оружием: +2 к попаданию. Попадание: 3 (1к6) дробящего урона.</p></body></html>`;
+    const monster=importer.parseDndSuMonster(html,{url:`https://dnd.su/bestiary/999-test-${type}/`});
+    assert.equal(monster.size,size,identity);
+    assert.equal(monster.type,type,identity);
+    assert.doesNotMatch(monster.import.warnings.join(";"),/не распознан тип/);
+  }
+});
+
+test("отсутствие отдельного описания у обычного зверя не считается предупреждением",()=>{
+  const monster={
+    key:"crab",name:"Краб",enName:"Crab",type:"beast",sourceUrl:"https://dnd.su/bestiary/1-crab/",
+    portrait:"/crab.webp",ac:{value:11},hp:{average:2,formula:"1d4"},abilities:{str:2,dex:11,con:10,int:1,wis:8,cha:2},
+    actions:[{name:"Клешня",kind:"attack",attackFormula:"1d20+0"}],description:""
+  };
+  assert.doesNotMatch(importer.validateMonster(monster).warnings.join(";"),/нет описания/);
+});
+
+
+test("описание ограничено телом карточки и не захватывает комментарии сайта",()=>{
+  const html=`<!doctype html><html><head><meta property="og:image" content="/gallery/bestiary/test.jpg"></head><body>
+    <div class="card-wrapper">
+      <div class="card__header"><h2>Тестовый монстр [Test Monster]</h2></div>
+      <div class="card__body new-article">
+        <ul class="params card__article-body">
+          <li>Средний гуманоид, нейтральный</li>
+          <li><strong>Класс Доспеха</strong> 12</li>
+          <li><strong>Хиты</strong> 9 (2к8)</li>
+          <li><strong>Скорость</strong> 30 футов</li>
+          <li>СИЛ ЛОВ ТЕЛ ИНТ МДР ХАР</li><li>10 (+0) 10 (+0) 10 (+0) 10 (+0) 10 (+0) 10 (+0)</li>
+          <li><strong>Опасность</strong> 1/2 (100 опыта)</li>
+          <li class="subsection desc"><h3 class="subsection-title">Действия</h3><div><p>Удар. Рукопашная атака оружием: +2 к попаданию. Попадание: 3 (1к6) дробящего урона.</p></div></li>
+          <li class="subsection desc"><h3 class="subsection-title">Описание</h3><div><p>Настоящее описание существа.</p></div></li>
+        </ul>
+      </div>
+      <div class="card__footer"></div>
+    </div>
+    <section id="comments"><h2>Комментарии</h2><article class="comment"><b>Вася</b><p>На самом деле у него должно быть 999 хитов.</p></article></section>
+  </body></html>`;
+  const monster=importer.parseDndSuMonster(html,{url:"https://dnd.su/bestiary/999-test-monster/"});
+  assert.match(monster.description,/Настоящее описание существа/);
+  assert.doesNotMatch(monster.description,/Вася|999 хитов|Комментарии/);
+  assert.equal(monster.actions.length,1);
+  assert.doesNotMatch(JSON.stringify(monster),/На самом деле у него/);
+});
+
+test("merge схлопывает старый и импортированный key по точному английскому имени",()=>{
+  const existing=[{
+    key:"legacy-red-dragon",name:"Молодой красный дракон",enName:"Young Red Dragon",source:"MM14",
+    portrait:"/bestiary-content/portraits/custom.webp",token:"/custom-token.webp",actions:[{name:"Старая атака"}]
+  }];
+  const imported=[{
+    key:"young-red-dragon",name:"Молодой красный дракон",enName:"Young Red Dragon",source:"MM14",
+    portrait:"https://example.test/dragon.jpg",token:"https://example.test/dragon.jpg",
+    actions:[{name:"Укус"},{name:"Коготь"}],traits:[{name:"Огненное дыхание"}],
+    import:{parser:importer.PARSER_VERSION,errors:[]}
+  }];
+  const merged=importer.mergeMonsters(existing,imported);
+  assert.equal(merged.length,1);
+  assert.equal(merged[0].key,"legacy-red-dragon","старый key сохраняется для токенов на уже существующих сценах");
+  assert.equal(merged[0].actions.length,2);
+  assert.equal(merged[0].portrait,"/bestiary-content/portraits/custom.webp");
+  assert.equal(merged[0].token,"/custom-token.webp");
 });
